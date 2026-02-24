@@ -22,6 +22,12 @@ docker compose run --rm api <command>
 
 # Run a one-off command in the worker container
 docker compose run --rm worker <command>
+
+# Generate a new migration (after changing SQLAlchemy models in shared/)
+docker compose run --rm api alembic revision --autogenerate -m "description"
+
+# Apply migrations manually (also runs automatically on api startup)
+docker compose run --rm api alembic upgrade head
 ```
 
 To refresh the `.env` file from lucos_creds (the `localcreds` alias is not available to Claude):
