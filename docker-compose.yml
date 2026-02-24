@@ -69,9 +69,12 @@ services:
   redis:
     container_name: lucos_photos_redis
     image: redis:7-alpine
+    volumes:
+      - redis_data:/data
     restart: unless-stopped
 
 volumes:
   photos:
   postgres_data:
   qdrant_data:
+  redis_data:
