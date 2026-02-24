@@ -1,0 +1,41 @@
+version: 2
+updates:
+- package-ecosystem: pip
+  directory: "/api"
+  schedule:
+    interval: daily
+    time: "07:00"
+  allow:
+  - dependency-type: direct
+  - dependency-type: indirect
+- package-ecosystem: pip
+  directory: "/worker"
+  schedule:
+    interval: daily
+    time: "07:00"
+  allow:
+  - dependency-type: direct
+  - dependency-type: indirect
+- package-ecosystem: pip
+  directory: "/shared"
+  schedule:
+    interval: daily
+    time: "07:00"
+  allow:
+  - dependency-type: direct
+  - dependency-type: indirect
+- package-ecosystem: docker
+  directory: "/api"
+  schedule:
+    interval: daily
+    time: "07:00"
+- package-ecosystem: docker
+  directory: "/worker"
+  schedule:
+    interval: daily
+    time: "07:00"
+- package-ecosystem: "github-actions"
+  directory: "/"
+  schedule:
+    interval: daily
+    time: "07:00"

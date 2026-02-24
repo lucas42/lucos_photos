@@ -1,0 +1,69 @@
+services:
+  api:
+    container_name: lucos_photos_api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "${PORT}:${PORT}"
+    volumes:
+      - photos:/data/photos:ro
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      QDRANT_URL: http://qdrant:6333
+      POSTGRES_USER: photos
+      DATABASE_URL: postgresql://photos:${POSTGRES_PASSWORD}@postgres:5432/photos
+      LUCOS_AUTHENTICATION_URL: https://auth.l42.eu
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    restart: unless-stopped
+
+  worker:
+    container_name: lucos_photos_worker
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    volumes:
+      - photos:/data/photos
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      QDRANT_URL: http://qdrant:6333
+      POSTGRES_USER: photos
+      DATABASE_URL: postgresql://photos:${POSTGRES_PASSWORD}@postgres:5432/photos
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    restart: unless-stopped
+
+  postgres:
+    container_name: lucos_photos_postgres
+    image: postgres:16
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    env_file: .env
+    environment:
+      POSTGRES_DB: photos
+      POSTGRES_USER: photos
+    restart: unless-stopped
+
+  qdrant:
+    container_name: lucos_photos_qdrant
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  redis:
+    container_name: lucos_photos_redis
+    image: redis:7-alpine
+    restart: unless-stopped
+
+volumes:
+  photos:
+  postgres_data:
+  qdrant_data:
