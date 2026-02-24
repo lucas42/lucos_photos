@@ -4,6 +4,7 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Engine
 
+import lucos_photos_common.models  # noqa: registers models with Base.metadata
 from lucos_photos_common.database import Base, engine
 
 config = context.config
