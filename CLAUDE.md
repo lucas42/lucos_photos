@@ -87,9 +87,9 @@ Sensitive and environment-varying variables come from lucos_creds (see `.env.exa
 | `POSTGRES_PASSWORD` | lucos_creds | |
 | `LOGANNE_ENDPOINT` | lucos_creds | Named this way for cross-project consistency |
 | `LUCOS_CONTACTS_URL` | lucos_creds | |
-| `DATABASE_URL` | docker-compose (constructed) | Built from hardcoded user + `${POSTGRES_PASSWORD}` |
 | `POSTGRES_USER` | docker-compose (hardcoded) | Always `photos` |
 | `POSTGRES_DB` | docker-compose (hardcoded) | Always `photos` |
+| `DATABASE_URL` | constructed in code | Built via `URL.create()` in `shared/lucos_photos_common/database.py` from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and hardcoded host/port/db |
 | `REDIS_URL` | docker-compose (hardcoded) | Always `redis://redis:6379` |
 | `QDRANT_URL` | docker-compose (hardcoded) | Always `http://qdrant:6333` |
 | `LUCOS_AUTHENTICATION_URL` | docker-compose (hardcoded) | Always `https://auth.l42.eu` (cross-project consistency) |

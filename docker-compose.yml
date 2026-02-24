@@ -13,7 +13,6 @@ services:
       REDIS_URL: redis://redis:6379
       QDRANT_URL: http://qdrant:6333
       POSTGRES_USER: photos
-      DATABASE_URL: postgresql://photos:${POSTGRES_PASSWORD}@postgres:5432/photos
       LUCOS_AUTHENTICATION_URL: https://auth.l42.eu
     depends_on:
       - postgres
@@ -33,7 +32,6 @@ services:
       REDIS_URL: redis://redis:6379
       QDRANT_URL: http://qdrant:6333
       POSTGRES_USER: photos
-      DATABASE_URL: postgresql://photos:${POSTGRES_PASSWORD}@postgres:5432/photos
     depends_on:
       - postgres
       - redis

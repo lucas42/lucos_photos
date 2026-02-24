@@ -1,10 +1,17 @@
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import URL, create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-DATABASE_URL = os.environ["DATABASE_URL"]
+database_url = URL.create(
+    drivername="postgresql",
+    username=os.environ["POSTGRES_USER"],
+    password=os.environ["POSTGRES_PASSWORD"],
+    host="postgres",
+    port=5432,
+    database="photos",
+)
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(database_url)
 SessionLocal = sessionmaker(bind=engine)
 
 
