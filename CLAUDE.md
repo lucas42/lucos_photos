@@ -8,6 +8,19 @@ A self-hosted personal photo library managing ~100,000 photos / ~500GB. Core fea
 
 Designed to evolve toward ML-driven automation (object detection, rule engine, profile photo selection) without requiring re-architecture.
 
+## Current State & What's Next
+
+**Built so far:**
+- Full Docker Compose scaffold (api, worker, postgres, qdrant, redis)
+- `/_info` endpoint (standard lucos monitoring endpoint)
+- Database schema with Alembic migrations (runs automatically on API startup)
+
+**Next up:**
+- Photo upload endpoint (issue #3 tracks the Android client side separately)
+  - Design agreed: single `POST /photos` endpoint, idempotent via SHA-256 content hash — if a photo with that hash already exists, return the existing record rather than creating a duplicate
+- Worker job queue implementation (library not yet chosen — discuss trade-offs when implementing)
+- Web UI and authentication via lucos_authentication
+
 ## Commands
 
 ```bash
@@ -23,11 +36,20 @@ docker compose run --rm api <command>
 # Run a one-off command in the worker container
 docker compose run --rm worker <command>
 
-# Generate a new migration (after changing SQLAlchemy models in shared/)
-docker compose run --rm api alembic revision --autogenerate -m "description"
-
 # Apply migrations manually (also runs automatically on api startup)
 docker compose run --rm api alembic upgrade head
+```
+
+**Generating a new migration** — because `alembic/versions/` isn't volume-mounted, files generated inside the container are lost when it exits. Use this pattern to copy the file out:
+
+```bash
+# After updating models in shared/lucos_photos_common/models.py:
+docker compose build api
+ID=$(docker compose run -d api alembic revision --autogenerate -m "description")
+docker wait "$ID"
+docker cp "$ID:/app/alembic/versions/." api/alembic/versions/
+docker rm "$ID"
+# Review the generated file before committing
 ```
 
 To refresh the `.env` file from lucos_creds (the `localcreds` alias is not available to Claude):
@@ -38,19 +60,26 @@ scp -P 2202 "creds.l42.eu:${PWD##*/}/development/.env" .
 ## Repository Layout
 
 ```
-api/                  FastAPI application
-  app/main.py         Entry point
-  Dockerfile          Build context is repo root (to access shared/)
+api/                        FastAPI application
+  app/main.py               Entry point — /_info and future routes
+  alembic.ini               Alembic config
+  alembic/
+    env.py                  Imports models to register with Base.metadata
+    versions/               Migration files
+  entrypoint.sh             Runs alembic upgrade head then starts uvicorn
+  Dockerfile                Build context is repo root (to access shared/)
   requirements.txt
-worker/               Background job processor
-  app/main.py         Entry point
-  Dockerfile          Build context is repo root (to access shared/)
+worker/                     Background job processor
+  app/main.py               Entry point (job queue consumer — not yet implemented)
+  Dockerfile                Build context is repo root (to access shared/)
   requirements.txt
-shared/               Python package installed into both api and worker
+shared/                     Python package installed into both api and worker
   lucos_photos_common/
-    database.py       SQLAlchemy Base, engine, SessionLocal
+    database.py             SQLAlchemy Base, engine, SessionLocal; constructs
+                            DATABASE_URL from POSTGRES_USER + POSTGRES_PASSWORD
+    models.py               SQLAlchemy ORM models for all tables
 docker-compose.yml
-.env.example          Copy to .env before running
+.env.example
 ```
 
 ## Container Architecture
@@ -59,7 +88,7 @@ Five Docker Compose containers:
 
 | Container | Tech | Role |
 |-----------|------|------|
-| **api** | Python 3, FastAPI, SQLAlchemy, Pydantic | HTTP server + orchestration only |
+| **api** | Python 3, FastAPI, SQLAlchemy, Alembic, Pydantic | HTTP server + orchestration only |
 | **worker** | Python 3, InsightFace, OpenCV, Pillow, YOLO (future) | Background ML processing |
 | **postgres** | PostgreSQL | Relational metadata |
 | **qdrant** | Qdrant | Face embeddings + similarity search |
@@ -81,7 +110,15 @@ Five Docker Compose containers:
 
 ## Data Model (PostgreSQL)
 
-Core tables: `photo`, `face`, `person`, `photo_person`, `processing_status`.
+All tables use UUID primary keys. Models are in `shared/lucos_photos_common/models.py`.
+
+| Table | Key columns | Notes |
+|---|---|---|
+| `photo` | `id`, `file_extension`, `taken_at`, `uploaded_at`, `width`, `height` | `width`/`height` nullable until processed |
+| `processing_status` | `photo_id` (PK/FK), `state`, `updated_at`, `error_message` | States: `pending`, `processing`, `complete`, `failed` |
+| `person` | `id`, `contact_id`, `display_name`, `created_at` | `contact_id` links to lucos_contacts; nullable |
+| `face` | `id`, `photo_id`, `person_id`, `person_confirmed`, `bbox_x/y/width/height`, `created_at` | `face.id` is also used as the Qdrant point ID; bounding box in normalised coords (0.0–1.0); `person_confirmed` distinguishes ML guess from human-verified |
+| `photo_person` | `photo_id`, `person_id` (composite PK) | Join table; extensible to direct links beyond face-derived ones |
 
 ## Environment Variables
 
@@ -120,3 +157,7 @@ Two separate event concepts — do not conflate them:
 - All processing must be idempotent.
 - The API/worker separation must be preserved even as the system grows. The worker may later split into ingestion + automation workers, but should not merge with the API.
 - The architecture must accommodate adding object detection, a rule engine, and horizontal worker scaling without structural redesign.
+
+## Known Issues / TODOs
+
+- **Redis data volume not explicitly declared** — the global CLAUDE.md requires all volumes to be declared explicitly in `docker-compose.yml` and registered in `lucos_configy/config/volumes.yaml`. Redis currently has no named volume mount, meaning its data volume is anonymous and won't be tracked by `lucos_backups`. This needs fixing before production data matters.
