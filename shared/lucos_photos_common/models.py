@@ -21,6 +21,7 @@ class Photo(Base):
     __tablename__ = "photo"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sha256_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     file_extension: Mapped[str] = mapped_column(String(10))
     taken_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

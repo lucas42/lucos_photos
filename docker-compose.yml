@@ -9,6 +9,7 @@ services:
       - "${PORT}:${PORT}"
     volumes:
       - photos:/data/photos:ro
+      - uploads:/data/uploads
     environment:
       - SYSTEM
       - ENVIRONMENT
@@ -17,6 +18,7 @@ services:
       - POSTGRES_PASSWORD
       - LOGANNE_ENDPOINT
       - LUCOS_CONTACTS_URL
+      - CLIENT_KEYS
       - POSTGRES_USER=photos
       - REDIS_URL=redis://redis:6379
       - QDRANT_URL=http://qdrant:6333
@@ -35,6 +37,7 @@ services:
       dockerfile: worker/Dockerfile
     volumes:
       - photos:/data/photos
+      - uploads:/data/uploads
     environment:
       - SYSTEM
       - ENVIRONMENT
@@ -75,6 +78,7 @@ services:
 
 volumes:
   photos:
+  uploads:
   postgres_data:
   qdrant_data:
   redis_data:
