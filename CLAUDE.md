@@ -23,6 +23,9 @@ Designed to evolve toward ML-driven automation (object detection, rule engine, p
 ## Commands
 
 ```bash
+# Run unit tests (no Docker required — uses SQLite in-memory)
+cd api && pytest
+
 # Build and start all containers
 docker compose up --build
 
