@@ -1,4 +1,5 @@
 import hashlib
+from unittest.mock import patch
 
 AUTH_HEADER = {"Authorization": "key validkey"}
 VALID_IMAGE_CONTENT = bytes.fromhex(
@@ -145,3 +146,27 @@ class TestUpload:
         )
         assert response.status_code == 422
         assert response.json() == {"detail": "Invalid image file"}
+
+
+class TestUploadLimits:
+    def test_file_too_large_returns_413(self, client):
+        with patch("app.main.MAX_PHOTO_SIZE", 10):
+            response = client.post(
+                "/photos",
+                files={"file": ("photo.jpg", b"too long for limit", "image/jpeg")},
+                headers=AUTH_HEADER,
+            )
+            assert response.status_code == 413
+            assert response.json() == {"detail": "File too large"}
+
+    def test_insufficient_storage_returns_507(self, client):
+        with patch("shutil.disk_usage") as mock_usage:
+            # Mock 100 bytes free space
+            mock_usage.return_value = (1000, 900, 100)
+            response = client.post(
+                "/photos",
+                files={"file": ("photo.jpg", VALID_IMAGE_CONTENT, "image/jpeg")},
+                headers=AUTH_HEADER,
+            )
+            assert response.status_code == 507
+            assert response.json() == {"detail": "Insufficient storage"}

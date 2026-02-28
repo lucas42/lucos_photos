@@ -1,6 +1,7 @@
 import hashlib
 import io
 import os
+import shutil
 from pathlib import Path
 from typing import Annotated
 
@@ -16,6 +17,9 @@ from lucos_photos_common.models import Photo, ProcessingState, ProcessingStatus
 app = FastAPI(title="lucos_photos")
 
 UPLOADS_DIR = Path("/data/uploads")
+
+MAX_PHOTO_SIZE = int(os.environ.get("MAX_PHOTO_SIZE", 100 * 1024 * 1024))
+MIN_FREE_DISK_SPACE = int(os.environ.get("MIN_FREE_DISK_SPACE", 500 * 1024 * 1024))
 
 
 def get_db():
@@ -97,7 +101,22 @@ async def upload_photo(
     _: Annotated[None, Depends(verify_key)],
     db: Session = Depends(get_db),
 ):
+    # Check if file size is too large (before reading into memory if possible)
+    if file.size and file.size > MAX_PHOTO_SIZE:
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="File too large")
+
+    # Check for sufficient free disk space
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    _, _, free = shutil.disk_usage(UPLOADS_DIR)
+    if free < MIN_FREE_DISK_SPACE:
+        raise HTTPException(status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail="Insufficient storage")
+
     contents = await file.read()
+
+    # Re-check file size after reading (in case file.size was missing or incorrect)
+    if len(contents) > MAX_PHOTO_SIZE:
+        raise HTTPException(status_code=status.HTTP_413_PAYLOAD_TOO_LARGE, detail="File too large")
+
     sha256_hash = hashlib.sha256(contents).hexdigest()
 
     # Validate that the file is a valid image
@@ -124,7 +143,6 @@ async def upload_photo(
         }.get(file.content_type or "", "jpg")
 
     # Save to uploads staging area (worker will move to /data/photos/originals/)
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     (UPLOADS_DIR / f"{sha256_hash}.{ext}").write_bytes(contents)
 
     # Create photo record and initial processing status
