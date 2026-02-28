@@ -147,6 +147,20 @@ class TestUpload:
         assert response.status_code == 422
         assert response.json() == {"detail": "Invalid image file"}
 
+    def test_staged_file_cleaned_up_on_db_error(self, client, db_session, tmp_path):
+        content = VALID_IMAGE_CONTENT
+        sha = hashlib.sha256(content).hexdigest()
+        with patch.object(db_session, "commit", side_effect=Exception("Database error")):
+            try:
+                client.post(
+                    "/photos",
+                    files={"file": ("photo.jpg", content, "image/jpeg")},
+                    headers=AUTH_HEADER,
+                )
+            except Exception:
+                pass
+            assert not (tmp_path / f"{sha}.jpg").exists()
+
 
 class TestUploadLimits:
     def test_file_too_large_returns_413(self, client):

@@ -143,15 +143,22 @@ async def upload_photo(
         }.get(file.content_type or "", "jpg")
 
     # Save to uploads staging area (worker will move to /data/photos/originals/)
-    (UPLOADS_DIR / f"{sha256_hash}.{ext}").write_bytes(contents)
+    file_path = UPLOADS_DIR / f"{sha256_hash}.{ext}"
+    file_path.write_bytes(contents)
 
-    # Create photo record and initial processing status
-    photo = Photo(sha256_hash=sha256_hash, file_extension=ext)
-    db.add(photo)
-    db.flush()
-    db.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))
-    db.commit()
-    db.refresh(photo)
+    try:
+        # Create photo record and initial processing status
+        photo = Photo(sha256_hash=sha256_hash, file_extension=ext)
+        db.add(photo)
+        db.flush()
+        db.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))
+        db.commit()
+        db.refresh(photo)
+    except Exception:
+        db.rollback()
+        if file_path.exists():
+            file_path.unlink()
+        raise
 
     await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos")
 
