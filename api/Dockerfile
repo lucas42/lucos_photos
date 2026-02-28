@@ -1,6 +1,9 @@
+FROM lucas42/lucos_navbar:2.1.2 as navbar
 FROM python:3.14-slim
 
 WORKDIR /app
+
+COPY --from=navbar lucos_navbar.js ./app/static/
 
 COPY shared/ /shared/
 RUN pip install --no-cache-dir /shared/
