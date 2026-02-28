@@ -1,4 +1,5 @@
 import hashlib
+import io
 import os
 from pathlib import Path
 from typing import Annotated
@@ -6,6 +7,7 @@ from typing import Annotated
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
+from PIL import Image
 from sqlalchemy.orm import Session
 
 from lucos_photos_common.database import SessionLocal
@@ -97,6 +99,13 @@ async def upload_photo(
 ):
     contents = await file.read()
     sha256_hash = hashlib.sha256(contents).hexdigest()
+
+    # Validate that the file is a valid image
+    try:
+        with Image.open(io.BytesIO(contents)) as img:
+            img.verify()
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid image file")
 
     # Idempotency: if a photo with this hash already exists, return it
     existing = db.query(Photo).filter(Photo.sha256_hash == sha256_hash).first()

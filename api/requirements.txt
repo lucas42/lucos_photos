@@ -8,3 +8,4 @@ httpx
 qdrant-client
 redis
 pydantic-settings
+Pillow
