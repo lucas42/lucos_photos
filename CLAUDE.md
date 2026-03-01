@@ -14,11 +14,12 @@ Designed to evolve toward ML-driven automation (object detection, rule engine, p
 - Full Docker Compose scaffold (api, worker, postgres, qdrant, redis)
 - `/_info` endpoint (standard lucos monitoring endpoint)
 - Database schema with Alembic migrations (runs automatically on API startup)
+- Basic web UI scaffold (landing page + app icon)
 
 **Next up:**
 - Worker job queue implementation (library not yet chosen — discuss trade-offs when implementing)
   - Worker should consume jobs from Redis, pick up files from `/data/uploads/`, move originals to `/data/photos/originals/`, and update processing status
-- Web UI and authentication via lucos_authentication
+- Authentication via lucos_authentication for the web UI
 
 ## Commands
 
@@ -63,7 +64,8 @@ scp -P 2202 "creds.l42.eu:${PWD##*/}/development/.env" .
 
 ```
 api/                        FastAPI application
-  app/main.py               Entry point — /_info and future routes
+  app/main.py               Entry point — /_info and UI routes
+  app/static/               Static assets for the web UI (index.html, icon.png)
   alembic.ini               Alembic config
   alembic/
     env.py                  Imports models to register with Base.metadata

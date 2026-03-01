@@ -7,7 +7,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,7 @@ from lucos_photos_common.models import Photo, ProcessingState, ProcessingStatus
 app = FastAPI(title="lucos_photos")
 
 UPLOADS_DIR = Path("/data/uploads")
+STATIC_DIR = Path(__file__).parent / "static"
 
 MAX_PHOTO_SIZE = int(os.environ.get("MAX_PHOTO_SIZE", 100 * 1024 * 1024))
 MIN_FREE_DISK_SPACE = int(os.environ.get("MIN_FREE_DISK_SPACE", 500 * 1024 * 1024))
@@ -76,6 +77,21 @@ def photo_to_dict(photo: Photo) -> dict:
 @app.get("/healthcheck")
 def healthcheck():
     return {"status": "ok"}
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/icon", include_in_schema=False)
+async def icon():
+    return FileResponse(STATIC_DIR / "icon.png")
+
+
+@app.get("/lucos_navbar.js", include_in_schema=False)
+async def navbar_js():
+    return FileResponse(STATIC_DIR / "lucos_navbar.js")
 
 
 @app.get("/_info")
