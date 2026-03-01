@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from lucos_photos_common.database import SessionLocal
@@ -218,14 +219,14 @@ def list_persons(
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    query = db.query(Person)
+    query = db.query(Person).order_by(Person.created_at.asc())
 
     if includePhotoCounts:
         # Join with PhotoPerson to count photos
         query = db.query(
             Person,
             func.count(PhotoPerson.photo_id).label("photo_count")
-        ).outerjoin(PhotoPerson).group_by(Person.id)
+        ).outerjoin(PhotoPerson).group_by(Person.id).order_by(Person.created_at.asc())
 
         persons_with_counts = query.offset(offset).limit(limit).all()
         return [person_to_dict(p, count) for p, count in persons_with_counts]
@@ -250,11 +251,16 @@ async def create_person(
     db.add(person)
     try:
         db.commit()
-    except Exception as e:
+    except IntegrityError as e:
         db.rollback()
-        # Handle unique constraint for contact_id if it already exists
-        if "unique constraint" in str(e).lower() and "contact_id" in str(e).lower():
+        # Handle unique constraint for contact_id if it already exists (Postgres code 23505, with SQLite fallback for tests)
+        is_unique_violation = (e.orig and hasattr(e.orig, 'pgcode') and e.orig.pgcode == '23505') or \
+                              ("UNIQUE constraint failed" in str(e))
+        if is_unique_violation:
             raise HTTPException(status_code=409, detail="A person with this contactId already exists")
+        raise
+    except Exception:
+        db.rollback()
         raise
     db.refresh(person)
 
