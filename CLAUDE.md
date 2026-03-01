@@ -8,6 +8,11 @@ A self-hosted personal photo library managing ~100,000 photos / ~500GB. Core fea
 
 Designed to evolve toward ML-driven automation (object detection, rule engine, profile photo selection) without requiring re-architecture.
 
+## Documentation
+
+- Architecture Decision Records: [`docs/adr/`](docs/adr/)
+- Architectural reviews: [`docs/reviews/`](docs/reviews/)
+
 ## Current State & What's Next
 
 **Built so far:**
