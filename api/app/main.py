@@ -2,6 +2,7 @@ import hashlib
 import io
 import os
 import shutil
+import uuid
 from pathlib import Path
 from typing import Annotated
 
@@ -12,7 +13,7 @@ from PIL import Image
 from sqlalchemy.orm import Session
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import Photo, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, Person, Photo, PhotoPerson, ProcessingState, ProcessingStatus
 
 app = FastAPI(title="lucos_photos")
 
@@ -179,3 +180,119 @@ async def upload_photo(
     await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos")
 
     return photo_to_dict(photo)
+
+
+def face_to_dict(face: Face) -> dict:
+    return {
+        "id": str(face.id),
+        "photoId": str(face.photo_id),
+        "personId": str(face.person_id) if face.person_id else None,
+        "personConfirmed": face.person_confirmed,
+        "boundingBox": {
+            "x": face.bbox_x,
+            "y": face.bbox_y,
+            "width": face.bbox_width,
+            "height": face.bbox_height,
+        },
+    }
+
+
+def sync_photo_person(db: Session, photo_id) -> None:
+    """Ensure photo_person table reflects all confirmed/unconfirmed person assignments for a photo."""
+    # Collect the set of person_ids currently assigned to faces for this photo
+    face_person_ids = {
+        f.person_id
+        for f in db.query(Face).filter(Face.photo_id == photo_id, Face.person_id.is_not(None)).all()
+    }
+
+    # Remove photo_person rows for persons no longer assigned to any face
+    existing_rows = db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo_id).all()
+    for row in existing_rows:
+        if row.person_id not in face_person_ids:
+            db.delete(row)
+
+    # Add missing photo_person rows
+    existing_person_ids = {row.person_id for row in existing_rows}
+    for pid in face_person_ids:
+        if pid not in existing_person_ids:
+            db.add(PhotoPerson(photo_id=photo_id, person_id=pid))
+
+
+@app.get("/photos/{photo_id}/faces")
+def list_faces(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_key)],
+    db: Session = Depends(get_db),
+):
+    try:
+        photo_uuid = uuid.UUID(photo_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    photo = db.query(Photo).filter(Photo.id == photo_uuid).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    faces = db.query(Face).filter(Face.photo_id == photo_uuid).all()
+    return [face_to_dict(f) for f in faces]
+
+
+@app.put("/faces/{face_id}/person")
+async def assign_person(
+    face_id: str,
+    body: dict,
+    _: Annotated[None, Depends(verify_key)],
+    db: Session = Depends(get_db),
+):
+    try:
+        face_uuid = uuid.UUID(face_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Face not found")
+
+    face = db.query(Face).filter(Face.id == face_uuid).first()
+    if not face:
+        raise HTTPException(status_code=404, detail="Face not found")
+
+    person_id_str = body.get("personId")
+    if not person_id_str:
+        raise HTTPException(status_code=422, detail="personId is required")
+
+    try:
+        person_uuid = uuid.UUID(person_id_str)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="personId must be a valid UUID")
+
+    person = db.query(Person).filter(Person.id == person_uuid).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    face.person_id = person_uuid
+    face.person_confirmed = True
+    sync_photo_person(db, face.photo_id)
+    db.commit()
+    db.refresh(face)
+
+    await emit_loganne_event("personTagged", f"Person {person_uuid} tagged on face {face_uuid} in photo {face.photo_id}")
+
+    return face_to_dict(face)
+
+
+@app.delete("/faces/{face_id}/person", status_code=status.HTTP_204_NO_CONTENT)
+def unassign_person(
+    face_id: str,
+    _: Annotated[None, Depends(verify_key)],
+    db: Session = Depends(get_db),
+):
+    try:
+        face_uuid = uuid.UUID(face_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Face not found")
+
+    face = db.query(Face).filter(Face.id == face_uuid).first()
+    if not face:
+        raise HTTPException(status_code=404, detail="Face not found")
+
+    face.person_id = None
+    face.person_confirmed = False
+    sync_photo_person(db, face.photo_id)
+    db.commit()
