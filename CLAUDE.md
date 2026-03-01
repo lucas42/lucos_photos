@@ -11,7 +11,7 @@ Designed to evolve toward ML-driven automation (object detection, rule engine, p
 ## Current State & What's Next
 
 **Built so far:**
-- Full Docker Compose scaffold (api, worker, postgres, qdrant, redis)
+- Full Docker Compose scaffold (api, worker, postgres, redis)
 - `/_info` endpoint (standard lucos monitoring endpoint)
 - Database schema with Alembic migrations (runs automatically on API startup)
 - Basic web UI scaffold (landing page + app icon)
@@ -88,14 +88,13 @@ docker-compose.yml
 
 ## Container Architecture
 
-Five Docker Compose containers:
+Four Docker Compose containers:
 
 | Container | Tech | Role |
 |-----------|------|------|
 | **api** | Python 3, FastAPI, SQLAlchemy, Alembic, Pydantic | HTTP server + orchestration only |
 | **worker** | Python 3, InsightFace, OpenCV, Pillow, YOLO (future) | Background ML processing |
-| **postgres** | PostgreSQL | Relational metadata |
-| **qdrant** | Qdrant | Face embeddings + similarity search |
+| **postgres** | PostgreSQL + pgvector | Relational metadata, face embeddings + similarity search |
 | **redis** | Redis | Internal job queue only |
 
 ## Strict Boundaries
@@ -106,7 +105,6 @@ Five Docker Compose containers:
 
 **Redis:** internal task queue only (`process_photo`, `reprocess_photo`). Not used as a cross-system event bus, audit log, or for long-term persistence.
 
-**Qdrant:** embeddings only. Face embeddings are never stored in PostgreSQL.
 
 **Storage volume** (`/data/photos/`) is mounted read-write into worker, read-only into API. Layout:
 - `/data/photos/originals/` — immutable; written by worker after upload
@@ -123,7 +121,7 @@ All tables use UUID primary keys. Models are in `shared/lucos_photos_common/mode
 | `photo` | `id`, `file_extension`, `taken_at`, `uploaded_at`, `width`, `height` | `width`/`height` nullable until processed |
 | `processing_status` | `photo_id` (PK/FK), `state`, `updated_at`, `error_message` | States: `pending`, `processing`, `complete`, `failed` |
 | `person` | `id`, `contact_id`, `display_name`, `created_at` | `contact_id` links to lucos_contacts; nullable |
-| `face` | `id`, `photo_id`, `person_id`, `person_confirmed`, `bbox_x/y/width/height`, `created_at` | `face.id` is also used as the Qdrant point ID; bounding box in normalised coords (0.0–1.0); `person_confirmed` distinguishes ML guess from human-verified |
+| `face` | `id`, `photo_id`, `person_id`, `person_confirmed`, `bbox_x/y/width/height`, `embedding`, `created_at` | `embedding` is a 512-dimension vector using pgvector; bounding box in normalised coords (0.0–1.0); `person_confirmed` distinguishes ML guess from human-verified |
 | `photo_person` | `photo_id`, `person_id` (composite PK) | Join table; extensible to direct links beyond face-derived ones |
 
 ## Environment Variables
@@ -141,7 +139,6 @@ Sensitive and environment-varying variables come from lucos_creds (see `.env.exa
 | `POSTGRES_DB` | docker-compose (hardcoded) | Always `photos` |
 | `DATABASE_URL` | constructed in code | Built via `URL.create()` in `shared/lucos_photos_common/database.py` from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and hardcoded host/port/db |
 | `REDIS_URL` | docker-compose (hardcoded) | Always `redis://redis:6379` |
-| `QDRANT_URL` | docker-compose (hardcoded) | Always `http://qdrant:6333` |
 | `LUCOS_AUTHENTICATION_URL` | docker-compose (hardcoded) | Always `https://auth.l42.eu` (cross-project consistency) |
 
 ## External Service Integrations

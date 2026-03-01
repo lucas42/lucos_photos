@@ -21,12 +21,10 @@ services:
       - CLIENT_KEYS
       - POSTGRES_USER=photos
       - REDIS_URL=redis://redis:6379
-      - QDRANT_URL=http://qdrant:6333
       - LUCOS_AUTHENTICATION_URL=https://auth.l42.eu
     depends_on:
       - postgres
       - redis
-      - qdrant
     restart: unless-stopped
 
   worker:
@@ -44,29 +42,20 @@ services:
       - POSTGRES_PASSWORD
       - POSTGRES_USER=photos
       - REDIS_URL=redis://redis:6379
-      - QDRANT_URL=http://qdrant:6333
     depends_on:
       - postgres
       - redis
-      - qdrant
     restart: unless-stopped
 
   postgres:
     container_name: lucos_photos_postgres
-    image: postgres:16
+    image: pgvector/pgvector:pg16-alpine
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
       - POSTGRES_PASSWORD
       - POSTGRES_USER=photos
       - POSTGRES_DB=photos
-    restart: unless-stopped
-
-  qdrant:
-    container_name: lucos_photos_qdrant
-    image: qdrant/qdrant:latest
-    volumes:
-      - qdrant_data:/qdrant/storage
     restart: unless-stopped
 
   redis:
@@ -80,5 +69,4 @@ volumes:
   photos:
   uploads:
   postgres_data:
-  qdrant_data:
   redis_data:

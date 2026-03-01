@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 from .database import Base
 
@@ -59,7 +60,6 @@ class Person(Base):
 class Face(Base):
     __tablename__ = "face"
 
-    # id is also used directly as the Qdrant point ID for face embeddings
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     photo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("photo.id"))
     person_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("person.id"))
@@ -70,6 +70,8 @@ class Face(Base):
     bbox_y: Mapped[float] = mapped_column(Float)
     bbox_width: Mapped[float] = mapped_column(Float)
     bbox_height: Mapped[float] = mapped_column(Float)
+    # 512-dimension vector for InsightFace embeddings
+    embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(512))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     photo: Mapped["Photo"] = relationship(back_populates="faces")
