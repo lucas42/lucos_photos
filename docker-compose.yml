@@ -49,7 +49,7 @@ services:
 
   postgres:
     container_name: lucos_photos_postgres
-    image: pgvector/pgvector:pg16-alpine
+    image: pgvector/pgvector:pg16
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
