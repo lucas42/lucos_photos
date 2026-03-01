@@ -2,6 +2,7 @@ import hashlib
 import io
 import os
 import shutil
+import uuid
 from pathlib import Path
 from typing import Annotated
 
@@ -196,7 +197,7 @@ def face_to_dict(face: Face) -> dict:
     }
 
 
-def sync_photo_person(db: Session, photo_id, person_id=None) -> None:
+def sync_photo_person(db: Session, photo_id) -> None:
     """Ensure photo_person table reflects all confirmed/unconfirmed person assignments for a photo."""
     # Collect the set of person_ids currently assigned to faces for this photo
     face_person_ids = {
@@ -224,8 +225,7 @@ def list_faces(
     db: Session = Depends(get_db),
 ):
     try:
-        import uuid as _uuid
-        photo_uuid = _uuid.UUID(photo_id)
+        photo_uuid = uuid.UUID(photo_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Photo not found")
 
@@ -245,8 +245,7 @@ async def assign_person(
     db: Session = Depends(get_db),
 ):
     try:
-        import uuid as _uuid
-        face_uuid = _uuid.UUID(face_id)
+        face_uuid = uuid.UUID(face_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Face not found")
 
@@ -259,7 +258,7 @@ async def assign_person(
         raise HTTPException(status_code=422, detail="personId is required")
 
     try:
-        person_uuid = _uuid.UUID(person_id_str)
+        person_uuid = uuid.UUID(person_id_str)
     except ValueError:
         raise HTTPException(status_code=422, detail="personId must be a valid UUID")
 
@@ -285,8 +284,7 @@ def unassign_person(
     db: Session = Depends(get_db),
 ):
     try:
-        import uuid as _uuid
-        face_uuid = _uuid.UUID(face_id)
+        face_uuid = uuid.UUID(face_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Face not found")
 
