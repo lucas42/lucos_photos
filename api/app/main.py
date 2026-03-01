@@ -4,12 +4,14 @@ import os
 import shutil
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from lucos_photos_common.database import SessionLocal
@@ -195,6 +197,103 @@ def face_to_dict(face: Face) -> dict:
             "height": face.bbox_height,
         },
     }
+
+
+def person_to_dict(person: Person, photo_count: Optional[int] = None) -> dict:
+    data = {
+        "id": str(person.id),
+        "name": person.display_name,
+        "contactId": person.contact_id,
+        "createdAt": person.created_at.isoformat() if person.created_at else None,
+    }
+    if photo_count is not None:
+        data["photoCount"] = photo_count
+    return data
+
+
+@app.get("/persons")
+def list_persons(
+    _: Annotated[None, Depends(verify_key)],
+    includePhotoCounts: bool = False,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    query = db.query(Person).order_by(Person.created_at.asc())
+
+    if includePhotoCounts:
+        # Join with PhotoPerson to count photos
+        query = db.query(
+            Person,
+            func.count(PhotoPerson.photo_id).label("photo_count")
+        ).outerjoin(PhotoPerson).group_by(Person.id).order_by(Person.created_at.asc())
+
+        persons_with_counts = query.offset(offset).limit(limit).all()
+        return [person_to_dict(p, count) for p, count in persons_with_counts]
+    else:
+        persons = query.offset(offset).limit(limit).all()
+        return [person_to_dict(p) for p in persons]
+
+
+@app.post("/persons", status_code=status.HTTP_201_CREATED)
+async def create_person(
+    body: dict,
+    _: Annotated[None, Depends(verify_key)],
+    db: Session = Depends(get_db),
+):
+    name = body.get("name")
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+
+    contact_id = body.get("contactId")
+
+    person = Person(display_name=name, contact_id=contact_id)
+    db.add(person)
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        # Handle unique constraint for contact_id if it already exists (Postgres code 23505, with SQLite fallback for tests)
+        is_unique_violation = (e.orig and hasattr(e.orig, 'pgcode') and e.orig.pgcode == '23505') or \
+                              ("UNIQUE constraint failed" in str(e))
+        if is_unique_violation:
+            raise HTTPException(status_code=409, detail="A person with this contactId already exists")
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(person)
+
+    await emit_loganne_event("personCreated", f"Person {person.id} ({person.display_name}) created in lucos_photos")
+
+    return person_to_dict(person)
+
+
+@app.get("/persons/{person_id}")
+def get_person(
+    person_id: str,
+    _: Annotated[None, Depends(verify_key)],
+    db: Session = Depends(get_db),
+):
+    try:
+        person_uuid = uuid.UUID(person_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person = db.query(Person).filter(Person.id == person_uuid).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    face_count = db.query(Face).filter(Face.person_id == person_uuid).count()
+
+    # Get photos assigned to this person (via PhotoPerson)
+    photos = db.query(Photo).join(PhotoPerson).filter(PhotoPerson.person_id == person_uuid).all()
+
+    data = person_to_dict(person)
+    data["faceCount"] = face_count
+    data["photos"] = [photo_to_dict(p) for p in photos]
+
+    return data
 
 
 def sync_photo_person(db: Session, photo_id) -> None:
