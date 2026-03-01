@@ -13,7 +13,6 @@
             --accent-color: #38bdf8;
             --accent-glow: rgba(56, 189, 248, 0.4);
             --card-bg: #1e293b;
-            --header-bg: rgba(15, 23, 42, 0.85);
             --empty-color: #64748b;
         }
 
@@ -30,31 +29,6 @@
             flex-direction: column;
             min-height: 100vh;
             overflow-x: hidden;
-        }
-
-        header {
-            padding: 1rem 2rem;
-            background: var(--header-bg);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        h1 {
-            margin: 0;
-            font-size: 1.6rem;
-            font-weight: 700;
-            background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-            letter-spacing: -0.02em;
         }
 
         main {
@@ -162,16 +136,8 @@
         }
 
         @media (max-width: 640px) {
-            header {
-                padding: 1rem 1.5rem;
-            }
-
             main {
                 padding: 1.5rem 1rem;
-            }
-
-            h1 {
-                font-size: 1.4rem;
             }
         }
     </style>
@@ -203,7 +169,6 @@
     <script src="/lucos_navbar.js" type="text/javascript"></script>
     <script>
         // Placeholder for future logic to fetch and display photos
-        console.log("Photo UI scaffolded and ready.");
     </script>
 </body>
 
