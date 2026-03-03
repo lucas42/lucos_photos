@@ -25,7 +25,7 @@ class Photo(Base):
     sha256_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     file_extension: Mapped[str] = mapped_column(String(10))
     taken_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     width: Mapped[Optional[int]] = mapped_column(Integer)
     height: Mapped[Optional[int]] = mapped_column(Integer)
 
@@ -38,7 +38,7 @@ class ProcessingStatus(Base):
     __tablename__ = "processing_status"
 
     photo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("photo.id"), primary_key=True)
-    state: Mapped[ProcessingState] = mapped_column(Enum(ProcessingState))
+    state: Mapped[ProcessingState] = mapped_column(Enum(ProcessingState), index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     error_message: Mapped[Optional[str]] = mapped_column(Text)
 
@@ -61,8 +61,8 @@ class Face(Base):
     __tablename__ = "face"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    photo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("photo.id"))
-    person_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("person.id"))
+    photo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("photo.id"), index=True)
+    person_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("person.id"), index=True)
     # Whether the person assignment has been manually confirmed (vs ML guess)
     person_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     # Bounding box as normalised coordinates (0.0–1.0, relative to image dimensions)
