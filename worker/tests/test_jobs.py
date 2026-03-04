@@ -3,10 +3,12 @@
 import io
 import shutil
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from PIL import Image
 
 from lucos_photos_common.jobs import process_photo, reprocess_photo
 from lucos_photos_common.models import Photo, ProcessingState, ProcessingStatus
@@ -46,6 +48,25 @@ VALID_JPEG = bytes.fromhex(
     "f5f6f7f8f9faffda000c03010002110311003f00"
     "e2e8a28af993f713ffd9"
 )
+
+# EXIF tag ID for DateTimeOriginal
+EXIF_TAG_DATETIME_ORIGINAL = 36867
+
+
+def make_jpeg_with_exif(datetime_original: str | None = None) -> bytes:
+    """Create a minimal 2x3 JPEG, optionally embedding a DateTimeOriginal EXIF tag.
+
+    Args:
+        datetime_original: EXIF datetime string in format "YYYY:MM:DD HH:MM:SS",
+                           or None to omit the tag.
+    """
+    img = Image.new("RGB", (2, 3), color=(128, 64, 32))
+    exif = img.getexif()
+    if datetime_original is not None:
+        exif[EXIF_TAG_DATETIME_ORIGINAL] = datetime_original
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", exif=exif.tobytes())
+    return buf.getvalue()
 
 
 class TestProcessPhoto:
@@ -149,6 +170,67 @@ class TestProcessPhoto:
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
              patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
             process_photo(fake_id)  # Should not raise
+
+    def test_extracts_taken_at_from_exif(self, db_session, pending_photo, tmp_path):
+        """EXIF DateTimeOriginal should be parsed and stored as a UTC-aware datetime.
+
+        SQLite (used in tests) strips timezone info on round-trip, so we compare
+        the naive UTC value. In production (PostgreSQL with timezone=True), the
+        timezone is preserved.
+        """
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        uploads_dir.mkdir()
+
+        jpeg_with_exif = make_jpeg_with_exif("2023:06:15 14:30:00")
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(jpeg_with_exif)
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+            process_photo(str(pending_photo.id))
+
+        db_session.refresh(pending_photo)
+        assert pending_photo.taken_at is not None
+        # Strip tz for comparison since SQLite drops timezone info on round-trip
+        actual_naive = pending_photo.taken_at.replace(tzinfo=None)
+        assert actual_naive == datetime(2023, 6, 15, 14, 30, 0)
+
+    def test_taken_at_is_none_when_no_exif(self, db_session, pending_photo, tmp_path):
+        """Photos without EXIF DateTimeOriginal should have taken_at remain None."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        uploads_dir.mkdir()
+
+        jpeg_no_exif = make_jpeg_with_exif(datetime_original=None)
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(jpeg_no_exif)
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+            process_photo(str(pending_photo.id))
+
+        db_session.refresh(pending_photo)
+        assert pending_photo.taken_at is None
+
+    def test_sets_correct_dimensions_from_pillow_jpeg(self, db_session, pending_photo, tmp_path):
+        """Dimensions should be read from the actual image, not hardcoded."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        uploads_dir.mkdir()
+
+        # make_jpeg_with_exif creates a 2x3 image
+        jpeg_bytes = make_jpeg_with_exif()
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(jpeg_bytes)
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+            process_photo(str(pending_photo.id))
+
+        db_session.refresh(pending_photo)
+        assert pending_photo.width == 2
+        assert pending_photo.height == 3
 
 
 class TestReprocessPhoto:
