@@ -7,6 +7,7 @@ All jobs must be idempotent — they may be retried on failure.
 import logging
 import os
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -71,11 +72,26 @@ def process_photo(photo_id: str) -> None:
                 if src.exists():
                     src.unlink()
 
-            # Extract image metadata (dimensions)
+            # Extract image metadata (dimensions and EXIF taken-at date)
             from PIL import Image
             with Image.open(dest) as img:
                 photo.width = img.width
                 photo.height = img.height
+
+                # Extract EXIF DateTimeOriginal if present (format: "YYYY:MM:DD HH:MM:SS")
+                exif_data = img.getexif()
+                EXIF_TAG_DATETIME_ORIGINAL = 36867
+                raw_taken_at = exif_data.get(EXIF_TAG_DATETIME_ORIGINAL)
+                if raw_taken_at:
+                    try:
+                        taken_at_naive = datetime.strptime(raw_taken_at, "%Y:%m:%d %H:%M:%S")
+                        # EXIF datetimes have no timezone — treat as UTC
+                        photo.taken_at = taken_at_naive.replace(tzinfo=timezone.utc)
+                        logger.info("process_photo: extracted taken_at %s for photo %s", photo.taken_at, photo_id)
+                    except ValueError:
+                        logger.warning("process_photo: could not parse DateTimeOriginal %r for photo %s", raw_taken_at, photo_id)
+                else:
+                    logger.info("process_photo: no DateTimeOriginal EXIF tag for photo %s", photo_id)
 
             # Mark as complete
             status.state = ProcessingState.complete
