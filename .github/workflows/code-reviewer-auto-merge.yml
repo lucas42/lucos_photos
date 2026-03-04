@@ -1,0 +1,24 @@
+name: Auto-merge on code reviewer approval
+on:
+  pull_request_review:
+    types:
+      - submitted
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    # Only act on approvals from lucos-code-reviewer[bot] (verified by numeric user ID to prevent impersonation)
+    if: |
+      github.event.review.state == 'approved' &&
+      github.event.review.user.login == 'lucos-code-reviewer[bot]' &&
+      github.event.review.user.id == 264151378
+    steps:
+      - name: Enable auto-merge
+        run: gh pr merge --auto --merge "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
