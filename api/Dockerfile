@@ -1,6 +1,8 @@
 FROM lucas42/lucos_navbar:2.1.3 as navbar
 FROM python:3.14-slim
 
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY --from=navbar lucos_navbar.js ./app/static/
