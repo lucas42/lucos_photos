@@ -19,24 +19,34 @@ from lucos_photos_common.database import Base
 
 
 @pytest.fixture
-def db_session():
+def db_engine():
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    yield session
-    session.close()
+    yield engine
     Base.metadata.drop_all(engine)
 
 
 @pytest.fixture
-def client(db_session, tmp_path, monkeypatch):
+def db_session(db_engine):
+    Session = sessionmaker(bind=db_engine)
+    session = Session()
+    yield session
+    session.close()
+
+
+@pytest.fixture
+def client(db_session, db_engine, tmp_path, monkeypatch):
     monkeypatch.setenv("CLIENT_KEYS", "test:development=validkey")
     monkeypatch.setattr(main_module, "UPLOADS_DIR", tmp_path)
+
+    # Patch SessionLocal so that any code calling SessionLocal() directly (e.g. check_db,
+    # get_metrics) uses the same in-memory SQLite database as the test session.
+    TestSession = sessionmaker(bind=db_engine)
+    monkeypatch.setattr(main_module, "SessionLocal", TestSession)
 
     def override_get_db():
         yield db_session

@@ -168,12 +168,51 @@ async def check_qdrant() -> dict:
         return {"ok": False, "techDetail": tech_detail}
 
 
+async def get_metrics() -> dict:
+    """Return live metrics: photo count and pending processing queue depth."""
+    try:
+        db = SessionLocal()
+        try:
+            photo_count = await asyncio.to_thread(
+                lambda: db.query(Photo).count()
+            )
+            pending_count = await asyncio.to_thread(
+                lambda: db.query(ProcessingStatus).filter(
+                    ProcessingStatus.state == ProcessingState.pending
+                ).count()
+            )
+        finally:
+            db.close()
+        return {
+            "photo-count": {
+                "value": photo_count,
+                "techDetail": "Total number of photos stored",
+            },
+            "processing-pending-count": {
+                "value": pending_count,
+                "techDetail": "Number of photos awaiting processing",
+            },
+        }
+    except Exception:
+        return {
+            "photo-count": {
+                "value": 0,
+                "techDetail": "Total number of photos stored",
+            },
+            "processing-pending-count": {
+                "value": 0,
+                "techDetail": "Number of photos awaiting processing",
+            },
+        }
+
+
 @app.get("/_info")
 async def info():
-    db_check, redis_check, qdrant_check = await asyncio.gather(
+    db_check, redis_check, qdrant_check, metrics = await asyncio.gather(
         check_db(),
         check_redis(),
         check_qdrant(),
+        get_metrics(),
     )
     return {
         "system": os.environ.get("SYSTEM", "lucos_photos"),
@@ -182,7 +221,7 @@ async def info():
             "redis-reachable": redis_check,
             "qdrant-reachable": qdrant_check,
         },
-        "metrics": {},
+        "metrics": metrics,
         "ci": {
             "circle": "gh/lucas42/lucos_photos",
         },
