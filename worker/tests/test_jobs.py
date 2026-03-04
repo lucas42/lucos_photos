@@ -7,11 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 from PIL import Image
 
-from lucos_photos_common.jobs import process_photo, reprocess_photo
-from lucos_photos_common.models import Photo, ProcessingState, ProcessingStatus
+from lucos_photos_common.jobs import detect_and_save_faces, process_photo, reprocess_photo
+from lucos_photos_common.models import Face, Photo, ProcessingState, ProcessingStatus
 
 # Minimal valid 1x1 JPEG bytes
 VALID_JPEG = bytes.fromhex(
@@ -70,6 +71,12 @@ def make_jpeg_with_exif(datetime_original: str | None = None) -> bytes:
 
 
 class TestProcessPhoto:
+    @pytest.fixture(autouse=True)
+    def mock_face_detection(self):
+        """Patch detect_and_save_faces so process_photo tests don't need InsightFace installed."""
+        with patch("lucos_photos_common.jobs.detect_and_save_faces") as mock_detect:
+            yield mock_detect
+
     def test_moves_file_to_originals(self, db_session, pending_photo, tmp_path):
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
@@ -342,6 +349,275 @@ class TestProcessPhoto:
 
         # Thumbnail should not have been replaced
         assert existing_thumb.read_bytes() == b"sentinel", "Existing thumbnail should not be overwritten"
+
+
+class TestDetectAndSaveFaces:
+    """Tests for detect_and_save_faces().
+
+    InsightFace and OpenCV are not installed in the test environment, so all ML
+    calls are mocked. The tests focus on the data pipeline: normalisation,
+    database persistence, idempotency, and person auto-assignment logic.
+    """
+
+    @pytest.fixture
+    def photo_with_dimensions(self, db_session):
+        """A pending photo with width/height already set (as if metadata extraction completed)."""
+        photo = Photo(sha256_hash="b" * 64, file_extension="jpg", width=1000, height=800)
+        db_session.add(photo)
+        db_session.flush()
+        status = ProcessingStatus(photo_id=photo.id, state=ProcessingState.processing)
+        db_session.add(status)
+        db_session.commit()
+        db_session.refresh(photo)
+        return photo
+
+    def _make_mock_face(self, bbox, embedding=None):
+        """Build a mock InsightFace face object with the given bbox and optional embedding."""
+        face = MagicMock()
+        face.bbox = bbox
+        face.embedding = np.array(embedding) if embedding is not None else None
+        return face
+
+    def _patch_insightface(self, detected_faces):
+        """Return a context manager that patches cv2 and insightface to return detected_faces."""
+        mock_app = MagicMock()
+        mock_app.get.return_value = detected_faces
+
+        mock_face_analysis_cls = MagicMock(return_value=mock_app)
+
+        cv2_mock = MagicMock()
+        # cv2.imread returns a non-None value to simulate a valid image
+        cv2_mock.imread.return_value = MagicMock()
+
+        import sys
+        import types
+
+        insightface_mock = types.ModuleType("insightface")
+        insightface_app_mock = types.ModuleType("insightface.app")
+        insightface_app_mock.FaceAnalysis = mock_face_analysis_cls
+        insightface_mock.app = insightface_app_mock
+
+        return patch.multiple(
+            "sys.modules",
+            cv2=cv2_mock,
+            insightface=insightface_mock,
+            **{"insightface.app": insightface_app_mock},
+        ), mock_app, cv2_mock
+
+    def test_saves_face_record_for_each_detected_face(self, db_session, photo_with_dimensions, tmp_path):
+        """One Face row should be inserted per detected face."""
+        photo = photo_with_dimensions
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        face1 = self._make_mock_face([100, 200, 300, 400], embedding=[0.1] * 512)
+        face2 = self._make_mock_face([500, 100, 700, 350], embedding=[0.2] * 512)
+
+        mock_cv2 = MagicMock()
+        mock_cv2.imread.return_value = MagicMock()
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = [face1, face2]
+        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+
+        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+            detect_and_save_faces(db_session, photo, img_path)
+
+        faces = db_session.query(Face).filter(Face.photo_id == photo.id).all()
+        assert len(faces) == 2
+
+    def test_normalises_bounding_box_coordinates(self, db_session, photo_with_dimensions, tmp_path):
+        """Bounding box should be converted from pixel coords to normalised 0.0-1.0 values."""
+        photo = photo_with_dimensions  # width=1000, height=800
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        # bbox: x1=100, y1=200, x2=600, y2=600 in a 1000x800 image
+        # expected: x=0.1, y=0.25, w=0.5, h=0.5
+        face = self._make_mock_face([100.0, 200.0, 600.0, 600.0], embedding=[0.0] * 512)
+
+        mock_cv2 = MagicMock()
+        mock_cv2.imread.return_value = MagicMock()
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = [face]
+        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+
+        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+            detect_and_save_faces(db_session, photo, img_path)
+
+        saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
+        assert saved is not None
+        assert abs(saved.bbox_x - 0.1) < 1e-6
+        assert abs(saved.bbox_y - 0.25) < 1e-6
+        assert abs(saved.bbox_width - 0.5) < 1e-6
+        assert abs(saved.bbox_height - 0.5) < 1e-6
+
+    def test_saves_embedding_vector(self, db_session, photo_with_dimensions, tmp_path):
+        """The 512-dim embedding should be saved to the face record."""
+        photo = photo_with_dimensions
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        embedding = [float(i) / 512 for i in range(512)]
+        face = self._make_mock_face([0.0, 0.0, 100.0, 100.0], embedding=embedding)
+
+        mock_cv2 = MagicMock()
+        mock_cv2.imread.return_value = MagicMock()
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = [face]
+        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+
+        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+            detect_and_save_faces(db_session, photo, img_path)
+
+        saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
+        assert saved is not None
+        assert saved.embedding is not None
+        assert len(saved.embedding) == 512
+
+    def test_person_confirmed_is_false_for_ml_guess(self, db_session, photo_with_dimensions, tmp_path):
+        """Auto-assigned persons should always be unconfirmed (ML guess)."""
+        photo = photo_with_dimensions
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        face = self._make_mock_face([0.0, 0.0, 100.0, 100.0], embedding=[0.5] * 512)
+
+        mock_cv2 = MagicMock()
+        mock_cv2.imread.return_value = MagicMock()
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = [face]
+        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+
+        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+            detect_and_save_faces(db_session, photo, img_path)
+
+        saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
+        assert saved.person_confirmed is False
+
+    def test_no_faces_creates_no_records(self, db_session, photo_with_dimensions, tmp_path):
+        """If InsightFace detects no faces, no Face rows should be inserted."""
+        photo = photo_with_dimensions
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        mock_cv2 = MagicMock()
+        mock_cv2.imread.return_value = MagicMock()
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = []
+        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+
+        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+            detect_and_save_faces(db_session, photo, img_path)
+
+        count = db_session.query(Face).filter(Face.photo_id == photo.id).count()
+        assert count == 0
+
+    def test_face_without_embedding_saved_with_null_embedding(self, db_session, photo_with_dimensions, tmp_path):
+        """A face with no embedding (e.g. detection-only model) should be saved with embedding=None."""
+        photo = photo_with_dimensions
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        face = self._make_mock_face([0.0, 0.0, 100.0, 100.0], embedding=None)
+
+        mock_cv2 = MagicMock()
+        mock_cv2.imread.return_value = MagicMock()
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = [face]
+        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+
+        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+            detect_and_save_faces(db_session, photo, img_path)
+
+        saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
+        assert saved is not None
+        assert saved.embedding is None
+        assert saved.person_id is None
+
+    def test_idempotent_deletes_existing_faces_before_rerun(self, db_session, photo_with_dimensions, tmp_path):
+        """On re-run, existing face records for the photo should be deleted and recreated."""
+        photo = photo_with_dimensions
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        # Pre-create a stale face record
+        stale_face = Face(
+            photo_id=photo.id,
+            bbox_x=0.5, bbox_y=0.5, bbox_width=0.1, bbox_height=0.1,
+            person_confirmed=False,
+        )
+        db_session.add(stale_face)
+        db_session.commit()
+
+        face = self._make_mock_face([0.0, 0.0, 200.0, 200.0], embedding=[0.1] * 512)
+
+        mock_cv2 = MagicMock()
+        mock_cv2.imread.return_value = MagicMock()
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = [face]
+        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+
+        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+            detect_and_save_faces(db_session, photo, img_path)
+
+        faces = db_session.query(Face).filter(Face.photo_id == photo.id).all()
+        # The stale face should be gone; only the freshly detected one should remain
+        assert len(faces) == 1
+        assert abs(faces[0].bbox_x - 0.0) < 1e-6
+
+    def test_raises_if_cv2_cannot_read_image(self, db_session, photo_with_dimensions, tmp_path):
+        """If cv2.imread returns None, detect_and_save_faces should raise a ValueError."""
+        photo = photo_with_dimensions
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"not a real image")
+
+        mock_cv2 = MagicMock()
+        mock_cv2.imread.return_value = None  # Simulate unreadable file
+        mock_app_instance = MagicMock()
+        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+
+        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+            with pytest.raises(ValueError, match="cv2.imread returned None"):
+                detect_and_save_faces(db_session, photo, img_path)
+
+    def test_skips_detection_when_photo_has_no_dimensions(self, db_session, tmp_path):
+        """If width/height are None (metadata not yet extracted), detection should be skipped."""
+        photo = Photo(sha256_hash="c" * 64, file_extension="jpg", width=None, height=None)
+        db_session.add(photo)
+        db_session.commit()
+
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        mock_cv2 = MagicMock()
+        mock_app_instance = MagicMock()
+        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+
+        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+            detect_and_save_faces(db_session, photo, img_path)
+
+        # cv2.imread should never have been called
+        mock_cv2.imread.assert_not_called()
+        count = db_session.query(Face).filter(Face.photo_id == photo.id).count()
+        assert count == 0
+
+    def test_process_photo_calls_face_detection(self, db_session, pending_photo, tmp_path):
+        """process_photo should invoke detect_and_save_faces after metadata extraction."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(make_jpeg_with_exif())
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.detect_and_save_faces") as mock_detect:
+            process_photo(str(pending_photo.id))
+
+        mock_detect.assert_called_once()
 
 
 class TestReprocessPhoto:
