@@ -357,6 +357,12 @@ class TestDetectAndSaveFaces:
     InsightFace and OpenCV are not installed in the test environment, so all ML
     calls are mocked. The tests focus on the data pipeline: normalisation,
     database persistence, idempotency, and person auto-assignment logic.
+
+    Each test patches:
+    - ``lucos_photos_common.jobs._get_face_analysis_app`` — returns a per-test mock
+      app instance, avoiding singleton state leaking between tests.
+    - ``cv2`` in sys.modules — so the ``import cv2`` inside detect_and_save_faces
+      resolves to a mock without requiring OpenCV to be installed.
     """
 
     @pytest.fixture
@@ -378,31 +384,22 @@ class TestDetectAndSaveFaces:
         face.embedding = np.array(embedding) if embedding is not None else None
         return face
 
-    def _patch_insightface(self, detected_faces):
-        """Return a context manager that patches cv2 and insightface to return detected_faces."""
-        mock_app = MagicMock()
-        mock_app.get.return_value = detected_faces
+    def _mock_insightface(self, mock_app_instance, mock_cv2=None):
+        """Return a context manager patching _get_face_analysis_app and cv2.
 
-        mock_face_analysis_cls = MagicMock(return_value=mock_app)
-
-        cv2_mock = MagicMock()
-        # cv2.imread returns a non-None value to simulate a valid image
-        cv2_mock.imread.return_value = MagicMock()
-
-        import sys
-        import types
-
-        insightface_mock = types.ModuleType("insightface")
-        insightface_app_mock = types.ModuleType("insightface.app")
-        insightface_app_mock.FaceAnalysis = mock_face_analysis_cls
-        insightface_mock.app = insightface_app_mock
-
-        return patch.multiple(
-            "sys.modules",
-            cv2=cv2_mock,
-            insightface=insightface_mock,
-            **{"insightface.app": insightface_app_mock},
-        ), mock_app, cv2_mock
+        Patches _get_face_analysis_app to return mock_app_instance so the singleton
+        is bypassed entirely — each test gets its own app mock with independent
+        return values. cv2 is patched in sys.modules so the bare ``import cv2``
+        inside detect_and_save_faces resolves without OpenCV being installed.
+        """
+        if mock_cv2 is None:
+            mock_cv2 = MagicMock()
+            mock_cv2.imread.return_value = MagicMock()
+        return (
+            patch("lucos_photos_common.jobs._get_face_analysis_app", return_value=mock_app_instance),
+            patch.dict("sys.modules", {"cv2": mock_cv2}),
+            mock_cv2,
+        )
 
     def test_saves_face_record_for_each_detected_face(self, db_session, photo_with_dimensions, tmp_path):
         """One Face row should be inserted per detected face."""
@@ -413,13 +410,11 @@ class TestDetectAndSaveFaces:
         face1 = self._make_mock_face([100, 200, 300, 400], embedding=[0.1] * 512)
         face2 = self._make_mock_face([500, 100, 700, 350], embedding=[0.2] * 512)
 
-        mock_cv2 = MagicMock()
-        mock_cv2.imread.return_value = MagicMock()
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face1, face2]
-        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
 
-        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+        with patch_app, patch_cv2:
             detect_and_save_faces(db_session, photo, img_path)
 
         faces = db_session.query(Face).filter(Face.photo_id == photo.id).all()
@@ -435,13 +430,11 @@ class TestDetectAndSaveFaces:
         # expected: x=0.1, y=0.25, w=0.5, h=0.5
         face = self._make_mock_face([100.0, 200.0, 600.0, 600.0], embedding=[0.0] * 512)
 
-        mock_cv2 = MagicMock()
-        mock_cv2.imread.return_value = MagicMock()
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face]
-        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
 
-        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+        with patch_app, patch_cv2:
             detect_and_save_faces(db_session, photo, img_path)
 
         saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
@@ -460,13 +453,11 @@ class TestDetectAndSaveFaces:
         embedding = [float(i) / 512 for i in range(512)]
         face = self._make_mock_face([0.0, 0.0, 100.0, 100.0], embedding=embedding)
 
-        mock_cv2 = MagicMock()
-        mock_cv2.imread.return_value = MagicMock()
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face]
-        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
 
-        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+        with patch_app, patch_cv2:
             detect_and_save_faces(db_session, photo, img_path)
 
         saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
@@ -482,13 +473,11 @@ class TestDetectAndSaveFaces:
 
         face = self._make_mock_face([0.0, 0.0, 100.0, 100.0], embedding=[0.5] * 512)
 
-        mock_cv2 = MagicMock()
-        mock_cv2.imread.return_value = MagicMock()
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face]
-        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
 
-        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+        with patch_app, patch_cv2:
             detect_and_save_faces(db_session, photo, img_path)
 
         saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
@@ -500,13 +489,11 @@ class TestDetectAndSaveFaces:
         img_path = tmp_path / "test.jpg"
         img_path.write_bytes(b"fake")
 
-        mock_cv2 = MagicMock()
-        mock_cv2.imread.return_value = MagicMock()
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = []
-        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
 
-        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+        with patch_app, patch_cv2:
             detect_and_save_faces(db_session, photo, img_path)
 
         count = db_session.query(Face).filter(Face.photo_id == photo.id).count()
@@ -520,13 +507,11 @@ class TestDetectAndSaveFaces:
 
         face = self._make_mock_face([0.0, 0.0, 100.0, 100.0], embedding=None)
 
-        mock_cv2 = MagicMock()
-        mock_cv2.imread.return_value = MagicMock()
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face]
-        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
 
-        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+        with patch_app, patch_cv2:
             detect_and_save_faces(db_session, photo, img_path)
 
         saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
@@ -551,13 +536,11 @@ class TestDetectAndSaveFaces:
 
         face = self._make_mock_face([0.0, 0.0, 200.0, 200.0], embedding=[0.1] * 512)
 
-        mock_cv2 = MagicMock()
-        mock_cv2.imread.return_value = MagicMock()
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face]
-        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
 
-        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+        with patch_app, patch_cv2:
             detect_and_save_faces(db_session, photo, img_path)
 
         faces = db_session.query(Face).filter(Face.photo_id == photo.id).all()
@@ -573,10 +556,11 @@ class TestDetectAndSaveFaces:
 
         mock_cv2 = MagicMock()
         mock_cv2.imread.return_value = None  # Simulate unreadable file
-        mock_app_instance = MagicMock()
-        mock_face_analysis = MagicMock(return_value=mock_app_instance)
 
-        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+        mock_app_instance = MagicMock()
+        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance, mock_cv2=mock_cv2)
+
+        with patch_app, patch_cv2:
             with pytest.raises(ValueError, match="cv2.imread returned None"):
                 detect_and_save_faces(db_session, photo, img_path)
 
@@ -589,14 +573,13 @@ class TestDetectAndSaveFaces:
         img_path = tmp_path / "test.jpg"
         img_path.write_bytes(b"fake")
 
-        mock_cv2 = MagicMock()
         mock_app_instance = MagicMock()
-        mock_face_analysis = MagicMock(return_value=mock_app_instance)
+        patch_app, patch_cv2, mock_cv2 = self._mock_insightface(mock_app_instance)
 
-        with patch.dict("sys.modules", {"cv2": mock_cv2, "insightface": MagicMock(), "insightface.app": MagicMock(FaceAnalysis=mock_face_analysis)}):
+        with patch_app, patch_cv2:
             detect_and_save_faces(db_session, photo, img_path)
 
-        # cv2.imread should never have been called
+        # cv2.imread should never have been called (we return early before loading the image)
         mock_cv2.imread.assert_not_called()
         count = db_session.query(Face).filter(Face.photo_id == photo.id).count()
         assert count == 0
