@@ -16,7 +16,7 @@ from rq import Queue
 from rq.job import Retry
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import Photo, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, Photo, ProcessingState, ProcessingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,150 @@ ORIGINALS_DIR = Path("/data/photos/originals")
 DERIVATIVES_DIR = Path("/data/photos/derivatives")
 
 THUMBNAIL_WIDTH = 400
+
+# Cosine distance threshold for auto-assigning a person_id from a similar face.
+# InsightFace ArcFace embeddings: cosine distance 0.0 = identical, 2.0 = opposite.
+# Empirically, same-person matches are typically < 0.4; strangers are > 0.6.
+FACE_SIMILARITY_THRESHOLD = 0.4
+
+# Module-level singleton for the InsightFace model.
+# Initialised lazily on first call to _get_face_analysis_app() so that importing
+# this module doesn't trigger a heavy model load (important for tests and the API
+# process which never runs face detection).
+_face_analysis_app = None
+
+
+def _get_face_analysis_app():
+    """Return the shared FaceAnalysis instance, initialising it on first call.
+
+    This avoids reloading ~500 MB of model weights for every photo processed.
+    The singleton is process-scoped; each worker process loads the model once.
+    """
+    global _face_analysis_app
+    if _face_analysis_app is None:
+        import cv2  # noqa: F401 — imported here to keep the heavy dep out of the API process
+        from insightface.app import FaceAnalysis
+
+        insightface_root = os.environ.get("INSIGHTFACE_ROOT", os.path.expanduser("~/.insightface"))
+        app = FaceAnalysis(name="buffalo_l", root=insightface_root, allowed_modules=["detection", "recognition"])
+        # ctx_id=-1 means CPU inference
+        app.prepare(ctx_id=-1, det_thresh=0.5, det_size=(640, 640))
+        _face_analysis_app = app
+        logger.info("_get_face_analysis_app: InsightFace model loaded (buffalo_l)")
+    return _face_analysis_app
+
+
+def detect_and_save_faces(db, photo: "Photo", image_path: Path) -> None:
+    """Run InsightFace face detection on an image and persist results to the database.
+
+    For each detected face:
+    - Saves normalised bounding box coordinates (0.0–1.0) to the face table
+    - Saves the 512-dimension ArcFace embedding vector
+    - Searches for similar faces via pgvector cosine distance to auto-assign person_id
+
+    This function is idempotent: if the photo already has face records, they are
+    deleted and recreated. This ensures a clean result on retry.
+
+    Args:
+        db: SQLAlchemy session (caller is responsible for commit/close)
+        photo: Photo ORM object (must have id, width, height set)
+        image_path: Absolute path to the image file to analyse
+    """
+    import cv2
+
+    if photo.width is None or photo.height is None:
+        logger.warning("detect_and_save_faces: photo %s has no dimensions, skipping", photo.id)
+        return
+
+    app = _get_face_analysis_app()
+
+    img_bgr = cv2.imread(str(image_path))
+    if img_bgr is None:
+        raise ValueError(f"cv2.imread returned None for {image_path} — file may be corrupt or unsupported")
+
+    detected_faces = app.get(img_bgr)
+    logger.info("detect_and_save_faces: detected %d face(s) in photo %s", len(detected_faces), photo.id)
+
+    # Idempotency: delete any existing face records for this photo before reinserting
+    existing_faces = db.query(Face).filter(Face.photo_id == photo.id).all()
+    if existing_faces:
+        logger.info("detect_and_save_faces: removing %d existing face record(s) for photo %s (idempotent re-run)", len(existing_faces), photo.id)
+        for f in existing_faces:
+            db.delete(f)
+        db.flush()
+
+    img_width = photo.width
+    img_height = photo.height
+
+    for detected in detected_faces:
+        # bbox is [x1, y1, x2, y2] in absolute pixel coords
+        x1, y1, x2, y2 = detected.bbox
+
+        # Normalise to 0.0–1.0, clamp to valid range
+        norm_x = max(0.0, min(1.0, float(x1) / img_width))
+        norm_y = max(0.0, min(1.0, float(y1) / img_height))
+        norm_w = max(0.0, min(1.0, float(x2 - x1) / img_width))
+        norm_h = max(0.0, min(1.0, float(y2 - y1) / img_height))
+
+        embedding_vector = None
+        person_id = None
+
+        if detected.embedding is not None:
+            embedding_list = detected.embedding.tolist()
+            embedding_vector = embedding_list
+
+            # Search for the nearest existing face embedding using pgvector cosine distance.
+            # Only look at faces with an embedding and a confirmed or ML-assigned person.
+            # Short-circuit: skip the pgvector ORDER BY entirely if there are no candidates.
+            # This avoids the pgvector operator on SQLite (used in tests) when the table is empty.
+            from sqlalchemy import text
+            candidate_filter = [
+                Face.embedding.isnot(None),
+                Face.person_id.isnot(None),
+                Face.photo_id != photo.id,
+            ]
+            has_candidates = db.query(Face).filter(*candidate_filter).limit(1).first() is not None
+            nearest = (
+                db.query(Face)
+                .filter(*candidate_filter)
+                .order_by(Face.embedding.cosine_distance(embedding_list))
+                .limit(1)
+                .first()
+            ) if has_candidates else None
+            if nearest is not None:
+                # Compute the actual distance to check against threshold
+                dist_row = db.execute(
+                    text("SELECT (:emb)::vector <=> embedding FROM face WHERE id = :fid"),
+                    {"emb": str(embedding_list), "fid": str(nearest.id)},
+                ).fetchone()
+                if dist_row is not None and dist_row[0] is not None:
+                    distance = float(dist_row[0])
+                    if distance < FACE_SIMILARITY_THRESHOLD:
+                        person_id = nearest.person_id
+                        logger.info(
+                            "detect_and_save_faces: auto-assigned person %s to face (distance=%.3f)",
+                            person_id, distance,
+                        )
+                    else:
+                        logger.info(
+                            "detect_and_save_faces: nearest face distance %.3f exceeds threshold, no person assigned",
+                            distance,
+                        )
+
+        face_record = Face(
+            photo_id=photo.id,
+            person_id=person_id,
+            person_confirmed=False,
+            bbox_x=norm_x,
+            bbox_y=norm_y,
+            bbox_width=norm_w,
+            bbox_height=norm_h,
+            embedding=embedding_vector,
+        )
+        db.add(face_record)
+
+    db.flush()
+    logger.info("detect_and_save_faces: saved %d face record(s) for photo %s", len(detected_faces), photo.id)
 
 
 def process_photo(photo_id: str) -> None:
@@ -107,6 +251,9 @@ def process_photo(photo_id: str) -> None:
                 logger.info("process_photo: generated thumbnail for photo %s at %s", photo_id, thumb_path)
             else:
                 logger.info("process_photo: thumbnail already exists for photo %s, skipping", photo_id)
+
+            # Run face detection and recognition
+            detect_and_save_faces(db, photo, dest)
 
             # Mark as complete
             status.state = ProcessingState.complete
