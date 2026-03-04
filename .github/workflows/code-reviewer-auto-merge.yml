@@ -16,6 +16,9 @@ jobs:
       github.event.review.user.login == 'lucos-code-reviewer[bot]' &&
       github.event.review.user.id == 264151378
     steps:
+      # Use a GitHub App token instead of GITHUB_TOKEN so that the merge is
+      # attributed to the App rather than github-actions[bot]. This ensures
+      # closing keywords (e.g. "Closes #N") in PRs are processed by GitHub.
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v2
