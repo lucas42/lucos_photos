@@ -49,6 +49,73 @@ class TestInfo:
             assert isinstance(check["techDetail"], str), f"check '{name}' 'techDetail' is not a str"
 
 
+class TestMetrics:
+    """Tests for the metrics section of /_info."""
+
+    def test_metrics_keys_present(self, client):
+        data = client.get("/_info").json()
+        metrics = data["metrics"]
+        assert "photo-count" in metrics
+        assert "processing-pending-count" in metrics
+
+    def test_metrics_structure(self, client):
+        data = client.get("/_info").json()
+        for name, metric in data["metrics"].items():
+            assert "value" in metric, f"metric '{name}' missing 'value' field"
+            assert "techDetail" in metric, f"metric '{name}' missing 'techDetail' field"
+            assert isinstance(metric["value"], int), f"metric '{name}' 'value' is not an int"
+            assert isinstance(metric["techDetail"], str), f"metric '{name}' 'techDetail' is not a str"
+
+    def test_photo_count_reflects_db(self, client, db_session):
+        from lucos_photos_common.models import Photo, ProcessingState, ProcessingStatus
+
+        # Initially zero photos
+        data = client.get("/_info").json()
+        assert data["metrics"]["photo-count"]["value"] == 0
+
+        # Add two photos
+        import uuid, hashlib
+        for i in range(2):
+            p = Photo(sha256_hash=hashlib.sha256(f"photo{i}".encode()).hexdigest(), file_extension="jpg")
+            db_session.add(p)
+        db_session.commit()
+
+        data = client.get("/_info").json()
+        assert data["metrics"]["photo-count"]["value"] == 2
+
+    def test_processing_pending_count_reflects_db(self, client, db_session):
+        from lucos_photos_common.models import Photo, ProcessingState, ProcessingStatus
+        import hashlib
+
+        # Initially zero pending
+        data = client.get("/_info").json()
+        assert data["metrics"]["processing-pending-count"]["value"] == 0
+
+        # Add a photo with pending status
+        p = Photo(sha256_hash=hashlib.sha256(b"pendingphoto").hexdigest(), file_extension="jpg")
+        db_session.add(p)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=p.id, state=ProcessingState.pending))
+        db_session.commit()
+
+        data = client.get("/_info").json()
+        assert data["metrics"]["processing-pending-count"]["value"] == 1
+
+    def test_processing_pending_count_excludes_non_pending(self, client, db_session):
+        from lucos_photos_common.models import Photo, ProcessingState, ProcessingStatus
+        import hashlib
+
+        # Add a photo with complete status — should not count as pending
+        p = Photo(sha256_hash=hashlib.sha256(b"completephoto").hexdigest(), file_extension="jpg")
+        db_session.add(p)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=p.id, state=ProcessingState.complete))
+        db_session.commit()
+
+        data = client.get("/_info").json()
+        assert data["metrics"]["processing-pending-count"]["value"] == 0
+
+
 class TestHealthChecks:
     """Tests for individual health check behaviour — happy paths and failure paths."""
 
