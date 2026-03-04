@@ -73,13 +73,15 @@ class TestProcessPhoto:
     def test_moves_file_to_originals(self, db_session, pending_photo, tmp_path):
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
         uploads_dir.mkdir()
 
         src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
         src.write_bytes(VALID_JPEG)
 
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_photo(str(pending_photo.id))
 
         assert not src.exists(), "Source file should have been moved"
@@ -88,12 +90,14 @@ class TestProcessPhoto:
     def test_sets_processing_state_to_complete(self, db_session, pending_photo, tmp_path):
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
         uploads_dir.mkdir()
         src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
         src.write_bytes(VALID_JPEG)
 
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_photo(str(pending_photo.id))
 
         db_session.refresh(pending_photo)
@@ -102,12 +106,14 @@ class TestProcessPhoto:
     def test_sets_width_and_height(self, db_session, pending_photo, tmp_path):
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
         uploads_dir.mkdir()
         src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
         src.write_bytes(VALID_JPEG)
 
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_photo(str(pending_photo.id))
 
         db_session.refresh(pending_photo)
@@ -121,21 +127,25 @@ class TestProcessPhoto:
 
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
         uploads_dir.mkdir()
 
         # No file in uploads — would fail if it tried to process
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_photo(str(pending_photo.id))  # Should not raise
 
     def test_marks_failed_when_file_missing(self, db_session, pending_photo, tmp_path):
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
         uploads_dir.mkdir()
         # Don't create the source file
 
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             with pytest.raises(FileNotFoundError):
                 process_photo(str(pending_photo.id))
 
@@ -147,6 +157,7 @@ class TestProcessPhoto:
         """If the file is already in originals (e.g. retry after partial failure), skip the move."""
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
         uploads_dir.mkdir()
         originals_dir.mkdir()
 
@@ -154,7 +165,8 @@ class TestProcessPhoto:
         dest.write_bytes(VALID_JPEG)
 
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_photo(str(pending_photo.id))
 
         db_session.refresh(pending_photo)
@@ -165,10 +177,12 @@ class TestProcessPhoto:
         fake_id = str(uuid.uuid4())
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
         uploads_dir.mkdir()
 
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_photo(fake_id)  # Should not raise
 
     def test_extracts_taken_at_from_exif(self, db_session, pending_photo, tmp_path):
@@ -180,6 +194,7 @@ class TestProcessPhoto:
         """
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
         uploads_dir.mkdir()
 
         jpeg_with_exif = make_jpeg_with_exif("2023:06:15 14:30:00")
@@ -187,7 +202,8 @@ class TestProcessPhoto:
         src.write_bytes(jpeg_with_exif)
 
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_photo(str(pending_photo.id))
 
         db_session.refresh(pending_photo)
@@ -200,6 +216,7 @@ class TestProcessPhoto:
         """Photos without EXIF DateTimeOriginal should have taken_at remain None."""
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
         uploads_dir.mkdir()
 
         jpeg_no_exif = make_jpeg_with_exif(datetime_original=None)
@@ -207,7 +224,8 @@ class TestProcessPhoto:
         src.write_bytes(jpeg_no_exif)
 
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_photo(str(pending_photo.id))
 
         db_session.refresh(pending_photo)
@@ -217,6 +235,7 @@ class TestProcessPhoto:
         """Dimensions should be read from the actual image, not hardcoded."""
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
         uploads_dir.mkdir()
 
         # make_jpeg_with_exif creates a 2x3 image
@@ -225,12 +244,104 @@ class TestProcessPhoto:
         src.write_bytes(jpeg_bytes)
 
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir):
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_photo(str(pending_photo.id))
 
         db_session.refresh(pending_photo)
         assert pending_photo.width == 2
         assert pending_photo.height == 3
+
+    def test_generates_thumbnail(self, db_session, pending_photo, tmp_path):
+        """process_photo should generate a thumbnail JPEG in the derivatives directory."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+
+        # Create a 400x600 image so thumbnail width math is straightforward
+        img = Image.new("RGB", (400, 600), color=(10, 20, 30))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(buf.getvalue())
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_photo(str(pending_photo.id))
+
+        thumb_path = derivatives_dir / f"{pending_photo.sha256_hash}_thumb.jpg"
+        assert thumb_path.exists(), "Thumbnail file should have been created"
+
+        with Image.open(thumb_path) as thumb:
+            assert thumb.width == 400
+            assert thumb.height == 600  # 600 * 400/400 = 600
+
+    def test_thumbnail_preserves_aspect_ratio(self, db_session, pending_photo, tmp_path):
+        """Thumbnail height should be scaled proportionally from width."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+
+        # Create an 800x600 image; at 400px wide, height should be 300
+        img = Image.new("RGB", (800, 600), color=(50, 100, 150))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(buf.getvalue())
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_photo(str(pending_photo.id))
+
+        thumb_path = derivatives_dir / f"{pending_photo.sha256_hash}_thumb.jpg"
+        with Image.open(thumb_path) as thumb:
+            assert thumb.width == 400
+            assert thumb.height == 300
+
+    def test_thumbnail_path_uses_sha256(self, db_session, pending_photo, tmp_path):
+        """Thumbnail should be named {sha256}_thumb.jpg for predictable path construction."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(make_jpeg_with_exif())
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_photo(str(pending_photo.id))
+
+        expected_name = f"{pending_photo.sha256_hash}_thumb.jpg"
+        assert (derivatives_dir / expected_name).exists()
+
+    def test_thumbnail_idempotent_when_already_exists(self, db_session, pending_photo, tmp_path):
+        """If a thumbnail already exists, process_photo should not overwrite it."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        derivatives_dir.mkdir()
+
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(make_jpeg_with_exif())
+
+        # Pre-create a sentinel thumbnail file
+        existing_thumb = derivatives_dir / f"{pending_photo.sha256_hash}_thumb.jpg"
+        existing_thumb.write_bytes(b"sentinel")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_photo(str(pending_photo.id))
+
+        # Thumbnail should not have been replaced
+        assert existing_thumb.read_bytes() == b"sentinel", "Existing thumbnail should not be overwritten"
 
 
 class TestReprocessPhoto:

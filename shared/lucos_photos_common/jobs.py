@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 UPLOADS_DIR = Path("/data/uploads")
 ORIGINALS_DIR = Path("/data/photos/originals")
+DERIVATIVES_DIR = Path("/data/photos/derivatives")
+
+THUMBNAIL_WIDTH = 400
 
 
 def process_photo(photo_id: str) -> None:
@@ -92,6 +95,18 @@ def process_photo(photo_id: str) -> None:
                         logger.warning("process_photo: could not parse DateTimeOriginal %r for photo %s", raw_taken_at, photo_id)
                 else:
                     logger.info("process_photo: no DateTimeOriginal EXIF tag for photo %s", photo_id)
+
+            # Generate thumbnail derivative
+            thumb_path = DERIVATIVES_DIR / f"{photo.sha256_hash}_thumb.jpg"
+            DERIVATIVES_DIR.mkdir(parents=True, exist_ok=True)
+            if not thumb_path.exists():
+                with Image.open(dest) as img:
+                    thumb_height = round(img.height * THUMBNAIL_WIDTH / img.width)
+                    thumb = img.resize((THUMBNAIL_WIDTH, thumb_height))
+                    thumb.save(thumb_path, format="JPEG", quality=85)
+                logger.info("process_photo: generated thumbnail for photo %s at %s", photo_id, thumb_path)
+            else:
+                logger.info("process_photo: thumbnail already exists for photo %s, skipping", photo_id)
 
             # Mark as complete
             status.state = ProcessingState.complete
