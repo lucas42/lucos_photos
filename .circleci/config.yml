@@ -2,7 +2,7 @@ version: 2.1
 orbs:
   lucos: lucos/deploy@0
 jobs:
-  test:
+  test-api:
     docker:
       - image: cimg/python:3.14
     steps:
@@ -13,16 +13,29 @@ jobs:
       - run:
           name: Run tests
           command: cd api && pytest
+  test-worker:
+    docker:
+      - image: cimg/python:3.14
+    steps:
+      - checkout
+      - run:
+          name: Install dependencies
+          command: pip install -e shared/ -r worker/requirements.txt -r worker/requirements-test.txt
+      - run:
+          name: Run tests
+          command: cd worker && pytest
 workflows:
   version: 2
   build-deploy:
     jobs:
-      - test
+      - test-api
+      - test-worker
       - lucos/build-amd64
       - lucos/deploy-avalon:
           serial-group: << pipeline.project.slug >>/deploy-avalon
           requires:
-            - test
+            - test-api
+            - test-worker
             - lucos/build-amd64
           filters:
             branches:
