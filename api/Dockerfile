@@ -1,4 +1,4 @@
-FROM lucas42/lucos_navbar:2.1.2 as navbar
+FROM lucas42/lucos_navbar:2.1.3 as navbar
 FROM python:3.14-slim
 
 WORKDIR /app
