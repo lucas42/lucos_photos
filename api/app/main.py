@@ -24,7 +24,18 @@ from lucos_photos_common.models import Face, Person, Photo, PhotoPerson, Process
 app = FastAPI(title="lucos_photos")
 
 UPLOADS_DIR = Path("/data/uploads")
+PHOTOS_DIR = Path("/data/photos")
 STATIC_DIR = Path(__file__).parent / "static"
+
+EXTENSION_MIME_TYPES = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "heic": "image/heic",
+    "heif": "image/heif",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
 
 MAX_PHOTO_SIZE = int(os.environ.get("MAX_PHOTO_SIZE", 100 * 1024 * 1024))
 MIN_FREE_DISK_SPACE = int(os.environ.get("MIN_FREE_DISK_SPACE", 500 * 1024 * 1024))
@@ -306,6 +317,111 @@ async def upload_photo(
     enqueue_process_photo(str(photo.id))
 
     return photo_to_dict(photo)
+
+
+@app.get("/photos")
+def list_photos(
+    _: Annotated[None, Depends(verify_key)],
+    limit: int = 100,
+    offset: int = 0,
+    order_by: str = "uploaded_at",
+    db: Session = Depends(get_db),
+):
+    if order_by == "taken_at":
+        order_col = Photo.taken_at.desc().nullslast()
+    else:
+        order_col = Photo.uploaded_at.desc()
+
+    photos = db.query(Photo).order_by(order_col).offset(offset).limit(limit).all()
+    total = db.query(Photo).count()
+    return {
+        "photos": [photo_to_dict(p) for p in photos],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/photos/{photo_id}")
+def get_photo(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_key)],
+    db: Session = Depends(get_db),
+):
+    try:
+        photo_uuid = uuid.UUID(photo_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    photo = db.query(Photo).filter(Photo.id == photo_uuid).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    processing_status = db.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo_uuid).first()
+    faces = db.query(Face).filter(Face.photo_id == photo_uuid).all()
+
+    data = photo_to_dict(photo)
+    data["processingStatus"] = processing_status.state.value if processing_status else None
+    data["faces"] = [face_to_dict_simple(f) for f in faces]
+    data["persons"] = [
+        str(pp.person_id)
+        for pp in db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo_uuid).all()
+    ]
+    return data
+
+
+def face_to_dict_simple(face: Face) -> dict:
+    """Minimal face dict for embedding inside a photo response."""
+    return {
+        "id": str(face.id),
+        "personId": str(face.person_id) if face.person_id else None,
+        "personConfirmed": face.person_confirmed,
+        "boundingBox": {
+            "x": face.bbox_x,
+            "y": face.bbox_y,
+            "width": face.bbox_width,
+            "height": face.bbox_height,
+        },
+    }
+
+
+@app.get("/photos/{photo_id}/file")
+def get_photo_file(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_key)],
+    original: bool = False,
+    db: Session = Depends(get_db),
+):
+    try:
+        photo_uuid = uuid.UUID(photo_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    photo = db.query(Photo).filter(Photo.id == photo_uuid).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    ext = photo.file_extension
+    media_type = EXTENSION_MIME_TYPES.get(ext, "application/octet-stream")
+
+    if original:
+        file_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
+    else:
+        # Try derivative first, fall back to original if not yet generated
+        derivative_path = PHOTOS_DIR / "derivatives" / f"{photo.sha256_hash}.{ext}"
+        if derivative_path.exists():
+            file_path = derivative_path
+        else:
+            file_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Photo file not found")
+
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 def face_to_dict(face: Face) -> dict:
