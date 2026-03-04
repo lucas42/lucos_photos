@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import io
 import os
@@ -13,7 +14,7 @@ from PIL import Image
 from redis import Redis
 from rq import Queue
 from rq.job import Retry
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -126,11 +127,61 @@ async def navbar_js():
     return FileResponse(STATIC_DIR / "lucos_navbar.js")
 
 
+CHECK_TIMEOUT = 0.5  # seconds — must be well under monitoring system's 1s hard limit
+
+
+async def check_db() -> dict:
+    """Check whether a connection to PostgreSQL can be established."""
+    tech_detail = "Checks whether a connection to PostgreSQL can be established"
+    try:
+        db = SessionLocal()
+        try:
+            await asyncio.to_thread(db.execute, text("SELECT 1"))
+        finally:
+            db.close()
+        return {"ok": True, "techDetail": tech_detail}
+    except Exception:
+        return {"ok": False, "techDetail": tech_detail}
+
+
+async def check_redis() -> dict:
+    """Check whether Redis is reachable."""
+    tech_detail = "Checks whether a connection to Redis can be established"
+    try:
+        redis_conn = get_redis()
+        await asyncio.wait_for(asyncio.to_thread(redis_conn.ping), timeout=CHECK_TIMEOUT)
+        return {"ok": True, "techDetail": tech_detail}
+    except Exception:
+        return {"ok": False, "techDetail": tech_detail}
+
+
+async def check_qdrant() -> dict:
+    """Check whether Qdrant is reachable via its /healthz endpoint."""
+    tech_detail = "Checks whether a connection to Qdrant can be established"
+    qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{qdrant_url}/healthz", timeout=CHECK_TIMEOUT)
+            response.raise_for_status()
+        return {"ok": True, "techDetail": tech_detail}
+    except Exception:
+        return {"ok": False, "techDetail": tech_detail}
+
+
 @app.get("/_info")
-def info():
+async def info():
+    db_check, redis_check, qdrant_check = await asyncio.gather(
+        check_db(),
+        check_redis(),
+        check_qdrant(),
+    )
     return {
         "system": os.environ.get("SYSTEM", "lucos_photos"),
-        "checks": {},
+        "checks": {
+            "db-reachable": db_check,
+            "redis-reachable": redis_check,
+            "qdrant-reachable": qdrant_check,
+        },
         "metrics": {},
         "ci": {
             "circle": "gh/lucas42/lucos_photos",
