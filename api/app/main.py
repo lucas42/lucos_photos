@@ -10,6 +10,9 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
+from redis import Redis
+from rq import Queue
+from rq.job import Retry
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,6 +27,32 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 MAX_PHOTO_SIZE = int(os.environ.get("MAX_PHOTO_SIZE", 100 * 1024 * 1024))
 MIN_FREE_DISK_SPACE = int(os.environ.get("MIN_FREE_DISK_SPACE", 500 * 1024 * 1024))
+
+_redis_conn: Redis | None = None
+
+
+def get_redis() -> Redis:
+    global _redis_conn
+    if _redis_conn is None:
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        _redis_conn = Redis.from_url(redis_url)
+    return _redis_conn
+
+
+def enqueue_process_photo(photo_id: str) -> None:
+    """Enqueue a process_photo job for the given photo UUID string."""
+    from lucos_photos_common.jobs import process_photo as _process_photo
+    try:
+        redis_conn = get_redis()
+        queue = Queue("photos", connection=redis_conn)
+        queue.enqueue(
+            _process_photo,
+            photo_id,
+            retry=Retry(max=3, interval=[10, 30, 60]),
+        )
+    except Exception as exc:
+        # Log but don't fail the upload — the worker's pending sweep will catch it.
+        print(f"Warning: failed to enqueue process_photo for {photo_id}: {exc}", flush=True)
 
 
 def get_db():
@@ -180,6 +209,11 @@ async def upload_photo(
         raise
 
     await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos")
+
+    # Enqueue a job for the worker to process this photo.
+    # If Redis is unavailable, we log a warning and continue — the worker's
+    # periodic pending sweep will catch it within a few minutes.
+    enqueue_process_photo(str(photo.id))
 
     return photo_to_dict(photo)
 
