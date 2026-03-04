@@ -25,6 +25,15 @@ class TestInfo:
         assert "checks" in data
         assert "metrics" in data
         assert "ci" in data
+        assert data["icon"] == "/icon"
+        assert data["show_on_homepage"] is True
+
+
+class TestIcon:
+    def test_returns_200(self, client):
+        response = client.get("/icon")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
 
 
 class TestUploadAuth:
