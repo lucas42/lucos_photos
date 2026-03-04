@@ -3,6 +3,9 @@ on:
   pull_request_review:
     types:
       - submitted
+  pull_request:
+    types:
+      - closed
 
 permissions:
   contents: read
@@ -12,13 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     # Only act on approvals from lucos-code-reviewer[bot] (verified by numeric user ID to prevent impersonation)
     if: |
+      github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
       github.event.review.user.login == 'lucos-code-reviewer[bot]' &&
       github.event.review.user.id == 264151378
     steps:
-      # Use a GitHub App token instead of GITHUB_TOKEN so that the merge is
-      # attributed to the App rather than github-actions[bot]. This ensures
-      # closing keywords (e.g. "Closes #N") in PRs are processed by GitHub.
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v2
@@ -31,3 +32,42 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
+  close-linked-issues:
+    runs-on: ubuntu-latest
+    # Only run when a PR is merged (not just closed) by lucos-code-reviewer[bot]
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.merged_by.login == 'lucos-code-reviewer[bot]'
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CODE_REVIEWER_APP_ID }}
+          private-key: ${{ secrets.CODE_REVIEWER_PRIVATE_KEY }}
+      # GitHub doesn't process closing keywords (e.g. "Closes #N") when a bot
+      # merges a PR. Work around this by querying the closing references that
+      # GitHub has already parsed and closing each issue via the API.
+      - name: Close linked issues
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh api graphql -f query='query {
+            repository(owner: "${{ github.repository_owner }}", name: "${{ github.event.repository.name }}") {
+              pullRequest(number: ${{ github.event.pull_request.number }}) {
+                closingIssuesReferences(first: 10) {
+                  nodes {
+                    number
+                    state
+                  }
+                }
+              }
+            }
+          }' --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[] | select(.state == "OPEN") | .number' | while read -r issue_number; do
+            echo "Closing issue #$issue_number"
+            gh api "repos/${{ github.repository }}/issues/$issue_number" \
+              --method PATCH \
+              -f state=closed \
+              -f state_reason=completed
+          done
