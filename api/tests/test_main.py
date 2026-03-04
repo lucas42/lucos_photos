@@ -1,5 +1,6 @@
+import asyncio
 import hashlib
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 AUTH_HEADER = {"Authorization": "key validkey"}
 VALID_IMAGE_CONTENT = bytes.fromhex(
@@ -12,6 +13,15 @@ class TestHealthcheck:
         response = client.get("/healthcheck")
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
+
+
+def _make_mock_redis(ping_raises=None):
+    mock_redis = MagicMock()
+    if ping_raises:
+        mock_redis.ping.side_effect = ping_raises
+    else:
+        mock_redis.ping.return_value = True
+    return mock_redis
 
 
 class TestInfo:
@@ -27,6 +37,97 @@ class TestInfo:
         assert "ci" in data
         assert data["icon"] == "/icon"
         assert data["show_on_homepage"] is True
+
+    def test_checks_structure(self, client):
+        data = client.get("/_info").json()
+        checks = data["checks"]
+        assert set(checks.keys()) == {"db-reachable", "redis-reachable", "qdrant-reachable"}
+        for name, check in checks.items():
+            assert "ok" in check, f"check '{name}' missing 'ok' field"
+            assert "techDetail" in check, f"check '{name}' missing 'techDetail' field"
+            assert isinstance(check["ok"], bool), f"check '{name}' 'ok' is not a bool"
+            assert isinstance(check["techDetail"], str), f"check '{name}' 'techDetail' is not a str"
+
+
+class TestHealthChecks:
+    """Tests for individual health check behaviour — happy paths and failure paths."""
+
+    def test_db_check_ok_when_db_reachable(self, client):
+        # The test client uses a real SQLite in-memory DB, so the check should pass.
+        # We patch SessionLocal to return a mock that executes cleanly.
+        mock_session = MagicMock()
+        mock_session.execute.return_value = None
+        with patch("app.main.SessionLocal", return_value=mock_session):
+            data = client.get("/_info").json()
+        assert data["checks"]["db-reachable"]["ok"] is True
+
+    def test_db_check_fails_when_db_unreachable(self, client):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = Exception("Connection refused")
+        with patch("app.main.SessionLocal", return_value=mock_session):
+            data = client.get("/_info").json()
+        check = data["checks"]["db-reachable"]
+        assert check["ok"] is False
+        assert "techDetail" in check
+
+    def test_db_check_fails_on_timeout(self, client):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = asyncio.TimeoutError()
+        with patch("app.main.SessionLocal", return_value=mock_session):
+            data = client.get("/_info").json()
+        check = data["checks"]["db-reachable"]
+        assert check["ok"] is False
+        assert "techDetail" in check
+
+    def test_redis_check_ok_when_redis_reachable(self, client):
+        mock_redis = _make_mock_redis()
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        assert data["checks"]["redis-reachable"]["ok"] is True
+
+    def test_redis_check_fails_when_redis_unreachable(self, client):
+        mock_redis = _make_mock_redis(ping_raises=Exception("Connection refused"))
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        check = data["checks"]["redis-reachable"]
+        assert check["ok"] is False
+        assert "techDetail" in check
+
+    def test_qdrant_check_ok_when_qdrant_reachable(self, client, monkeypatch):
+        monkeypatch.setenv("QDRANT_URL", "http://qdrant-test:6333")
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_async_client = AsyncMock()
+        mock_async_client.__aenter__ = AsyncMock(return_value=mock_async_client)
+        mock_async_client.__aexit__ = AsyncMock(return_value=False)
+        mock_async_client.get = AsyncMock(return_value=mock_response)
+        with patch("app.main.httpx.AsyncClient", return_value=mock_async_client):
+            data = client.get("/_info").json()
+        assert data["checks"]["qdrant-reachable"]["ok"] is True
+
+    def test_qdrant_check_fails_when_qdrant_unreachable(self, client, monkeypatch):
+        monkeypatch.setenv("QDRANT_URL", "http://qdrant-test:6333")
+        mock_async_client = AsyncMock()
+        mock_async_client.__aenter__ = AsyncMock(return_value=mock_async_client)
+        mock_async_client.__aexit__ = AsyncMock(return_value=False)
+        mock_async_client.get = AsyncMock(side_effect=Exception("Connection refused"))
+        with patch("app.main.httpx.AsyncClient", return_value=mock_async_client):
+            data = client.get("/_info").json()
+        check = data["checks"]["qdrant-reachable"]
+        assert check["ok"] is False
+        assert "techDetail" in check
+
+    def test_one_check_failure_does_not_prevent_others(self, client):
+        """A failure in one check must not propagate — all three checks must always appear."""
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = Exception("DB down")
+        with patch("app.main.SessionLocal", return_value=mock_session):
+            data = client.get("/_info").json()
+        checks = data["checks"]
+        assert "db-reachable" in checks
+        assert "redis-reachable" in checks
+        assert "qdrant-reachable" in checks
+        assert checks["db-reachable"]["ok"] is False
 
 
 class TestIcon:
