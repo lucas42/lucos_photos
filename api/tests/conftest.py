@@ -1,12 +1,5 @@
-import os
-
 import pytest
 from fastapi.testclient import TestClient
-
-# Must be set before app.main is imported, as database.py constructs the engine at module load time.
-# The actual Postgres engine is never used in tests — get_db is overridden with a SQLite session.
-os.environ.setdefault("POSTGRES_USER", "test")
-os.environ.setdefault("POSTGRES_PASSWORD", "test")
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

@@ -1,4 +1,3 @@
-import os
 import uuid
 
 import pytest
@@ -6,12 +5,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-# Must be set before database.py is imported, as it constructs the engine at module load time.
-os.environ.setdefault("POSTGRES_USER", "test")
-os.environ.setdefault("POSTGRES_PASSWORD", "test")
-
 import lucos_photos_common.models  # noqa: F401 - registers all models with Base.metadata
-from lucos_photos_common.database import Base, SessionLocal
+from lucos_photos_common.database import Base
 from lucos_photos_common.models import Photo, ProcessingState, ProcessingStatus
 
 
