@@ -136,7 +136,7 @@ async def check_db() -> dict:
     try:
         db = SessionLocal()
         try:
-            await asyncio.to_thread(db.execute, text("SELECT 1"))
+            await asyncio.wait_for(asyncio.to_thread(db.execute, text("SELECT 1")), timeout=CHECK_TIMEOUT)
         finally:
             db.close()
         return {"ok": True, "techDetail": tech_detail}

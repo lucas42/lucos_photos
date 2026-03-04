@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -63,6 +64,15 @@ class TestHealthChecks:
     def test_db_check_fails_when_db_unreachable(self, client):
         mock_session = MagicMock()
         mock_session.execute.side_effect = Exception("Connection refused")
+        with patch("app.main.SessionLocal", return_value=mock_session):
+            data = client.get("/_info").json()
+        check = data["checks"]["db-reachable"]
+        assert check["ok"] is False
+        assert "techDetail" in check
+
+    def test_db_check_fails_on_timeout(self, client):
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = asyncio.TimeoutError()
         with patch("app.main.SessionLocal", return_value=mock_session):
             data = client.get("/_info").json()
         check = data["checks"]["db-reachable"]
