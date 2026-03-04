@@ -26,6 +26,8 @@ jobs:
         with:
           app-id: ${{ secrets.CODE_REVIEWER_APP_ID }}
           private-key: ${{ secrets.CODE_REVIEWER_PRIVATE_KEY }}
+      # Use a GitHub App token instead of GITHUB_TOKEN because GITHUB_TOKEN
+      # events don't trigger downstream workflows or side-effects.
       - name: Enable auto-merge
         run: gh pr merge --auto --merge "$PR_URL"
         env:
