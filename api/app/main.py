@@ -210,18 +210,6 @@ async def check_redis() -> dict:
         return {"ok": False, "techDetail": tech_detail}
 
 
-async def check_qdrant() -> dict:
-    """Check whether Qdrant is reachable via its /healthz endpoint."""
-    tech_detail = "Checks whether a connection to Qdrant can be established"
-    qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{qdrant_url}/healthz", timeout=CHECK_TIMEOUT)
-            response.raise_for_status()
-        return {"ok": True, "techDetail": tech_detail}
-    except Exception:
-        return {"ok": False, "techDetail": tech_detail}
-
 
 async def get_metrics() -> dict:
     """Return live metrics: photo count and pending processing queue depth."""
@@ -263,10 +251,9 @@ async def get_metrics() -> dict:
 
 @app.get("/_info")
 async def info():
-    db_check, redis_check, qdrant_check, metrics = await asyncio.gather(
+    db_check, redis_check, metrics = await asyncio.gather(
         check_db(),
         check_redis(),
-        check_qdrant(),
         get_metrics(),
     )
     return {
@@ -274,7 +261,6 @@ async def info():
         "checks": {
             "db-reachable": db_check,
             "redis-reachable": redis_check,
-            "qdrant-reachable": qdrant_check,
         },
         "metrics": metrics,
         "ci": {

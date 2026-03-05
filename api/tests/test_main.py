@@ -41,7 +41,7 @@ class TestInfo:
     def test_checks_structure(self, client):
         data = client.get("/_info").json()
         checks = data["checks"]
-        assert set(checks.keys()) == {"db-reachable", "redis-reachable", "qdrant-reachable"}
+        assert set(checks.keys()) == {"db-reachable", "redis-reachable"}
         for name, check in checks.items():
             assert "ok" in check, f"check '{name}' missing 'ok' field"
             assert "techDetail" in check, f"check '{name}' missing 'techDetail' field"
@@ -160,32 +160,8 @@ class TestHealthChecks:
         assert check["ok"] is False
         assert "techDetail" in check
 
-    def test_qdrant_check_ok_when_qdrant_reachable(self, client, monkeypatch):
-        monkeypatch.setenv("QDRANT_URL", "http://qdrant-test:6333")
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        mock_async_client = AsyncMock()
-        mock_async_client.__aenter__ = AsyncMock(return_value=mock_async_client)
-        mock_async_client.__aexit__ = AsyncMock(return_value=False)
-        mock_async_client.get = AsyncMock(return_value=mock_response)
-        with patch("app.main.httpx.AsyncClient", return_value=mock_async_client):
-            data = client.get("/_info").json()
-        assert data["checks"]["qdrant-reachable"]["ok"] is True
-
-    def test_qdrant_check_fails_when_qdrant_unreachable(self, client, monkeypatch):
-        monkeypatch.setenv("QDRANT_URL", "http://qdrant-test:6333")
-        mock_async_client = AsyncMock()
-        mock_async_client.__aenter__ = AsyncMock(return_value=mock_async_client)
-        mock_async_client.__aexit__ = AsyncMock(return_value=False)
-        mock_async_client.get = AsyncMock(side_effect=Exception("Connection refused"))
-        with patch("app.main.httpx.AsyncClient", return_value=mock_async_client):
-            data = client.get("/_info").json()
-        check = data["checks"]["qdrant-reachable"]
-        assert check["ok"] is False
-        assert "techDetail" in check
-
     def test_one_check_failure_does_not_prevent_others(self, client):
-        """A failure in one check must not propagate — all three checks must always appear."""
+        """A failure in one check must not propagate — all checks must always appear."""
         mock_session = MagicMock()
         mock_session.execute.side_effect = Exception("DB down")
         with patch("app.main.SessionLocal", return_value=mock_session):
@@ -193,7 +169,6 @@ class TestHealthChecks:
         checks = data["checks"]
         assert "db-reachable" in checks
         assert "redis-reachable" in checks
-        assert "qdrant-reachable" in checks
         assert checks["db-reachable"]["ok"] is False
 
 
