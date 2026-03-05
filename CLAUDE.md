@@ -106,7 +106,7 @@ Four Docker Compose containers:
 
 **API must NOT:** run face detection, perform image compression, or do any heavy ML work. It is HTTP + orchestration only.
 
-**Worker must NOT:** handle HTTP requests or emit external domain events.
+**Worker must NOT:** handle HTTP requests.
 
 **Redis:** internal task queue only (`process_photo`, `reprocess_photo`). Not used as a cross-system event bus, audit log, or for long-term persistence.
 
@@ -147,10 +147,10 @@ Sensitive and environment-varying variables come from lucos_creds (see `.env.exa
 
 ## External Service Integrations
 
-The API integrates with three existing lucos services. Exact interfaces to be documented here as each is implemented.
+The API and worker integrate with existing lucos services. Exact interfaces to be documented here as each is implemented.
 
 - **lucos_authentication** — handles web UI authentication; domain is always `auth.l42.eu`
-- **lucos_loganne** — receives external domain events (`photoAdded`, `photoProcessed`, `personTagged`, `profilePhotoUpdated`); env var is `LOGANNE_ENDPOINT`
+- **lucos_loganne** — receives external domain events (`photoProcessed`, `personTagged`, `profilePhotoUpdated`); env var is `LOGANNE_ENDPOINT`. The worker calls Loganne directly after photo processing completes.
 - **lucos_contacts** — provides the contact list used for person identification/linking; env var is `LUCOS_CONTACTS_URL`
 
 ## Event Strategy
@@ -158,7 +158,7 @@ The API integrates with three existing lucos services. Exact interfaces to be do
 Two separate event concepts — do not conflate them:
 
 1. **Internal jobs (Redis):** operational tasks like `process_photo(photo_id)`. Never emitted externally.
-2. **External domain events:** high-level events emitted by the API to **lucos_loganne**. Never emit low-level operational events externally.
+2. **External domain events:** high-level events emitted to **lucos_loganne**. Never emit low-level operational events externally. The worker emits `photoProcessed` directly to Loganne after processing completes; the API need not be involved in this notification path.
 
 ## Architectural Principles
 
