@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from PIL import Image
 from redis import Redis
 from rq import Queue
@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session
 
 from lucos_photos_common.database import SessionLocal
 from lucos_photos_common.models import Face, Person, Photo, PhotoPerson, ProcessingState, ProcessingStatus
+
+AUTH_DOMAIN = "https://auth.l42.eu"
 
 app = FastAPI(title="lucos_photos")
 
@@ -89,6 +91,47 @@ def verify_key(authorization: Annotated[str | None, Header()] = None):
     valid_keys = {entry.split("=", 1)[1] for entry in client_keys_str.split(";") if "=" in entry}
     if token not in valid_keys:
         raise HTTPException(status_code=401, detail="Invalid key", headers=WWW_AUTHENTICATE)
+
+
+async def verify_session(request: Request, auth_token: Annotated[str | None, Cookie()] = None):
+    """Validate a user session via the lucos_authentication service.
+
+    - Browser requests (Accept: text/html) are redirected to the auth service login page.
+    - API requests receive a 401 JSON response.
+    """
+    if not auth_token:
+        return _auth_challenge(request)
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{AUTH_DOMAIN}/data",
+                params={"token": auth_token},
+                timeout=5.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception:
+        return _auth_challenge(request)
+
+    if not data.get("id"):
+        return _auth_challenge(request)
+
+
+def _auth_challenge(request: Request):
+    """Return redirect or 401 depending on whether the client is a browser."""
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        redirect_uri = str(request.url)
+        raise HTTPException(
+            status_code=status.HTTP_302_FOUND,
+            headers={"Location": f"{AUTH_DOMAIN}/authenticate?redirect_uri={redirect_uri}"},
+        )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required",
+        headers={"WWW-Authenticate": f'Bearer realm="{AUTH_DOMAIN}"'},
+    )
 
 
 async def emit_loganne_event(event_type: str, human_readable: str):
@@ -321,7 +364,7 @@ async def upload_photo(
 
 @app.get("/photos")
 def list_photos(
-    _: Annotated[None, Depends(verify_key)],
+    _: Annotated[None, Depends(verify_session)],
     limit: int = 100,
     offset: int = 0,
     order_by: str = "uploaded_at",
@@ -345,7 +388,7 @@ def list_photos(
 @app.get("/photos/{photo_id}")
 def get_photo(
     photo_id: str,
-    _: Annotated[None, Depends(verify_key)],
+    _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
     try:
@@ -388,7 +431,7 @@ def face_to_dict_simple(face: Face) -> dict:
 @app.get("/photos/{photo_id}/file")
 def get_photo_file(
     photo_id: str,
-    _: Annotated[None, Depends(verify_key)],
+    _: Annotated[None, Depends(verify_session)],
     original: bool = False,
     db: Session = Depends(get_db),
 ):
@@ -453,7 +496,7 @@ def person_to_dict(person: Person, photo_count: Optional[int] = None) -> dict:
 
 @app.get("/persons")
 def list_persons(
-    _: Annotated[None, Depends(verify_key)],
+    _: Annotated[None, Depends(verify_session)],
     includePhotoCounts: bool = False,
     limit: int = 100,
     offset: int = 0,
@@ -478,7 +521,7 @@ def list_persons(
 @app.post("/persons", status_code=status.HTTP_201_CREATED)
 async def create_person(
     body: dict,
-    _: Annotated[None, Depends(verify_key)],
+    _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
     name = body.get("name")
@@ -512,7 +555,7 @@ async def create_person(
 @app.get("/persons/{person_id}")
 def get_person(
     person_id: str,
-    _: Annotated[None, Depends(verify_key)],
+    _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
     try:
@@ -560,7 +603,7 @@ def sync_photo_person(db: Session, photo_id) -> None:
 @app.get("/photos/{photo_id}/faces")
 def list_faces(
     photo_id: str,
-    _: Annotated[None, Depends(verify_key)],
+    _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
     try:
@@ -580,7 +623,7 @@ def list_faces(
 async def assign_person(
     face_id: str,
     body: dict,
-    _: Annotated[None, Depends(verify_key)],
+    _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
     try:
@@ -619,7 +662,7 @@ async def assign_person(
 @app.delete("/faces/{face_id}/person", status_code=status.HTTP_204_NO_CONTENT)
 def unassign_person(
     face_id: str,
-    _: Annotated[None, Depends(verify_key)],
+    _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
     try:

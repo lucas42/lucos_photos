@@ -1,12 +1,13 @@
 import pytest
 from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.main as main_module
-from app.main import app, get_db
+from app.main import app, get_db, verify_session
 import lucos_photos_common.models  # noqa: F401 - registers all models with Base.metadata
 from lucos_photos_common.database import Base
 
@@ -48,3 +49,19 @@ def client(db_session, db_engine, tmp_path, monkeypatch):
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def authenticated_client(client):
+    """A test client that bypasses session auth (verify_session always succeeds).
+
+    Use this fixture for tests of user-facing endpoints where the focus is on
+    endpoint behaviour rather than authentication itself.
+    """
+    async def _noop_verify_session():
+        return None
+
+    app.dependency_overrides[verify_session] = _noop_verify_session
+    yield client
+    # Restore: remove the verify_session override (other overrides like get_db remain)
+    app.dependency_overrides.pop(verify_session, None)
