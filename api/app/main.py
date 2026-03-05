@@ -112,7 +112,7 @@ async def verify_session(request: Request, auth_token: Annotated[str | None, Coo
             )
             resp.raise_for_status()
             data = resp.json()
-    except Exception:
+    except (httpx.HTTPError, httpx.TimeoutException):
         return _auth_challenge(request)
 
     if not data.get("id"):
