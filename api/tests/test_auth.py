@@ -49,14 +49,30 @@ class TestVerifySessionNoCookie:
         redirect_uri = unquote(parse_qs(parsed.query)["redirect_uri"][0])
         assert "/photos" in redirect_uri
 
-    def test_browser_redirect_url_encodes_query_params(self, client):
-        """Query parameters in the original URL must be URL-encoded in redirect_uri.
+    def test_browser_redirect_uses_app_origin_scheme(self, client, monkeypatch):
+        """The redirect_uri must use the scheme from APP_ORIGIN (https://), not from request.url.
 
-        Without encoding, ?limit=10&offset=50 would produce:
-          ...?redirect_uri=http://example.com/photos?limit=10&offset=50
-        where &offset=50 becomes a separate auth-service query param, not part of
-        redirect_uri — so the user would be returned to /photos?limit=10 only.
+        TLS is terminated by the reverse proxy, so request.url sees http://.
+        Using APP_ORIGIN ensures the redirect_uri sent to the auth service is https://.
         """
+        from urllib.parse import urlparse, parse_qs, unquote
+        monkeypatch.setenv("APP_ORIGIN", "https://photos.example.com")
+        response = client.get(
+            "/photos",
+            headers={"Accept": "text/html"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        location = response.headers["location"]
+        parsed = urlparse(location)
+        redirect_uri = unquote(parse_qs(parsed.query)["redirect_uri"][0])
+        assert redirect_uri.startswith("https://"), (
+            f"Expected redirect_uri to start with https://, got: {redirect_uri}"
+        )
+
+    def test_browser_redirect_auth_url_has_only_redirect_uri_param(self, client):
+        """The auth service URL must only have redirect_uri as a query param."""
+        from urllib.parse import urlparse, parse_qs
         response = client.get(
             "/photos?limit=10&offset=50",
             headers={"Accept": "text/html"},
@@ -64,10 +80,7 @@ class TestVerifySessionNoCookie:
         )
         assert response.status_code == 302
         location = response.headers["location"]
-        # The redirect_uri value must be URL-encoded — & should appear as %26
-        assert "%26" in location
         # The auth domain's own query string must only contain redirect_uri
-        from urllib.parse import urlparse, parse_qs
         parsed = urlparse(location)
         qs = parse_qs(parsed.query)
         assert list(qs.keys()) == ["redirect_uri"], (

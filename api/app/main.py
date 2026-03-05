@@ -123,7 +123,8 @@ def _auth_challenge(request: Request):
     """Return redirect or 401 depending on whether the client is a browser."""
     accept = request.headers.get("accept", "")
     if "text/html" in accept:
-        redirect_uri = quote(str(request.url), safe="")
+        app_origin = os.environ.get("APP_ORIGIN", "")
+        redirect_uri = quote(f"{app_origin}{request.url.path}", safe="")
         raise HTTPException(
             status_code=status.HTTP_302_FOUND,
             headers={"Location": f"{AUTH_DOMAIN}/authenticate?redirect_uri={redirect_uri}"},
@@ -168,7 +169,7 @@ def healthcheck():
 
 
 @app.get("/", include_in_schema=False)
-async def root():
+async def root(_: Annotated[None, Depends(verify_session)]):
     return FileResponse(STATIC_DIR / "index.html")
 
 
