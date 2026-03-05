@@ -21,7 +21,6 @@ services:
       - CLIENT_KEYS
       - POSTGRES_USER=photos
       - REDIS_URL=redis://redis:6379
-      - LUCOS_AUTHENTICATION_URL=https://auth.l42.eu
     depends_on:
       - postgres
       - redis

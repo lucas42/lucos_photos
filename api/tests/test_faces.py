@@ -4,8 +4,6 @@ import pytest
 
 from lucos_photos_common.models import Face, Person, Photo, PhotoPerson
 
-AUTH_HEADER = {"Authorization": "key validkey"}
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,20 +43,20 @@ def make_face(db, photo, person=None, confirmed=False):
 # ---------------------------------------------------------------------------
 
 class TestListFaces:
-    def test_returns_empty_list_when_no_faces(self, client, db_session):
+    def test_returns_empty_list_when_no_faces(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         db_session.commit()
 
-        response = client.get(f"/photos/{photo.id}/faces", headers=AUTH_HEADER)
+        response = authenticated_client.get(f"/photos/{photo.id}/faces")
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_returns_faces_for_photo(self, client, db_session):
+    def test_returns_faces_for_photo(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         face = make_face(db_session, photo)
         db_session.commit()
 
-        response = client.get(f"/photos/{photo.id}/faces", headers=AUTH_HEADER)
+        response = authenticated_client.get(f"/photos/{photo.id}/faces")
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
@@ -68,20 +66,20 @@ class TestListFaces:
         assert data[0]["personConfirmed"] is False
         assert data[0]["boundingBox"] == {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}
 
-    def test_returns_face_with_person_assigned(self, client, db_session):
+    def test_returns_face_with_person_assigned(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         person = make_person(db_session)
         face = make_face(db_session, photo, person=person, confirmed=True)
         db_session.commit()
 
-        response = client.get(f"/photos/{photo.id}/faces", headers=AUTH_HEADER)
+        response = authenticated_client.get(f"/photos/{photo.id}/faces")
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
         assert data[0]["personId"] == str(person.id)
         assert data[0]["personConfirmed"] is True
 
-    def test_only_returns_faces_for_requested_photo(self, client, db_session):
+    def test_only_returns_faces_for_requested_photo(self, authenticated_client, db_session):
         photo1 = make_photo(db_session)
         photo2 = Photo(sha256_hash="b" * 64, file_extension="jpg")
         db_session.add(photo2)
@@ -90,18 +88,18 @@ class TestListFaces:
         make_face(db_session, photo2)
         db_session.commit()
 
-        response = client.get(f"/photos/{photo1.id}/faces", headers=AUTH_HEADER)
+        response = authenticated_client.get(f"/photos/{photo1.id}/faces")
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
         assert data[0]["photoId"] == str(photo1.id)
 
-    def test_returns_404_for_unknown_photo(self, client, db_session):
-        response = client.get(f"/photos/{uuid.uuid4()}/faces", headers=AUTH_HEADER)
+    def test_returns_404_for_unknown_photo(self, authenticated_client, db_session):
+        response = authenticated_client.get(f"/photos/{uuid.uuid4()}/faces")
         assert response.status_code == 404
 
-    def test_returns_404_for_invalid_uuid(self, client, db_session):
-        response = client.get("/photos/not-a-uuid/faces", headers=AUTH_HEADER)
+    def test_returns_404_for_invalid_uuid(self, authenticated_client, db_session):
+        response = authenticated_client.get("/photos/not-a-uuid/faces")
         assert response.status_code == 404
 
     def test_requires_authentication(self, client, db_session):
@@ -116,46 +114,43 @@ class TestListFaces:
 # ---------------------------------------------------------------------------
 
 class TestAssignPerson:
-    def test_assigns_person_to_face(self, client, db_session):
+    def test_assigns_person_to_face(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         person = make_person(db_session)
         face = make_face(db_session, photo)
         db_session.commit()
 
-        response = client.put(
+        response = authenticated_client.put(
             f"/faces/{face.id}/person",
             json={"personId": str(person.id)},
-            headers=AUTH_HEADER,
         )
         assert response.status_code == 200
         data = response.json()
         assert data["personId"] == str(person.id)
         assert data["personConfirmed"] is True
 
-    def test_marks_person_confirmed_true(self, client, db_session):
+    def test_marks_person_confirmed_true(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         person = make_person(db_session)
         face = make_face(db_session, photo)
         db_session.commit()
 
-        client.put(
+        authenticated_client.put(
             f"/faces/{face.id}/person",
             json={"personId": str(person.id)},
-            headers=AUTH_HEADER,
         )
         db_session.refresh(face)
         assert face.person_confirmed is True
 
-    def test_updates_photo_person_table(self, client, db_session):
+    def test_updates_photo_person_table(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         person = make_person(db_session)
         face = make_face(db_session, photo)
         db_session.commit()
 
-        client.put(
+        authenticated_client.put(
             f"/faces/{face.id}/person",
             json={"personId": str(person.id)},
-            headers=AUTH_HEADER,
         )
 
         pp = db_session.query(PhotoPerson).filter(
@@ -164,7 +159,7 @@ class TestAssignPerson:
         ).first()
         assert pp is not None
 
-    def test_reassigns_face_to_different_person(self, client, db_session):
+    def test_reassigns_face_to_different_person(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         person1 = make_person(db_session, "Alice")
         person2 = make_person(db_session, "Bob")
@@ -172,10 +167,9 @@ class TestAssignPerson:
         db_session.add(PhotoPerson(photo_id=photo.id, person_id=person1.id))
         db_session.commit()
 
-        client.put(
+        authenticated_client.put(
             f"/faces/{face.id}/person",
             json={"personId": str(person2.id)},
-            headers=AUTH_HEADER,
         )
 
         # Old photo_person row should be removed, new one added
@@ -190,46 +184,42 @@ class TestAssignPerson:
         assert old_pp is None
         assert new_pp is not None
 
-    def test_returns_404_for_unknown_face(self, client, db_session):
+    def test_returns_404_for_unknown_face(self, authenticated_client, db_session):
         person = make_person(db_session)
         db_session.commit()
-        response = client.put(
+        response = authenticated_client.put(
             f"/faces/{uuid.uuid4()}/person",
             json={"personId": str(person.id)},
-            headers=AUTH_HEADER,
         )
         assert response.status_code == 404
 
-    def test_returns_404_for_unknown_person(self, client, db_session):
+    def test_returns_404_for_unknown_person(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         face = make_face(db_session, photo)
         db_session.commit()
-        response = client.put(
+        response = authenticated_client.put(
             f"/faces/{face.id}/person",
             json={"personId": str(uuid.uuid4())},
-            headers=AUTH_HEADER,
         )
         assert response.status_code == 404
 
-    def test_returns_422_when_person_id_missing(self, client, db_session):
+    def test_returns_422_when_person_id_missing(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         face = make_face(db_session, photo)
         db_session.commit()
-        response = client.put(
+        response = authenticated_client.put(
             f"/faces/{face.id}/person",
             json={},
-            headers=AUTH_HEADER,
         )
         assert response.status_code == 422
 
-    def test_returns_422_for_invalid_person_uuid(self, client, db_session):
+    def test_returns_422_for_invalid_person_uuid(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         face = make_face(db_session, photo)
         db_session.commit()
-        response = client.put(
+        response = authenticated_client.put(
             f"/faces/{face.id}/person",
             json={"personId": "not-a-uuid"},
-            headers=AUTH_HEADER,
         )
         assert response.status_code == 422
 
@@ -244,7 +234,7 @@ class TestAssignPerson:
         )
         assert response.status_code == 401
 
-    def test_emits_loganne_event(self, client, db_session):
+    def test_emits_loganne_event(self, authenticated_client, db_session):
         from unittest.mock import AsyncMock, patch
         photo = make_photo(db_session)
         person = make_person(db_session)
@@ -252,10 +242,9 @@ class TestAssignPerson:
         db_session.commit()
 
         with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
-            client.put(
+            authenticated_client.put(
                 f"/faces/{face.id}/person",
                 json={"personId": str(person.id)},
-                headers=AUTH_HEADER,
             )
             mock_emit.assert_called_once()
             call_args = mock_emit.call_args
@@ -267,28 +256,28 @@ class TestAssignPerson:
 # ---------------------------------------------------------------------------
 
 class TestUnassignPerson:
-    def test_clears_person_from_face(self, client, db_session):
+    def test_clears_person_from_face(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         person = make_person(db_session)
         face = make_face(db_session, photo, person=person, confirmed=True)
         db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.commit()
 
-        response = client.delete(f"/faces/{face.id}/person", headers=AUTH_HEADER)
+        response = authenticated_client.delete(f"/faces/{face.id}/person")
         assert response.status_code == 204
 
         db_session.refresh(face)
         assert face.person_id is None
         assert face.person_confirmed is False
 
-    def test_removes_photo_person_row_when_no_faces_have_person(self, client, db_session):
+    def test_removes_photo_person_row_when_no_faces_have_person(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         person = make_person(db_session)
         face = make_face(db_session, photo, person=person, confirmed=True)
         db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.commit()
 
-        client.delete(f"/faces/{face.id}/person", headers=AUTH_HEADER)
+        authenticated_client.delete(f"/faces/{face.id}/person")
 
         pp = db_session.query(PhotoPerson).filter(
             PhotoPerson.photo_id == photo.id,
@@ -296,7 +285,7 @@ class TestUnassignPerson:
         ).first()
         assert pp is None
 
-    def test_keeps_photo_person_row_when_another_face_still_has_person(self, client, db_session):
+    def test_keeps_photo_person_row_when_another_face_still_has_person(self, authenticated_client, db_session):
         photo = make_photo(db_session)
         person = make_person(db_session)
         face1 = make_face(db_session, photo, person=person, confirmed=True)
@@ -304,7 +293,7 @@ class TestUnassignPerson:
         db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.commit()
 
-        client.delete(f"/faces/{face1.id}/person", headers=AUTH_HEADER)
+        authenticated_client.delete(f"/faces/{face1.id}/person")
 
         pp = db_session.query(PhotoPerson).filter(
             PhotoPerson.photo_id == photo.id,
@@ -312,12 +301,12 @@ class TestUnassignPerson:
         ).first()
         assert pp is not None
 
-    def test_returns_404_for_unknown_face(self, client, db_session):
-        response = client.delete(f"/faces/{uuid.uuid4()}/person", headers=AUTH_HEADER)
+    def test_returns_404_for_unknown_face(self, authenticated_client, db_session):
+        response = authenticated_client.delete(f"/faces/{uuid.uuid4()}/person")
         assert response.status_code == 404
 
-    def test_returns_404_for_invalid_uuid(self, client, db_session):
-        response = client.delete("/faces/not-a-uuid/person", headers=AUTH_HEADER)
+    def test_returns_404_for_invalid_uuid(self, authenticated_client, db_session):
+        response = authenticated_client.delete("/faces/not-a-uuid/person")
         assert response.status_code == 404
 
     def test_requires_authentication(self, client, db_session):
