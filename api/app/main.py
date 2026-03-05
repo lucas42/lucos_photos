@@ -101,7 +101,7 @@ async def verify_session(request: Request, auth_token: Annotated[str | None, Coo
     - API requests receive a 401 JSON response.
     """
     if not auth_token:
-        return _auth_challenge(request)
+        _auth_challenge(request)
 
     try:
         async with httpx.AsyncClient() as client:
@@ -113,10 +113,10 @@ async def verify_session(request: Request, auth_token: Annotated[str | None, Coo
             resp.raise_for_status()
             data = resp.json()
     except (httpx.HTTPError, httpx.TimeoutException):
-        return _auth_challenge(request)
+        _auth_challenge(request)
 
     if not data.get("id"):
-        return _auth_challenge(request)
+        _auth_challenge(request)
 
 
 def _auth_challenge(request: Request):

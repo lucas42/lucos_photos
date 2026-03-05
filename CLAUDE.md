@@ -144,7 +144,6 @@ Sensitive and environment-varying variables come from lucos_creds (see `.env.exa
 | `POSTGRES_DB` | docker-compose (hardcoded) | Always `photos` |
 | `DATABASE_URL` | constructed in code | Built via `URL.create()` in `shared/lucos_photos_common/database.py` from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and hardcoded host/port/db |
 | `REDIS_URL` | docker-compose (hardcoded) | Always `redis://redis:6379` |
-| `LUCOS_AUTHENTICATION_URL` | docker-compose (hardcoded) | Always `https://auth.l42.eu` (cross-project consistency) |
 
 ## External Service Integrations
 
