@@ -1,11 +1,9 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
-from sqlalchemy.engine import Engine
 
 import lucos_photos_common.models  # noqa: registers models with Base.metadata
-from lucos_photos_common.database import Base, engine
+from lucos_photos_common.database import Base, get_engine
 
 config = context.config
 
@@ -17,7 +15,7 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=engine.url,
+        url=get_engine().url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -27,7 +25,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    with engine.connect() as connection:
+    with get_engine().connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
