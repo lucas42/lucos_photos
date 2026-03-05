@@ -204,6 +204,120 @@ class TestVerifySessionValidToken:
         assert "auth.l42.eu" in called_url
 
 
+class TestVerifySessionQueryTokenCallback:
+    """?token= query parameter flow — the auth service callback landing."""
+
+    def _mock_valid_auth_client(self, user_id=1):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {"id": user_id}
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+        return mock_client
+
+    def test_valid_query_token_redirects_to_strip_token(self, client, monkeypatch):
+        """After validating a ?token= param, redirect to the same path without it."""
+        monkeypatch.setenv("APP_ORIGIN", "https://photos.example.com")
+        mock_client = self._mock_valid_auth_client()
+        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+            response = client.get(
+                "/photos?token=callback-token",
+                headers={"Accept": "text/html"},
+                follow_redirects=False,
+            )
+        assert response.status_code == 302
+        assert response.headers["location"] == "https://photos.example.com/photos"
+
+    def test_valid_query_token_sets_auth_cookie(self, client, monkeypatch):
+        """The redirect response must set an auth_token cookie on the photos domain."""
+        monkeypatch.setenv("APP_ORIGIN", "https://photos.example.com")
+        mock_client = self._mock_valid_auth_client()
+        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+            response = client.get(
+                "/photos?token=my-callback-token",
+                headers={"Accept": "text/html"},
+                follow_redirects=False,
+            )
+        assert response.status_code == 302
+        set_cookie = response.headers.get("set-cookie", "")
+        assert "auth_token=my-callback-token" in set_cookie
+
+    def test_valid_query_token_preserves_other_query_params(self, client, monkeypatch):
+        """Other query params (e.g. ?limit=10) must survive the redirect."""
+        monkeypatch.setenv("APP_ORIGIN", "https://photos.example.com")
+        mock_client = self._mock_valid_auth_client()
+        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+            response = client.get(
+                "/photos?limit=10&token=callback-token&offset=20",
+                headers={"Accept": "text/html"},
+                follow_redirects=False,
+            )
+        assert response.status_code == 302
+        location = response.headers["location"]
+        assert "token=" not in location
+        assert "limit=10" in location
+        assert "offset=20" in location
+
+    def test_invalid_query_token_redirects_browser_to_auth(self, client, monkeypatch):
+        """A ?token= that fails auth validation should trigger the normal auth challenge."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Unauthorized", request=MagicMock(), response=MagicMock(status_code=401)
+        )
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+            response = client.get(
+                "/photos?token=invalid-token",
+                headers={"Accept": "text/html"},
+                follow_redirects=False,
+            )
+        assert response.status_code == 302
+        assert response.headers["location"].startswith(f"{AUTH_DOMAIN}/authenticate?redirect_uri=")
+
+    def test_query_token_with_no_id_in_response_redirects_to_auth(self, client):
+        """Auth service returns 200 but no id — should treat as unauthenticated."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {"id": None}
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+            response = client.get(
+                "/photos?token=no-id-token",
+                headers={"Accept": "text/html"},
+                follow_redirects=False,
+            )
+        assert response.status_code == 302
+        assert response.headers["location"].startswith(f"{AUTH_DOMAIN}/authenticate?redirect_uri=")
+
+    def test_query_token_validated_against_auth_service(self, client, monkeypatch):
+        """The ?token= value must be sent to auth.l42.eu/data for validation."""
+        monkeypatch.setenv("APP_ORIGIN", "https://photos.example.com")
+        mock_client = self._mock_valid_auth_client()
+        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+            client.get(
+                "/photos?token=specific-query-token",
+                headers={"Accept": "text/html"},
+                follow_redirects=False,
+            )
+        mock_client.get.assert_called_once()
+        call_kwargs = mock_client.get.call_args
+        assert call_kwargs[1]["params"]["token"] == "specific-query-token"
+        called_url = call_kwargs[0][0] if call_kwargs[0] else call_kwargs[1].get("url", "")
+        assert "auth.l42.eu" in called_url
+
+
 class TestUploadStillUsesMachineAuth:
     """POST /photos must continue to use CLIENT_KEYS (M2M) auth, not session auth."""
 

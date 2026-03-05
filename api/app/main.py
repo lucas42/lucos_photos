@@ -6,11 +6,11 @@ import shutil
 import uuid
 from pathlib import Path
 from typing import Annotated, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from PIL import Image
 from redis import Redis
 from rq import Queue
@@ -25,6 +25,26 @@ from lucos_photos_common.models import Face, Person, Photo, PhotoPerson, Process
 AUTH_DOMAIN = "https://auth.l42.eu"
 
 app = FastAPI(title="lucos_photos")
+
+
+class _RedirectWithCookie(Exception):
+    """Raised inside verify_session to deliver a redirect response with a Set-Cookie header.
+
+    FastAPI's dependency injection doesn't support returning responses directly from
+    dependencies, so we raise this exception and catch it in a middleware.
+    """
+    def __init__(self, response: RedirectResponse):
+        self.response = response
+
+
+@app.middleware("http")
+async def catch_redirect_with_cookie(request: Request, call_next):
+    """Catch _RedirectWithCookie raised inside verify_session and return the redirect response."""
+    try:
+        return await call_next(request)
+    except _RedirectWithCookie as exc:
+        return exc.response
+
 
 UPLOADS_DIR = Path("/data/uploads")
 PHOTOS_DIR = Path("/data/photos")
@@ -97,26 +117,56 @@ def verify_key(authorization: Annotated[str | None, Header()] = None):
 async def verify_session(request: Request, auth_token: Annotated[str | None, Cookie()] = None):
     """Validate a user session via the lucos_authentication service.
 
-    - Browser requests (Accept: text/html) are redirected to the auth service login page.
+    - If a ?token= query parameter is present (auth callback), validate it, set a
+      cookie on the photos domain, and redirect to strip the token from the URL.
+    - Browser requests (Accept: text/html) without a token are redirected to the
+      auth service login page.
     - API requests receive a 401 JSON response.
     """
+    # Check for token in query parameter (auth service callback)
+    query_token = request.query_params.get("token")
+    if query_token:
+        data = await _validate_token_with_auth_service(query_token)
+        if data and data.get("id"):
+            # Strip the token from the URL so it doesn't linger in browser history
+            app_origin = os.environ.get("APP_ORIGIN", "")
+            clean_url = f"{app_origin}{request.url.path}"
+            # Preserve any other query params except 'token'
+            other_params = {k: v for k, v in request.query_params.items() if k != "token"}
+            if other_params:
+                clean_url += "?" + urlencode(other_params)
+            response = RedirectResponse(url=clean_url, status_code=status.HTTP_302_FOUND)
+            response.set_cookie(
+                key="auth_token",
+                value=query_token,
+                httponly=True,
+                secure=True,
+                samesite="lax",
+            )
+            raise _RedirectWithCookie(response)
+        _auth_challenge(request)
+
     if not auth_token:
         _auth_challenge(request)
 
+    data = await _validate_token_with_auth_service(auth_token)
+    if not data or not data.get("id"):
+        _auth_challenge(request)
+
+
+async def _validate_token_with_auth_service(token: str) -> dict | None:
+    """Call auth.l42.eu/data?token=<token> and return the JSON payload, or None on failure."""
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{AUTH_DOMAIN}/data",
-                params={"token": auth_token},
+                params={"token": token},
                 timeout=5.0,
             )
             resp.raise_for_status()
-            data = resp.json()
+            return resp.json()
     except (httpx.HTTPError, httpx.TimeoutException):
-        _auth_challenge(request)
-
-    if not data.get("id"):
-        _auth_challenge(request)
+        return None
 
 
 def _auth_challenge(request: Request):
