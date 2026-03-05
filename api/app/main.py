@@ -6,10 +6,11 @@ import shutil
 import uuid
 from pathlib import Path
 from typing import Annotated, Optional
+from urllib.parse import quote
 
 import httpx
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 from redis import Redis
 from rq import Queue
@@ -122,7 +123,7 @@ def _auth_challenge(request: Request):
     """Return redirect or 401 depending on whether the client is a browser."""
     accept = request.headers.get("accept", "")
     if "text/html" in accept:
-        redirect_uri = str(request.url)
+        redirect_uri = quote(str(request.url), safe="")
         raise HTTPException(
             status_code=status.HTTP_302_FOUND,
             headers={"Location": f"{AUTH_DOMAIN}/authenticate?redirect_uri={redirect_uri}"},

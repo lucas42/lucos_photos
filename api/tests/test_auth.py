@@ -36,6 +36,7 @@ class TestVerifySessionNoCookie:
 
     def test_browser_redirect_includes_current_url(self, client):
         """The redirect_uri in the redirect must include the originally requested path."""
+        from urllib.parse import urlparse, parse_qs, unquote
         response = client.get(
             "/photos",
             headers={"Accept": "text/html"},
@@ -44,7 +45,34 @@ class TestVerifySessionNoCookie:
         assert response.status_code == 302
         location = response.headers["location"]
         assert "redirect_uri=" in location
-        assert "/photos" in location
+        parsed = urlparse(location)
+        redirect_uri = unquote(parse_qs(parsed.query)["redirect_uri"][0])
+        assert "/photos" in redirect_uri
+
+    def test_browser_redirect_url_encodes_query_params(self, client):
+        """Query parameters in the original URL must be URL-encoded in redirect_uri.
+
+        Without encoding, ?limit=10&offset=50 would produce:
+          ...?redirect_uri=http://example.com/photos?limit=10&offset=50
+        where &offset=50 becomes a separate auth-service query param, not part of
+        redirect_uri — so the user would be returned to /photos?limit=10 only.
+        """
+        response = client.get(
+            "/photos?limit=10&offset=50",
+            headers={"Accept": "text/html"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        location = response.headers["location"]
+        # The redirect_uri value must be URL-encoded — & should appear as %26
+        assert "%26" in location
+        # The auth domain's own query string must only contain redirect_uri
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(location)
+        qs = parse_qs(parsed.query)
+        assert list(qs.keys()) == ["redirect_uri"], (
+            f"Expected only 'redirect_uri' in auth URL query string, got: {list(qs.keys())}"
+        )
 
 
 class TestVerifySessionInvalidToken:
