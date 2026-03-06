@@ -403,3 +403,162 @@ class TestUploadLimits:
         )
         assert response.status_code == 201
         assert response.json()["sha256Hash"] == expected_hash
+
+
+# Minimal bytes to simulate a video file — PIL validation is skipped for videos,
+# so any content works as long as it's non-empty and within the size limit.
+VALID_VIDEO_CONTENT = b"\x00\x00\x00\x20ftypisom" + b"\x00" * 100
+
+
+class TestVideoUpload:
+    """Tests for video upload acceptance and behaviour."""
+
+    def test_mp4_upload_returns_201(self, client):
+        response = client.post(
+            "/photos",
+            files={"file": ("video.mp4", VALID_VIDEO_CONTENT, "video/mp4")},
+            headers=AUTH_HEADER,
+        )
+        assert response.status_code == 201
+
+    def test_mov_upload_returns_201(self, client):
+        response = client.post(
+            "/photos",
+            files={"file": ("video.mov", VALID_VIDEO_CONTENT, "video/quicktime")},
+            headers=AUTH_HEADER,
+        )
+        assert response.status_code == 201
+
+    def test_video_media_type_is_video(self, client):
+        response = client.post(
+            "/photos",
+            files={"file": ("video.mp4", VALID_VIDEO_CONTENT, "video/mp4")},
+            headers=AUTH_HEADER,
+        )
+        assert response.status_code == 201
+        assert response.json()["mediaType"] == "video"
+
+    def test_photo_media_type_is_photo(self, client):
+        response = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", VALID_IMAGE_CONTENT, "image/jpeg")},
+            headers=AUTH_HEADER,
+        )
+        assert response.status_code == 201
+        assert response.json()["mediaType"] == "photo"
+
+    def test_video_response_contains_expected_fields(self, client):
+        response = client.post(
+            "/photos",
+            files={"file": ("video.mp4", VALID_VIDEO_CONTENT, "video/mp4")},
+            headers=AUTH_HEADER,
+        )
+        data = response.json()
+        assert "id" in data
+        assert data["fileExtension"] == "mp4"
+        assert data["mediaType"] == "video"
+        assert data["sha256Hash"] == hashlib.sha256(VALID_VIDEO_CONTENT).hexdigest()
+        assert data["uploadedAt"] is not None
+
+    def test_video_file_extension_taken_from_filename(self, client):
+        response = client.post(
+            "/photos",
+            files={"file": ("myvideo.mov", VALID_VIDEO_CONTENT, "video/quicktime")},
+            headers=AUTH_HEADER,
+        )
+        assert response.status_code == 201
+        assert response.json()["fileExtension"] == "mov"
+
+    def test_duplicate_video_upload_returns_200(self, client):
+        content = VALID_VIDEO_CONTENT
+        client.post("/photos", files={"file": ("v.mp4", content, "video/mp4")}, headers=AUTH_HEADER)
+        response = client.post("/photos", files={"file": ("v.mp4", content, "video/mp4")}, headers=AUTH_HEADER)
+        assert response.status_code == 200
+
+    def test_duplicate_video_upload_returns_same_record(self, client):
+        content = VALID_VIDEO_CONTENT
+        first = client.post("/photos", files={"file": ("v.mp4", content, "video/mp4")}, headers=AUTH_HEADER)
+        second = client.post("/photos", files={"file": ("v.mp4", content, "video/mp4")}, headers=AUTH_HEADER)
+        assert first.json()["id"] == second.json()["id"]
+
+    def test_video_file_written_to_staging_dir(self, client, tmp_path):
+        content = VALID_VIDEO_CONTENT
+        sha = hashlib.sha256(content).hexdigest()
+        client.post(
+            "/photos",
+            files={"file": ("video.mp4", content, "video/mp4")},
+            headers=AUTH_HEADER,
+        )
+        assert (tmp_path / f"{sha}.mp4").exists()
+
+    def test_video_size_limit_uses_max_video_size(self, client):
+        """Video uploads are checked against MAX_VIDEO_SIZE, not MAX_PHOTO_SIZE."""
+        import app.main as main_module
+        # Set MAX_PHOTO_SIZE to 1 byte — video should still be accepted because
+        # it uses MAX_VIDEO_SIZE instead.
+        with patch("app.main.MAX_PHOTO_SIZE", 1):
+            response = client.post(
+                "/photos",
+                files={"file": ("video.mp4", VALID_VIDEO_CONTENT, "video/mp4")},
+                headers=AUTH_HEADER,
+            )
+        assert response.status_code == 201
+
+    def test_video_too_large_returns_413(self, client):
+        with patch("app.main.MAX_VIDEO_SIZE", 10):
+            response = client.post(
+                "/photos",
+                files={"file": ("video.mp4", VALID_VIDEO_CONTENT, "video/mp4")},
+                headers=AUTH_HEADER,
+            )
+            assert response.status_code == 413
+            assert response.json() == {"detail": "File too large"}
+
+
+class TestVideoMetrics:
+    """Tests for the video-count metric in /_info."""
+
+    def test_video_count_metric_present(self, client):
+        data = client.get("/_info").json()
+        assert "video-count" in data["metrics"]
+
+    def test_video_count_metric_structure(self, client):
+        data = client.get("/_info").json()
+        metric = data["metrics"]["video-count"]
+        assert "value" in metric
+        assert "techDetail" in metric
+        assert isinstance(metric["value"], int)
+
+    def test_video_count_reflects_uploaded_videos(self, client):
+        # Initially zero
+        data = client.get("/_info").json()
+        assert data["metrics"]["video-count"]["value"] == 0
+
+        # Upload a video
+        client.post(
+            "/photos",
+            files={"file": ("video.mp4", VALID_VIDEO_CONTENT, "video/mp4")},
+            headers=AUTH_HEADER,
+        )
+
+        data = client.get("/_info").json()
+        assert data["metrics"]["video-count"]["value"] == 1
+
+    def test_photo_count_excludes_videos(self, client):
+        """photo-count should only count photos, not videos."""
+        # Upload a photo
+        client.post(
+            "/photos",
+            files={"file": ("photo.jpg", VALID_IMAGE_CONTENT, "image/jpeg")},
+            headers=AUTH_HEADER,
+        )
+        # Upload a video
+        client.post(
+            "/photos",
+            files={"file": ("video.mp4", VALID_VIDEO_CONTENT, "video/mp4")},
+            headers=AUTH_HEADER,
+        )
+
+        data = client.get("/_info").json()
+        assert data["metrics"]["photo-count"]["value"] == 1
+        assert data["metrics"]["video-count"]["value"] == 1
