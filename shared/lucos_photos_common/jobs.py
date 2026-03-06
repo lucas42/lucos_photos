@@ -4,9 +4,11 @@ Each function here is a job that can be enqueued in Redis via RQ.
 All jobs must be idempotent — they may be retried on failure.
 """
 
+import json
 import logging
 import os
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -302,6 +304,183 @@ def process_photo(photo_id: str) -> None:
         db.close()
 
 
+def _extract_video_metadata(video_path: Path) -> dict:
+    """Run ffprobe on a video file and return a dict with duration, codec, width, height, fps.
+
+    Args:
+        video_path: Absolute path to the video file.
+
+    Returns:
+        dict with keys: duration (float, seconds), codec (str), video_width (int),
+        video_height (int), fps (float).
+
+    Raises:
+        subprocess.CalledProcessError: if ffprobe exits with a non-zero status.
+        ValueError: if the ffprobe output cannot be parsed or required fields are missing.
+    """
+    cmd = [
+        "ffprobe",
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_streams",
+        "-show_format",
+        str(video_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    data = json.loads(result.stdout)
+
+    # Find the first video stream
+    video_stream = None
+    for stream in data.get("streams", []):
+        if stream.get("codec_type") == "video":
+            video_stream = stream
+            break
+
+    if video_stream is None:
+        raise ValueError(f"No video stream found in {video_path}")
+
+    codec = video_stream.get("codec_name")
+    if not codec:
+        raise ValueError(f"Could not determine codec for {video_path}")
+
+    width = video_stream.get("width")
+    height = video_stream.get("height")
+    if width is None or height is None:
+        raise ValueError(f"Could not determine video dimensions for {video_path}")
+
+    # fps is expressed as a fraction string like "30000/1001" or "30/1"
+    fps = None
+    fps_str = video_stream.get("r_frame_rate") or video_stream.get("avg_frame_rate")
+    if fps_str and "/" in fps_str:
+        numerator, denominator = fps_str.split("/", 1)
+        if int(denominator) != 0:
+            fps = float(int(numerator) / int(denominator))
+
+    # Duration: prefer stream-level, fall back to format-level
+    duration = None
+    if "duration" in video_stream:
+        duration = float(video_stream["duration"])
+    elif "format" in data and "duration" in data["format"]:
+        duration = float(data["format"]["duration"])
+
+    return {
+        "duration": duration,
+        "codec": codec,
+        "video_width": int(width),
+        "video_height": int(height),
+        "fps": fps,
+    }
+
+
+def process_video(photo_id: str) -> None:
+    """Move an uploaded video from staging to originals, extract metadata, generate a thumbnail,
+    and mark as complete.
+
+    This is the job enqueued after a video is uploaded via the API.
+    It is idempotent: if the video is already complete, it exits early.
+
+    Face detection and transcoding are explicitly out of scope (deferred).
+    """
+    photo_uuid = UUID(photo_id)
+    db = SessionLocal()
+    try:
+        photo = db.query(MediaItem).filter(MediaItem.id == photo_uuid).first()
+        if not photo:
+            logger.warning("process_video: media item %s not found", photo_id)
+            return
+
+        status = photo.processing_status
+        if status is None:
+            logger.warning("process_video: no processing_status for media item %s", photo_id)
+            return
+
+        if status.state == ProcessingState.complete:
+            logger.info("process_video: media item %s already complete, skipping", photo_id)
+            return
+
+        # Mark as processing
+        status.state = ProcessingState.processing
+        status.error_message = None
+        db.commit()
+
+        try:
+            # Move file from uploads staging to originals
+            src = UPLOADS_DIR / f"{photo.sha256_hash}.{photo.file_extension}"
+            ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
+            dest = ORIGINALS_DIR / f"{photo.sha256_hash}.{photo.file_extension}"
+
+            if not dest.exists():
+                if src.exists():
+                    shutil.move(str(src), str(dest))
+                    logger.info("process_video: moved %s to originals", src.name)
+                else:
+                    raise FileNotFoundError(
+                        f"Upload file not found: {src} (and not already in originals)"
+                    )
+            else:
+                logger.info("process_video: %s already in originals, skipping move", dest.name)
+                # Clean up staging copy if it still exists
+                if src.exists():
+                    src.unlink()
+
+            # Extract video metadata using ffprobe
+            metadata = _extract_video_metadata(dest)
+            photo.duration = metadata["duration"]
+            photo.codec = metadata["codec"]
+            photo.video_width = metadata["video_width"]
+            photo.video_height = metadata["video_height"]
+            photo.fps = metadata["fps"]
+            logger.info(
+                "process_video: extracted metadata for %s — codec=%s, %dx%d, %.2fs, %.2ffps",
+                photo_id,
+                photo.codec,
+                photo.video_width,
+                photo.video_height,
+                photo.duration or 0.0,
+                photo.fps or 0.0,
+            )
+
+            # Generate thumbnail: extract a still frame at ~10% into the video
+            thumb_path = DERIVATIVES_DIR / f"{photo.sha256_hash}_thumb.jpg"
+            DERIVATIVES_DIR.mkdir(parents=True, exist_ok=True)
+            if not thumb_path.exists():
+                seek_time = (photo.duration * 0.1) if photo.duration else 0.0
+                cmd = [
+                    "ffmpeg",
+                    "-ss", str(seek_time),
+                    "-i", str(dest),
+                    "-vframes", "1",
+                    "-q:v", "2",
+                    "-vf", f"scale={THUMBNAIL_WIDTH}:-1",
+                    str(thumb_path),
+                ]
+                subprocess.run(cmd, capture_output=True, check=True)
+                logger.info("process_video: generated thumbnail for %s at %s", photo_id, thumb_path)
+            else:
+                logger.info("process_video: thumbnail already exists for %s, skipping", photo_id)
+
+            # Mark as complete
+            status.state = ProcessingState.complete
+            db.commit()
+            logger.info("process_video: media item %s processed successfully", photo_id)
+
+            # Emit Loganne event — best-effort, must not fail the job
+            try:
+                emit_loganne_event("videoProcessed", photoId=photo_id)
+            except Exception:
+                logger.exception("process_video: unexpected error emitting Loganne event for %s", photo_id)
+
+        except Exception as exc:
+            logger.exception("process_video: error processing media item %s", photo_id)
+            status.state = ProcessingState.failed
+            status.error_message = str(exc)
+            db.commit()
+            raise
+
+    finally:
+        db.close()
+
+
 def reprocess_photo(photo_id: str) -> None:
     """Reset a photo's processing state to pending and enqueue a fresh process_photo job.
 
@@ -329,9 +508,17 @@ def reprocess_photo(photo_id: str) -> None:
     finally:
         db.close()
 
-    # Re-enqueue process_photo immediately
+    # Re-enqueue the appropriate job based on media type
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
     redis_conn = Redis.from_url(redis_url)
     queue = Queue("photos", connection=redis_conn)
-    queue.enqueue(process_photo, photo_id, retry=Retry(max=3, interval=[10, 30, 60]))
-    logger.info("reprocess_photo: enqueued process_photo for photo %s", photo_id)
+
+    db = SessionLocal()
+    try:
+        photo = db.query(MediaItem).filter(MediaItem.id == photo_uuid).first()
+        job_fn = process_video if (photo and photo.media_type == "video") else process_photo
+    finally:
+        db.close()
+
+    queue.enqueue(job_fn, photo_id, retry=Retry(max=3, interval=[10, 30, 60]))
+    logger.info("reprocess_photo: enqueued %s for photo %s", job_fn.__name__, photo_id)
