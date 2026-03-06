@@ -17,7 +17,7 @@ from rq import Queue
 from rq.job import Retry
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import Face, MediaItem, Photo, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, ProcessingState, ProcessingStatus
 
 logger = logging.getLogger(__name__)
 
