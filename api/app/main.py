@@ -108,20 +108,30 @@ def get_redis() -> Redis:
     return _redis_conn
 
 
-def enqueue_process_photo(photo_id: str) -> None:
-    """Enqueue a process_photo job for the given photo UUID string."""
-    from lucos_photos_common.jobs import process_photo as _process_photo
+def enqueue_process_media(photo_id: str, media_type: str = "photo") -> None:
+    """Enqueue a processing job for the given media item UUID string.
+
+    Routes to process_video for videos, process_photo for photos.
+    """
+    if media_type == "video":
+        from lucos_photos_common.jobs import process_video as _job_fn
+    else:
+        from lucos_photos_common.jobs import process_photo as _job_fn
     try:
         redis_conn = get_redis()
         queue = Queue("photos", connection=redis_conn)
         queue.enqueue(
-            _process_photo,
+            _job_fn,
             photo_id,
             retry=Retry(max=3, interval=[10, 30, 60]),
         )
     except Exception as exc:
         # Log but don't fail the upload — the worker's pending sweep will catch it.
-        print(f"Warning: failed to enqueue process_photo for {photo_id}: {exc}", flush=True)
+        print(f"Warning: failed to enqueue {_job_fn.__name__} for {photo_id}: {exc}", flush=True)
+
+
+# Keep the old name as an alias for backwards compatibility
+enqueue_process_photo = enqueue_process_media
 
 
 def get_db():
@@ -471,10 +481,10 @@ async def upload_photo(
     else:
         await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos")
 
-    # Enqueue a job for the worker to process this photo.
+    # Enqueue a job for the worker to process this media item.
     # If Redis is unavailable, we log a warning and continue — the worker's
     # periodic pending sweep will catch it within a few minutes.
-    enqueue_process_photo(str(photo.id))
+    enqueue_process_media(str(photo.id), media_type=media_type)
 
     return photo_to_dict(photo)
 

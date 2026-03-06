@@ -11,8 +11,15 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from lucos_photos_common.jobs import detect_and_save_faces, emit_loganne_event, process_photo, reprocess_photo
-from lucos_photos_common.models import Face, Photo, ProcessingState, ProcessingStatus
+from lucos_photos_common.jobs import (
+    _extract_video_metadata,
+    detect_and_save_faces,
+    emit_loganne_event,
+    process_photo,
+    process_video,
+    reprocess_photo,
+)
+from lucos_photos_common.models import Face, MediaItem, Photo, ProcessingState, ProcessingStatus
 
 # Minimal valid 1x1 JPEG bytes
 VALID_JPEG = bytes.fromhex(
@@ -783,3 +790,431 @@ class TestReprocessPhoto:
 
         db_session.refresh(pending_photo)
         assert pending_photo.processing_status.error_message is None
+
+
+# ---------------------------------------------------------------------------
+# Fixtures for video tests
+# ---------------------------------------------------------------------------
+
+SAMPLE_FFPROBE_OUTPUT = {
+    "streams": [
+        {
+            "codec_type": "video",
+            "codec_name": "h264",
+            "width": 1280,
+            "height": 720,
+            "r_frame_rate": "30/1",
+            "duration": "10.0",
+        }
+    ],
+    "format": {
+        "duration": "10.0",
+    },
+}
+
+
+class TestExtractVideoMetadata:
+    """Tests for the _extract_video_metadata helper."""
+
+    def _mock_ffprobe(self, ffprobe_output: dict):
+        """Return a context-manager patch that makes subprocess.run return ffprobe JSON."""
+        import json
+        mock_result = MagicMock()
+        mock_result.stdout = json.dumps(ffprobe_output)
+        return patch("lucos_photos_common.jobs.subprocess.run", return_value=mock_result)
+
+    def test_returns_expected_metadata(self, tmp_path):
+        video_path = tmp_path / "test.mp4"
+        video_path.write_bytes(b"fake")
+
+        with self._mock_ffprobe(SAMPLE_FFPROBE_OUTPUT):
+            meta = _extract_video_metadata(video_path)
+
+        assert meta["codec"] == "h264"
+        assert meta["video_width"] == 1280
+        assert meta["video_height"] == 720
+        assert meta["fps"] == 30.0
+        assert meta["duration"] == 10.0
+
+    def test_parses_fractional_fps(self, tmp_path):
+        video_path = tmp_path / "test.mp4"
+        video_path.write_bytes(b"fake")
+
+        output = {
+            "streams": [{
+                "codec_type": "video",
+                "codec_name": "h264",
+                "width": 1920,
+                "height": 1080,
+                "r_frame_rate": "30000/1001",
+                "duration": "5.0",
+            }],
+            "format": {"duration": "5.0"},
+        }
+
+        with self._mock_ffprobe(output):
+            meta = _extract_video_metadata(video_path)
+
+        assert abs(meta["fps"] - 29.97) < 0.01
+
+    def test_falls_back_to_format_duration(self, tmp_path):
+        """Duration should be read from format-level if not present in stream."""
+        video_path = tmp_path / "test.mp4"
+        video_path.write_bytes(b"fake")
+
+        output = {
+            "streams": [{
+                "codec_type": "video",
+                "codec_name": "vp9",
+                "width": 640,
+                "height": 360,
+                "r_frame_rate": "25/1",
+                # no duration here
+            }],
+            "format": {"duration": "42.5"},
+        }
+
+        with self._mock_ffprobe(output):
+            meta = _extract_video_metadata(video_path)
+
+        assert meta["duration"] == 42.5
+
+    def test_raises_if_no_video_stream(self, tmp_path):
+        video_path = tmp_path / "audio_only.mp3"
+        video_path.write_bytes(b"fake")
+
+        output = {
+            "streams": [{"codec_type": "audio", "codec_name": "aac"}],
+            "format": {"duration": "3.0"},
+        }
+
+        with self._mock_ffprobe(output):
+            with pytest.raises(ValueError, match="No video stream"):
+                _extract_video_metadata(video_path)
+
+    def test_raises_if_ffprobe_fails(self, tmp_path):
+        import subprocess as sp
+        video_path = tmp_path / "test.mp4"
+        video_path.write_bytes(b"fake")
+
+        with patch("lucos_photos_common.jobs.subprocess.run",
+                   side_effect=sp.CalledProcessError(1, "ffprobe")):
+            with pytest.raises(sp.CalledProcessError):
+                _extract_video_metadata(video_path)
+
+
+class TestProcessVideo:
+    """Tests for the process_video job handler."""
+
+    @pytest.fixture
+    def pending_video(self, db_session):
+        """Create a video MediaItem with a pending processing status."""
+        video = MediaItem(sha256_hash="v" * 64, file_extension="mp4", media_type="video")
+        db_session.add(video)
+        db_session.flush()
+        status = ProcessingStatus(photo_id=video.id, state=ProcessingState.pending)
+        db_session.add(status)
+        db_session.commit()
+        db_session.refresh(video)
+        return video
+
+    def _mock_ffprobe(self, ffprobe_output: dict):
+        import json
+        mock_result = MagicMock()
+        mock_result.stdout = json.dumps(ffprobe_output)
+        return patch("lucos_photos_common.jobs.subprocess.run", return_value=mock_result)
+
+    def test_moves_file_to_originals(self, db_session, pending_video, tmp_path):
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+
+        src = uploads_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        src.write_bytes(b"fake video")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             self._mock_ffprobe(SAMPLE_FFPROBE_OUTPUT):
+            process_video(str(pending_video.id))
+
+        assert not src.exists(), "Source file should have been moved"
+        assert (originals_dir / src.name).exists(), "File should exist in originals"
+
+    def test_sets_processing_state_to_complete(self, db_session, pending_video, tmp_path):
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        src = uploads_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        src.write_bytes(b"fake video")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             self._mock_ffprobe(SAMPLE_FFPROBE_OUTPUT):
+            process_video(str(pending_video.id))
+
+        db_session.refresh(pending_video)
+        assert pending_video.processing_status.state == ProcessingState.complete
+
+    def test_stores_video_metadata(self, db_session, pending_video, tmp_path):
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        src = uploads_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        src.write_bytes(b"fake video")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             self._mock_ffprobe(SAMPLE_FFPROBE_OUTPUT):
+            process_video(str(pending_video.id))
+
+        db_session.refresh(pending_video)
+        assert pending_video.codec == "h264"
+        assert pending_video.video_width == 1280
+        assert pending_video.video_height == 720
+        assert pending_video.fps == 30.0
+        assert pending_video.duration == 10.0
+
+    def test_generates_thumbnail(self, db_session, pending_video, tmp_path):
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        src = uploads_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        src.write_bytes(b"fake video")
+
+        import json
+
+        def mock_run(cmd, **kwargs):
+            if cmd[0] == "ffprobe":
+                result = MagicMock()
+                result.stdout = json.dumps(SAMPLE_FFPROBE_OUTPUT)
+                return result
+            else:
+                # ffmpeg: simulate thumbnail creation by writing the output file
+                out_path = Path(cmd[-1])
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_bytes(b"fake thumbnail")
+                return MagicMock()
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.subprocess.run", side_effect=mock_run):
+            process_video(str(pending_video.id))
+
+        thumb_path = derivatives_dir / f"{pending_video.sha256_hash}_thumb.jpg"
+        assert thumb_path.exists(), "Thumbnail file should have been created"
+
+    def test_thumbnail_path_uses_sha256(self, db_session, pending_video, tmp_path):
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        src = uploads_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        src.write_bytes(b"fake video")
+
+        import json
+
+        def mock_run(cmd, **kwargs):
+            if cmd[0] == "ffprobe":
+                result = MagicMock()
+                result.stdout = json.dumps(SAMPLE_FFPROBE_OUTPUT)
+                return result
+            else:
+                out_path = Path(cmd[-1])
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_bytes(b"fake thumbnail")
+                return MagicMock()
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.subprocess.run", side_effect=mock_run):
+            process_video(str(pending_video.id))
+
+        expected_name = f"{pending_video.sha256_hash}_thumb.jpg"
+        assert (derivatives_dir / expected_name).exists()
+
+    def test_thumbnail_idempotent_when_already_exists(self, db_session, pending_video, tmp_path):
+        """If a thumbnail already exists, process_video should not overwrite it."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        derivatives_dir.mkdir()
+
+        src = uploads_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        src.write_bytes(b"fake video")
+
+        # Pre-create a sentinel thumbnail file
+        existing_thumb = derivatives_dir / f"{pending_video.sha256_hash}_thumb.jpg"
+        existing_thumb.write_bytes(b"sentinel")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             self._mock_ffprobe(SAMPLE_FFPROBE_OUTPUT):
+            process_video(str(pending_video.id))
+
+        # Thumbnail should not have been replaced
+        assert existing_thumb.read_bytes() == b"sentinel", "Existing thumbnail should not be overwritten"
+
+    def test_idempotent_when_already_complete(self, db_session, pending_video, tmp_path):
+        """If a video is already complete, process_video should exit early without error."""
+        pending_video.processing_status.state = ProcessingState.complete
+        db_session.commit()
+
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_video(str(pending_video.id))  # Should not raise
+
+    def test_marks_failed_when_file_missing(self, db_session, pending_video, tmp_path):
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        # Don't create the source file
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            with pytest.raises(FileNotFoundError):
+                process_video(str(pending_video.id))
+
+        db_session.refresh(pending_video)
+        assert pending_video.processing_status.state == ProcessingState.failed
+        assert pending_video.processing_status.error_message is not None
+
+    def test_marks_failed_when_ffprobe_fails(self, db_session, pending_video, tmp_path):
+        """If ffprobe fails, processing_status should be set to failed."""
+        import subprocess as sp
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        src = uploads_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        src.write_bytes(b"corrupt")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.subprocess.run",
+                   side_effect=sp.CalledProcessError(1, "ffprobe")):
+            with pytest.raises(sp.CalledProcessError):
+                process_video(str(pending_video.id))
+
+        db_session.refresh(pending_video)
+        assert pending_video.processing_status.state == ProcessingState.failed
+
+    def test_skips_move_if_already_in_originals(self, db_session, pending_video, tmp_path):
+        """If the file is already in originals (e.g. retry after partial failure), skip the move."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        originals_dir.mkdir()
+
+        dest = originals_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        dest.write_bytes(b"fake video")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             self._mock_ffprobe(SAMPLE_FFPROBE_OUTPUT):
+            process_video(str(pending_video.id))
+
+        db_session.refresh(pending_video)
+        assert pending_video.processing_status.state == ProcessingState.complete
+
+    def test_nonexistent_id_is_a_noop(self, db_session, tmp_path):
+        """process_video should log a warning and return cleanly for unknown IDs."""
+        fake_id = str(uuid.uuid4())
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_video(fake_id)  # Should not raise
+
+    def test_emits_loganne_event_on_success(self, db_session, pending_video, tmp_path):
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        src = uploads_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        src.write_bytes(b"fake video")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             self._mock_ffprobe(SAMPLE_FFPROBE_OUTPUT), \
+             patch("lucos_photos_common.jobs.emit_loganne_event") as mock_emit:
+            process_video(str(pending_video.id))
+
+        mock_emit.assert_called_once_with("videoProcessed", photoId=str(pending_video.id))
+
+    def test_does_not_emit_loganne_on_failure(self, db_session, pending_video, tmp_path):
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        # No file in uploads — will cause a failure
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.emit_loganne_event") as mock_emit:
+            with pytest.raises(FileNotFoundError):
+                process_video(str(pending_video.id))
+
+        mock_emit.assert_not_called()
+
+    def test_ffmpeg_seek_at_10_percent(self, db_session, pending_video, tmp_path):
+        """ffmpeg should be called with a seek time of 10% of the video duration."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        src = uploads_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        src.write_bytes(b"fake video")
+
+        ffprobe_calls = []
+        ffmpeg_calls = []
+
+        def mock_run(cmd, **kwargs):
+            import json
+            if cmd[0] == "ffprobe":
+                ffprobe_calls.append(cmd)
+                result = MagicMock()
+                result.stdout = json.dumps(SAMPLE_FFPROBE_OUTPUT)
+                return result
+            else:
+                ffmpeg_calls.append(cmd)
+                return MagicMock()
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.subprocess.run", side_effect=mock_run):
+            process_video(str(pending_video.id))
+
+        assert len(ffmpeg_calls) == 1
+        # SAMPLE_FFPROBE_OUTPUT duration=10.0, so 10% = 1.0 second
+        assert "-ss" in ffmpeg_calls[0]
+        seek_index = ffmpeg_calls[0].index("-ss")
+        assert float(ffmpeg_calls[0][seek_index + 1]) == pytest.approx(1.0)
