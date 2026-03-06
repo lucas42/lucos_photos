@@ -1,8 +1,8 @@
 import asyncio
 import hashlib
-import io
 import os
 import shutil
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Annotated, Optional
@@ -63,7 +63,21 @@ EXTENSION_MIME_TYPES = {
 }
 
 MAX_PHOTO_SIZE = int(os.environ.get("MAX_PHOTO_SIZE", 100 * 1024 * 1024))
+MAX_VIDEO_SIZE = int(os.environ.get("MAX_VIDEO_SIZE", 500 * 1024 * 1024))
 MIN_FREE_DISK_SPACE = int(os.environ.get("MIN_FREE_DISK_SPACE", 500 * 1024 * 1024))
+
+_UPLOAD_CHUNK_SIZE = 64 * 1024  # 64KB chunks
+
+VIDEO_MIME_TYPES = {"video/mp4", "video/quicktime"}
+
+_CONTENT_TYPE_TO_EXT = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/heic": "heic",
+    "image/heif": "heif",
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
+}
 
 _redis_conn: Redis | None = None
 
@@ -333,8 +347,12 @@ async def upload_photo(
     _: Annotated[None, Depends(verify_key)],
     db: Session = Depends(get_db),
 ):
-    # Check if file size is too large (before reading into memory if possible)
-    if file.size and file.size > MAX_PHOTO_SIZE:
+    content_type = file.content_type or ""
+    is_video = content_type in VIDEO_MIME_TYPES
+    size_limit = MAX_VIDEO_SIZE if is_video else MAX_PHOTO_SIZE
+
+    # Fast-path rejection: if Content-Length is provided and already too large, reject before streaming
+    if file.size and file.size > size_limit:
         raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="File too large")
 
     # Check for sufficient free disk space
@@ -343,54 +361,75 @@ async def upload_photo(
     if free < MIN_FREE_DISK_SPACE:
         raise HTTPException(status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail="Insufficient storage")
 
-    contents = await file.read()
-
-    # Re-check file size after reading (in case file.size was missing or incorrect)
-    if len(contents) > MAX_PHOTO_SIZE:
-        raise HTTPException(status_code=status.HTTP_413_PAYLOAD_TOO_LARGE, detail="File too large")
-
-    sha256_hash = hashlib.sha256(contents).hexdigest()
-
-    # Validate that the file is a valid image
+    # Stream the upload to a temp file, computing SHA256 incrementally.
+    # We never hold the full file in memory — each chunk is written directly to disk.
+    tmp_file = tempfile.NamedTemporaryFile(dir=UPLOADS_DIR, delete=False)
+    tmp_path = Path(tmp_file.name)
     try:
-        with Image.open(io.BytesIO(contents)) as img:
-            img.verify()
-    except Exception:
-        raise HTTPException(status_code=422, detail="Invalid image file")
+        hasher = hashlib.sha256()
+        total_bytes = 0
+        try:
+            while True:
+                chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > size_limit:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail="File too large",
+                    )
+                hasher.update(chunk)
+                tmp_file.write(chunk)
+        finally:
+            tmp_file.close()
 
-    # Idempotency: if a photo with this hash already exists, return it
-    existing = db.query(MediaItem).filter(MediaItem.sha256_hash == sha256_hash).first()
-    if existing:
-        return JSONResponse(status_code=200, content=photo_to_dict(existing))
+        sha256_hash = hasher.hexdigest()
 
-    # Determine file extension from filename, falling back to content type
-    filename = file.filename or ""
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if not ext:
-        ext = {
-            "image/jpeg": "jpg",
-            "image/png": "png",
-            "image/heic": "heic",
-            "image/heif": "heif",
-        }.get(file.content_type or "", "jpg")
+        # Validate that the file is a valid image (videos are not validated here)
+        if not is_video:
+            try:
+                with Image.open(tmp_path) as img:
+                    img.verify()
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=422, detail="Invalid image file")
 
-    # Save to uploads staging area (worker will move to /data/photos/originals/)
-    file_path = UPLOADS_DIR / f"{sha256_hash}.{ext}"
-    file_path.write_bytes(contents)
+        # Idempotency: if a media item with this hash already exists, return it
+        existing = db.query(MediaItem).filter(MediaItem.sha256_hash == sha256_hash).first()
+        if existing:
+            return JSONResponse(status_code=200, content=photo_to_dict(existing))
 
-    try:
-        # Create photo record and initial processing status
-        photo = MediaItem(sha256_hash=sha256_hash, file_extension=ext)
-        db.add(photo)
-        db.flush()
-        db.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))
-        db.commit()
-        db.refresh(photo)
-    except Exception:
-        db.rollback()
-        if file_path.exists():
-            file_path.unlink()
-        raise
+        # Determine file extension from filename, falling back to content type
+        filename = file.filename or ""
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if not ext:
+            ext = _CONTENT_TYPE_TO_EXT.get(content_type, "jpg")
+
+        # Move temp file to its final staging location
+        file_path = UPLOADS_DIR / f"{sha256_hash}.{ext}"
+        tmp_path.rename(file_path)
+        tmp_path = None  # temp file has been moved; don't delete it in finally block
+
+        try:
+            # Create media item record and initial processing status
+            photo = MediaItem(sha256_hash=sha256_hash, file_extension=ext)
+            db.add(photo)
+            db.flush()
+            db.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))
+            db.commit()
+            db.refresh(photo)
+        except Exception:
+            db.rollback()
+            if file_path.exists():
+                file_path.unlink()
+            raise
+
+    finally:
+        # Clean up the temp file if it was never moved (failure path)
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink()
 
     await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos")
 

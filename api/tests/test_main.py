@@ -325,6 +325,55 @@ class TestUploadLimits:
             assert response.status_code == 413
             assert response.json() == {"detail": "File too large"}
 
+    def test_file_too_large_enforced_during_streaming(self, client, tmp_path):
+        """Size limit is enforced incrementally during the stream, not just on Content-Length.
+
+        Patches UploadFile.__init__ to keep size=None throughout the request, bypassing the
+        fast-path Content-Length check and forcing the streaming-path size enforcement to run.
+        """
+        from starlette.datastructures import UploadFile as StUploadFile
+        _original_init = StUploadFile.__init__
+
+        def _force_size_none(self, *args, **kwargs):
+            _original_init(self, *args, **kwargs)
+            self.size = None
+
+        with patch("app.main.MAX_PHOTO_SIZE", len(VALID_IMAGE_CONTENT) - 1), \
+             patch.object(StUploadFile, "__init__", _force_size_none):
+            response = client.post(
+                "/photos",
+                files={"file": ("photo.jpg", VALID_IMAGE_CONTENT, "image/jpeg")},
+                headers=AUTH_HEADER,
+            )
+        assert response.status_code == 413
+        assert response.json() == {"detail": "File too large"}
+
+    def test_no_temp_file_left_on_size_exceeded(self, client, tmp_path):
+        """If the streaming path hits the size limit, no temp files should remain in uploads dir.
+
+        Patches UploadFile.__init__ to keep size=None throughout the request, bypassing the
+        fast-path Content-Length check so the streaming-path cleanup logic is actually exercised.
+        Without this patch, file.size would be set by Starlette to the actual byte length, and the
+        fast-path would reject the upload before any temp file is ever created — making the test
+        pass trivially without testing the cleanup in the finally block.
+        """
+        from starlette.datastructures import UploadFile as StUploadFile
+        _original_init = StUploadFile.__init__
+
+        def _force_size_none(self, *args, **kwargs):
+            _original_init(self, *args, **kwargs)
+            self.size = None
+
+        with patch("app.main.MAX_PHOTO_SIZE", 10), \
+             patch.object(StUploadFile, "__init__", _force_size_none):
+            client.post(
+                "/photos",
+                files={"file": ("photo.jpg", b"exceeds the limit by quite a lot", "image/jpeg")},
+                headers=AUTH_HEADER,
+            )
+        remaining = list(tmp_path.iterdir())
+        assert remaining == []
+
     def test_insufficient_storage_returns_507(self, client):
         with patch("shutil.disk_usage") as mock_usage:
             # Mock 100 bytes free space
@@ -336,3 +385,21 @@ class TestUploadLimits:
             )
             assert response.status_code == 507
             assert response.json() == {"detail": "Insufficient storage"}
+
+    def test_max_video_size_constant_exists(self):
+        """MAX_VIDEO_SIZE should be defined and larger than MAX_PHOTO_SIZE."""
+        import app.main as main_module
+        assert hasattr(main_module, "MAX_VIDEO_SIZE")
+        assert main_module.MAX_VIDEO_SIZE > main_module.MAX_PHOTO_SIZE
+
+    def test_sha256_hash_correct_for_streamed_upload(self, client):
+        """SHA256 computed during streaming should match the actual file content."""
+        content = VALID_IMAGE_CONTENT
+        expected_hash = hashlib.sha256(content).hexdigest()
+        response = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers=AUTH_HEADER,
+        )
+        assert response.status_code == 201
+        assert response.json()["sha256Hash"] == expected_hash
