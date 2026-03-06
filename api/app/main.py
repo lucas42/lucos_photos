@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import Face, Person, Photo, PhotoPerson, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 AUTH_DOMAIN = "https://auth.l42.eu"
 
@@ -58,6 +58,8 @@ EXTENSION_MIME_TYPES = {
     "heif": "image/heif",
     "gif": "image/gif",
     "webp": "image/webp",
+    "mp4": "video/mp4",
+    "mov": "video/quicktime",
 }
 
 MAX_PHOTO_SIZE = int(os.environ.get("MAX_PHOTO_SIZE", 100 * 1024 * 1024))
@@ -201,7 +203,7 @@ async def emit_loganne_event(event_type: str, human_readable: str):
         print(f"Error calling Loganne: {e}", flush=True)
 
 
-def photo_to_dict(photo: Photo) -> dict:
+def photo_to_dict(photo: MediaItem) -> dict:
     return {
         "id": str(photo.id),
         "sha256Hash": photo.sha256_hash,
@@ -268,7 +270,7 @@ async def get_metrics() -> dict:
         db = SessionLocal()
         try:
             photo_count = await asyncio.to_thread(
-                lambda: db.query(Photo).count()
+                lambda: db.query(MediaItem).count()
             )
             pending_count = await asyncio.to_thread(
                 lambda: db.query(ProcessingStatus).filter(
@@ -357,7 +359,7 @@ async def upload_photo(
         raise HTTPException(status_code=422, detail="Invalid image file")
 
     # Idempotency: if a photo with this hash already exists, return it
-    existing = db.query(Photo).filter(Photo.sha256_hash == sha256_hash).first()
+    existing = db.query(MediaItem).filter(MediaItem.sha256_hash == sha256_hash).first()
     if existing:
         return JSONResponse(status_code=200, content=photo_to_dict(existing))
 
@@ -378,7 +380,7 @@ async def upload_photo(
 
     try:
         # Create photo record and initial processing status
-        photo = Photo(sha256_hash=sha256_hash, file_extension=ext)
+        photo = MediaItem(sha256_hash=sha256_hash, file_extension=ext)
         db.add(photo)
         db.flush()
         db.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))
@@ -409,12 +411,12 @@ def list_photos(
     db: Session = Depends(get_db),
 ):
     if order_by == "taken_at":
-        order_col = Photo.taken_at.desc().nullslast()
+        order_col = MediaItem.taken_at.desc().nullslast()
     else:
-        order_col = Photo.uploaded_at.desc()
+        order_col = MediaItem.uploaded_at.desc()
 
-    photos = db.query(Photo).order_by(order_col).offset(offset).limit(limit).all()
-    total = db.query(Photo).count()
+    photos = db.query(MediaItem).order_by(order_col).offset(offset).limit(limit).all()
+    total = db.query(MediaItem).count()
     return {
         "photos": [photo_to_dict(p) for p in photos],
         "total": total,
@@ -434,7 +436,7 @@ def get_photo(
     except ValueError:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    photo = db.query(Photo).filter(Photo.id == photo_uuid).first()
+    photo = db.query(MediaItem).filter(MediaItem.id == photo_uuid).first()
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
@@ -466,13 +468,13 @@ def face_to_dict_simple(face: Face) -> dict:
     }
 
 
-def _get_photo_or_404(photo_id: str, db: Session) -> Photo:
-    """Resolve a photo UUID string to a Photo model, raising 404 on not found or invalid UUID."""
+def _get_photo_or_404(photo_id: str, db: Session) -> MediaItem:
+    """Resolve a photo UUID string to a MediaItem model, raising 404 on not found or invalid UUID."""
     try:
         photo_uuid = uuid.UUID(photo_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Photo not found")
-    photo = db.query(Photo).filter(Photo.id == photo_uuid).first()
+    photo = db.query(MediaItem).filter(MediaItem.id == photo_uuid).first()
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
     return photo
@@ -642,7 +644,7 @@ def get_person(
     face_count = db.query(Face).filter(Face.person_id == person_uuid).count()
 
     # Get photos assigned to this person (via PhotoPerson)
-    photos = db.query(Photo).join(PhotoPerson).filter(PhotoPerson.person_id == person_uuid).all()
+    photos = db.query(MediaItem).join(PhotoPerson).filter(PhotoPerson.person_id == person_uuid).all()
 
     data = person_to_dict(person)
     data["faceCount"] = face_count
@@ -683,7 +685,7 @@ def list_faces(
     except ValueError:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    photo = db.query(Photo).filter(Photo.id == photo_uuid).first()
+    photo = db.query(MediaItem).filter(MediaItem.id == photo_uuid).first()
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
