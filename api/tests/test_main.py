@@ -325,6 +325,32 @@ class TestUploadLimits:
             assert response.status_code == 413
             assert response.json() == {"detail": "File too large"}
 
+    def test_file_too_large_enforced_during_streaming(self, client, tmp_path):
+        """Size limit is enforced incrementally during the stream, not just on Content-Length."""
+        # Patch MAX_PHOTO_SIZE to something smaller than the valid image
+        with patch("app.main.MAX_PHOTO_SIZE", len(VALID_IMAGE_CONTENT) - 1):
+            response = client.post(
+                "/photos",
+                # Omit file.size by not providing a named tuple — TestClient sends the bytes directly
+                files={"file": ("photo.jpg", VALID_IMAGE_CONTENT, "image/jpeg")},
+                headers=AUTH_HEADER,
+            )
+        assert response.status_code == 413
+        assert response.json() == {"detail": "File too large"}
+
+    def test_no_temp_file_left_on_size_exceeded(self, client, tmp_path):
+        """If the size limit is hit during streaming, no temp files should remain in uploads dir."""
+        with patch("app.main.MAX_PHOTO_SIZE", 10):
+            client.post(
+                "/photos",
+                files={"file": ("photo.jpg", b"exceeds the limit by quite a lot", "image/jpeg")},
+                headers=AUTH_HEADER,
+            )
+        # tmp_path is the UPLOADS_DIR; only expected file is the one for the valid upload, not a stray temp file
+        remaining = list(tmp_path.iterdir())
+        # There should be no files left (the upload was rejected)
+        assert remaining == []
+
     def test_insufficient_storage_returns_507(self, client):
         with patch("shutil.disk_usage") as mock_usage:
             # Mock 100 bytes free space
@@ -336,3 +362,21 @@ class TestUploadLimits:
             )
             assert response.status_code == 507
             assert response.json() == {"detail": "Insufficient storage"}
+
+    def test_max_video_size_constant_exists(self):
+        """MAX_VIDEO_SIZE should be defined and larger than MAX_PHOTO_SIZE."""
+        import app.main as main_module
+        assert hasattr(main_module, "MAX_VIDEO_SIZE")
+        assert main_module.MAX_VIDEO_SIZE > main_module.MAX_PHOTO_SIZE
+
+    def test_sha256_hash_correct_for_streamed_upload(self, client):
+        """SHA256 computed during streaming should match the actual file content."""
+        content = VALID_IMAGE_CONTENT
+        expected_hash = hashlib.sha256(content).hexdigest()
+        response = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers=AUTH_HEADER,
+        )
+        assert response.status_code == 201
+        assert response.json()["sha256Hash"] == expected_hash
