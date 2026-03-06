@@ -7,7 +7,7 @@ from lucos_photos_common.models import Face, Person, Photo, PhotoPerson, Process
 
 # AUTH_HEADER is used for the upload endpoint (POST /photos) which uses CLIENT_KEYS / M2M auth.
 # User-facing GET endpoints use session auth — tests for those use the authenticated_client fixture.
-AUTH_HEADER = {"Authorization": "key validkey"}
+AUTH_HEADER = {"Authorization": "Bearer validkey"}
 
 
 # ---------------------------------------------------------------------------
