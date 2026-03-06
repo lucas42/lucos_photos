@@ -222,6 +222,7 @@ def photo_to_dict(photo: MediaItem) -> dict:
         "id": str(photo.id),
         "sha256Hash": photo.sha256_hash,
         "fileExtension": photo.file_extension,
+        "mediaType": photo.media_type,
         "takenAt": photo.taken_at.isoformat() if photo.taken_at else None,
         "uploadedAt": photo.uploaded_at.isoformat() if photo.uploaded_at else None,
         "width": photo.width,
@@ -279,12 +280,15 @@ async def check_redis() -> dict:
 
 
 async def get_metrics() -> dict:
-    """Return live metrics: photo count and pending processing queue depth."""
+    """Return live metrics: photo count, video count, and pending processing queue depth."""
     try:
         db = SessionLocal()
         try:
             photo_count = await asyncio.to_thread(
-                lambda: db.query(MediaItem).count()
+                lambda: db.query(MediaItem).filter(MediaItem.media_type == "photo").count()
+            )
+            video_count = await asyncio.to_thread(
+                lambda: db.query(MediaItem).filter(MediaItem.media_type == "video").count()
             )
             pending_count = await asyncio.to_thread(
                 lambda: db.query(ProcessingStatus).filter(
@@ -298,9 +302,13 @@ async def get_metrics() -> dict:
                 "value": photo_count,
                 "techDetail": "Total number of photos stored",
             },
+            "video-count": {
+                "value": video_count,
+                "techDetail": "Total number of videos stored",
+            },
             "processing-pending-count": {
                 "value": pending_count,
-                "techDetail": "Number of photos awaiting processing",
+                "techDetail": "Number of media items awaiting processing",
             },
         }
     except Exception:
@@ -309,9 +317,13 @@ async def get_metrics() -> dict:
                 "value": 0,
                 "techDetail": "Total number of photos stored",
             },
+            "video-count": {
+                "value": 0,
+                "techDetail": "Total number of videos stored",
+            },
             "processing-pending-count": {
                 "value": 0,
-                "techDetail": "Number of photos awaiting processing",
+                "techDetail": "Number of media items awaiting processing",
             },
         }
 
@@ -414,7 +426,8 @@ async def upload_photo(
 
         try:
             # Create media item record and initial processing status
-            photo = MediaItem(sha256_hash=sha256_hash, file_extension=ext)
+            media_type = "video" if is_video else "photo"
+            photo = MediaItem(sha256_hash=sha256_hash, file_extension=ext, media_type=media_type)
             db.add(photo)
             db.flush()
             db.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))
@@ -431,7 +444,10 @@ async def upload_photo(
         if tmp_path is not None and tmp_path.exists():
             tmp_path.unlink()
 
-    await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos")
+    if is_video:
+        await emit_loganne_event("videoAdded", f"Video {photo.id} added to lucos_photos")
+    else:
+        await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos")
 
     # Enqueue a job for the worker to process this photo.
     # If Redis is unavailable, we log a warning and continue — the worker's
