@@ -425,3 +425,15 @@ class TestGetPhotoFileRedirect:
         response = authenticated_client.get(f"/photos/{photo.id}/file", follow_redirects=False)
         assert response.status_code == 301
         assert f"/photos/{photo.id}/thumbnail" in response.headers["location"]
+
+    def test_redirect_is_relative_path(self, authenticated_client, db_session):
+        """Redirect must not include an external origin (open redirect prevention)."""
+        photo = make_photo(db_session, "redirectrelative")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}/file", follow_redirects=False)
+        assert response.status_code == 301
+        location = response.headers["location"]
+        # A relative path starts with '/' and contains no scheme or netloc
+        assert location.startswith("/"), f"Expected relative path, got: {location}"
+        assert "://" not in location, f"Redirect must not contain a scheme: {location}"
