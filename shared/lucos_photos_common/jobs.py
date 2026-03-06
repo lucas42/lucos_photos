@@ -17,7 +17,7 @@ from rq import Queue
 from rq.job import Retry
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import Face, Photo, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, Photo, ProcessingState, ProcessingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def _get_face_analysis_app():
     return _face_analysis_app
 
 
-def detect_and_save_faces(db, photo: "Photo", image_path: Path) -> None:
+def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
     """Run InsightFace face detection on an image and persist results to the database.
 
     For each detected face:
@@ -205,7 +205,7 @@ def process_photo(photo_id: str) -> None:
     photo_uuid = UUID(photo_id)
     db = SessionLocal()
     try:
-        photo = db.query(Photo).filter(Photo.id == photo_uuid).first()
+        photo = db.query(MediaItem).filter(MediaItem.id == photo_uuid).first()
         if not photo:
             logger.warning("process_photo: photo %s not found", photo_id)
             return
@@ -310,7 +310,7 @@ def reprocess_photo(photo_id: str) -> None:
     photo_uuid = UUID(photo_id)
     db = SessionLocal()
     try:
-        photo = db.query(Photo).filter(Photo.id == photo_uuid).first()
+        photo = db.query(MediaItem).filter(MediaItem.id == photo_uuid).first()
         if not photo:
             logger.warning("reprocess_photo: photo %s not found", photo_id)
             return
