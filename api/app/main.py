@@ -466,42 +466,76 @@ def face_to_dict_simple(face: Face) -> dict:
     }
 
 
-@app.get("/photos/{photo_id}/file")
-def get_photo_file(
-    photo_id: str,
-    _: Annotated[None, Depends(verify_session)],
-    original: bool = False,
-    db: Session = Depends(get_db),
-):
+def _get_photo_or_404(photo_id: str, db: Session) -> Photo:
+    """Resolve a photo UUID string to a Photo model, raising 404 on not found or invalid UUID."""
     try:
         photo_uuid = uuid.UUID(photo_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Photo not found")
-
     photo = db.query(Photo).filter(Photo.id == photo_uuid).first()
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
+    return photo
 
+
+@app.get("/photos/{photo_id}/original")
+def get_photo_original(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Serve the full-resolution original photo file."""
+    photo = _get_photo_or_404(photo_id, db)
     ext = photo.file_extension
     media_type = EXTENSION_MIME_TYPES.get(ext, "application/octet-stream")
-
-    if original:
-        file_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
-    else:
-        # Try derivative first, fall back to original if not yet generated
-        derivative_path = PHOTOS_DIR / "derivatives" / f"{photo.sha256_hash}.{ext}"
-        if derivative_path.exists():
-            file_path = derivative_path
-        else:
-            file_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
-
+    file_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Photo file not found")
-
     return FileResponse(
         path=file_path,
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/photos/{photo_id}/thumbnail")
+def get_photo_thumbnail(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Serve the thumbnail/derivative of a photo, falling back to the original if not yet processed."""
+    photo = _get_photo_or_404(photo_id, db)
+    ext = photo.file_extension
+    media_type = EXTENSION_MIME_TYPES.get(ext, "application/octet-stream")
+    # Try derivative first, fall back to original if not yet generated
+    derivative_path = PHOTOS_DIR / "derivatives" / f"{photo.sha256_hash}.{ext}"
+    if derivative_path.exists():
+        file_path = derivative_path
+    else:
+        file_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Photo file not found")
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/photos/{photo_id}/file", include_in_schema=False)
+def get_photo_file(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Deprecated: redirects to /photos/{id}/thumbnail. Kept for backward compatibility."""
+    # Validate the photo exists before redirecting, so we return 404 rather than a broken redirect
+    _get_photo_or_404(photo_id, db)
+    app_origin = os.environ.get("APP_ORIGIN", "")
+    return RedirectResponse(
+        url=f"{app_origin}/photos/{photo_id}/thumbnail",
+        status_code=status.HTTP_301_MOVED_PERMANENTLY,
     )
 
 

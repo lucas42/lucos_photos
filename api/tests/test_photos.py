@@ -228,69 +228,35 @@ class TestGetPhoto:
 
 
 # ---------------------------------------------------------------------------
-# GET /photos/{id}/file
+# GET /photos/{id}/original
 # ---------------------------------------------------------------------------
 
-class TestGetPhotoFile:
+class TestGetPhotoOriginal:
     def test_requires_auth(self, client, db_session):
         photo = make_photo(db_session)
         db_session.commit()
-        response = client.get(f"/photos/{photo.id}/file")
+        response = client.get(f"/photos/{photo.id}/original")
         assert response.status_code == 401
 
     def test_returns_404_for_unknown_photo(self, authenticated_client):
-        response = authenticated_client.get(f"/photos/{uuid.uuid4()}/file")
+        response = authenticated_client.get(f"/photos/{uuid.uuid4()}/original")
         assert response.status_code == 404
 
     def test_returns_404_for_invalid_uuid(self, authenticated_client):
-        response = authenticated_client.get("/photos/not-a-uuid/file")
+        response = authenticated_client.get("/photos/not-a-uuid/original")
         assert response.status_code == 404
 
     def test_returns_404_when_file_not_on_disk(self, authenticated_client, db_session, monkeypatch, tmp_path):
         import app.main as main_module
         monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
 
-        photo = make_photo(db_session, "missingfile")
+        photo = make_photo(db_session, "missingoriginal")
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{photo.id}/file")
+        response = authenticated_client.get(f"/photos/{photo.id}/original")
         assert response.status_code == 404
 
-    def test_serves_derivative_by_default(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
-
-        photo = make_photo(db_session, "derivativetest")
-        db_session.commit()
-
-        # Write a derivative file
-        derivatives_dir = tmp_path / "derivatives"
-        derivatives_dir.mkdir(parents=True)
-        file_path = derivatives_dir / f"{photo.sha256_hash}.jpg"
-        file_path.write_bytes(b"derivative_content")
-
-        response = authenticated_client.get(f"/photos/{photo.id}/file")
-        assert response.status_code == 200
-        assert response.content == b"derivative_content"
-
-    def test_falls_back_to_original_when_no_derivative(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
-
-        photo = make_photo(db_session, "fallbacktest")
-        db_session.commit()
-
-        # Only write an original, no derivative
-        originals_dir = tmp_path / "originals"
-        originals_dir.mkdir(parents=True)
-        file_path = originals_dir / f"{photo.sha256_hash}.jpg"
-        file_path.write_bytes(b"original_content")
-
-        response = authenticated_client.get(f"/photos/{photo.id}/file")
-        assert response.status_code == 200
-        assert response.content == b"original_content"
-
-    def test_serves_original_when_requested(self, authenticated_client, db_session, monkeypatch, tmp_path):
+    def test_serves_original_file(self, authenticated_client, db_session, monkeypatch, tmp_path):
         import app.main as main_module
         monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
 
@@ -301,11 +267,12 @@ class TestGetPhotoFile:
         originals_dir.mkdir(parents=True)
         (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"original_content")
 
+        # Also write a derivative — endpoint should serve original regardless
         derivatives_dir = tmp_path / "derivatives"
         derivatives_dir.mkdir(parents=True)
         (derivatives_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"derivative_content")
 
-        response = authenticated_client.get(f"/photos/{photo.id}/file?original=true")
+        response = authenticated_client.get(f"/photos/{photo.id}/original")
         assert response.status_code == 200
         assert response.content == b"original_content"
 
@@ -313,14 +280,14 @@ class TestGetPhotoFile:
         import app.main as main_module
         monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
 
-        photo = make_photo(db_session, "contenttypetest", ext="jpg")
+        photo = make_photo(db_session, "originalcontenttype", ext="jpg")
         db_session.commit()
 
         originals_dir = tmp_path / "originals"
         originals_dir.mkdir(parents=True)
         (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"image_bytes")
 
-        response = authenticated_client.get(f"/photos/{photo.id}/file")
+        response = authenticated_client.get(f"/photos/{photo.id}/original")
         assert response.status_code == 200
         assert "image/jpeg" in response.headers["content-type"]
 
@@ -328,14 +295,133 @@ class TestGetPhotoFile:
         import app.main as main_module
         monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
 
-        photo = make_photo(db_session, "cachetest")
+        photo = make_photo(db_session, "originalcache")
         db_session.commit()
 
         originals_dir = tmp_path / "originals"
         originals_dir.mkdir(parents=True)
         (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"image_bytes")
 
-        response = authenticated_client.get(f"/photos/{photo.id}/file")
+        response = authenticated_client.get(f"/photos/{photo.id}/original")
         assert response.status_code == 200
         assert "Cache-Control" in response.headers
         assert "max-age" in response.headers["Cache-Control"]
+
+
+# ---------------------------------------------------------------------------
+# GET /photos/{id}/thumbnail
+# ---------------------------------------------------------------------------
+
+class TestGetPhotoThumbnail:
+    def test_requires_auth(self, client, db_session):
+        photo = make_photo(db_session)
+        db_session.commit()
+        response = client.get(f"/photos/{photo.id}/thumbnail")
+        assert response.status_code == 401
+
+    def test_returns_404_for_unknown_photo(self, authenticated_client):
+        response = authenticated_client.get(f"/photos/{uuid.uuid4()}/thumbnail")
+        assert response.status_code == 404
+
+    def test_returns_404_for_invalid_uuid(self, authenticated_client):
+        response = authenticated_client.get("/photos/not-a-uuid/thumbnail")
+        assert response.status_code == 404
+
+    def test_returns_404_when_file_not_on_disk(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "missingthumbnail")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail")
+        assert response.status_code == 404
+
+    def test_serves_derivative_when_available(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "thumbnailderivative")
+        db_session.commit()
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir(parents=True)
+        (derivatives_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"derivative_content")
+
+        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail")
+        assert response.status_code == 200
+        assert response.content == b"derivative_content"
+
+    def test_falls_back_to_original_when_no_derivative(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "thumbnailfallback")
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir(parents=True)
+        (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"original_content")
+
+        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail")
+        assert response.status_code == 200
+        assert response.content == b"original_content"
+
+    def test_sets_correct_content_type_for_jpg(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "thumbnailcontenttype", ext="jpg")
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir(parents=True)
+        (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"image_bytes")
+
+        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail")
+        assert response.status_code == 200
+        assert "image/jpeg" in response.headers["content-type"]
+
+    def test_sets_cache_control_header(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "thumbnailcache")
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir(parents=True)
+        (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"image_bytes")
+
+        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail")
+        assert response.status_code == 200
+        assert "Cache-Control" in response.headers
+        assert "max-age" in response.headers["Cache-Control"]
+
+
+# ---------------------------------------------------------------------------
+# GET /photos/{id}/file  (deprecated redirect)
+# ---------------------------------------------------------------------------
+
+class TestGetPhotoFileRedirect:
+    def test_requires_auth(self, client, db_session):
+        photo = make_photo(db_session)
+        db_session.commit()
+        response = client.get(f"/photos/{photo.id}/file", follow_redirects=False)
+        assert response.status_code == 401
+
+    def test_returns_404_for_unknown_photo(self, authenticated_client):
+        response = authenticated_client.get(f"/photos/{uuid.uuid4()}/file", follow_redirects=False)
+        assert response.status_code == 404
+
+    def test_returns_404_for_invalid_uuid(self, authenticated_client):
+        response = authenticated_client.get("/photos/not-a-uuid/file", follow_redirects=False)
+        assert response.status_code == 404
+
+    def test_redirects_to_thumbnail(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "redirecttest")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}/file", follow_redirects=False)
+        assert response.status_code == 301
+        assert f"/photos/{photo.id}/thumbnail" in response.headers["location"]
