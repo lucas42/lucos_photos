@@ -326,12 +326,22 @@ class TestUploadLimits:
             assert response.json() == {"detail": "File too large"}
 
     def test_file_too_large_enforced_during_streaming(self, client, tmp_path):
-        """Size limit is enforced incrementally during the stream, not just on Content-Length."""
-        # Patch MAX_PHOTO_SIZE to something smaller than the valid image
-        with patch("app.main.MAX_PHOTO_SIZE", len(VALID_IMAGE_CONTENT) - 1):
+        """Size limit is enforced incrementally during the stream, not just on Content-Length.
+
+        Patches UploadFile.__init__ to keep size=None throughout the request, bypassing the
+        fast-path Content-Length check and forcing the streaming-path size enforcement to run.
+        """
+        from starlette.datastructures import UploadFile as StUploadFile
+        _original_init = StUploadFile.__init__
+
+        def _force_size_none(self, *args, **kwargs):
+            _original_init(self, *args, **kwargs)
+            self.size = None
+
+        with patch("app.main.MAX_PHOTO_SIZE", len(VALID_IMAGE_CONTENT) - 1), \
+             patch.object(StUploadFile, "__init__", _force_size_none):
             response = client.post(
                 "/photos",
-                # Omit file.size by not providing a named tuple — TestClient sends the bytes directly
                 files={"file": ("photo.jpg", VALID_IMAGE_CONTENT, "image/jpeg")},
                 headers=AUTH_HEADER,
             )
@@ -339,16 +349,29 @@ class TestUploadLimits:
         assert response.json() == {"detail": "File too large"}
 
     def test_no_temp_file_left_on_size_exceeded(self, client, tmp_path):
-        """If the size limit is hit during streaming, no temp files should remain in uploads dir."""
-        with patch("app.main.MAX_PHOTO_SIZE", 10):
+        """If the streaming path hits the size limit, no temp files should remain in uploads dir.
+
+        Patches UploadFile.__init__ to keep size=None throughout the request, bypassing the
+        fast-path Content-Length check so the streaming-path cleanup logic is actually exercised.
+        Without this patch, file.size would be set by Starlette to the actual byte length, and the
+        fast-path would reject the upload before any temp file is ever created — making the test
+        pass trivially without testing the cleanup in the finally block.
+        """
+        from starlette.datastructures import UploadFile as StUploadFile
+        _original_init = StUploadFile.__init__
+
+        def _force_size_none(self, *args, **kwargs):
+            _original_init(self, *args, **kwargs)
+            self.size = None
+
+        with patch("app.main.MAX_PHOTO_SIZE", 10), \
+             patch.object(StUploadFile, "__init__", _force_size_none):
             client.post(
                 "/photos",
                 files={"file": ("photo.jpg", b"exceeds the limit by quite a lot", "image/jpeg")},
                 headers=AUTH_HEADER,
             )
-        # tmp_path is the UPLOADS_DIR; only expected file is the one for the valid upload, not a stray temp file
         remaining = list(tmp_path.iterdir())
-        # There should be no files left (the upload was rejected)
         assert remaining == []
 
     def test_insufficient_storage_returns_507(self, client):

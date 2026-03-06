@@ -75,6 +75,8 @@ _CONTENT_TYPE_TO_EXT = {
     "image/png": "png",
     "image/heic": "heic",
     "image/heif": "heif",
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
 }
 
 _redis_conn: Redis | None = None
