@@ -98,15 +98,15 @@ def get_db():
         db.close()
 
 
-WWW_AUTHENTICATE = {"WWW-Authenticate": 'key realm="lucos_photos"'}
+WWW_AUTHENTICATE = {"WWW-Authenticate": 'Bearer realm="lucos_photos"'}
 
 
 def verify_key(authorization: Annotated[str | None, Header()] = None):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required", headers=WWW_AUTHENTICATE)
     parts = authorization.split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "key":
-        raise HTTPException(status_code=401, detail="Expected 'key' authorization scheme", headers=WWW_AUTHENTICATE)
+    if len(parts) != 2 or parts[0].lower() not in ("bearer", "key"):
+        raise HTTPException(status_code=401, detail="Expected 'Bearer' authorization scheme", headers=WWW_AUTHENTICATE)
     token = parts[1]
     client_keys_str = os.environ.get("CLIENT_KEYS", "")
     valid_keys = {entry.split("=", 1)[1] for entry in client_keys_str.split(";") if "=" in entry}
