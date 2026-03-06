@@ -621,9 +621,11 @@ def get_photo_file(
     """Deprecated: redirects to /photos/{id}/thumbnail. Kept for backward compatibility."""
     # Validate the photo exists before redirecting, so we return 404 rather than a broken redirect
     _get_photo_or_404(photo_id, db)
-    app_origin = os.environ.get("APP_ORIGIN", "")
+    # Use a relative redirect URL so there is no possibility of an open redirect to an external origin.
+    # safe_path ensures the constructed path cannot be a protocol-relative or absolute URL.
+    redirect_path = safe_path(f"/photos/{photo_id}/thumbnail")
     return RedirectResponse(
-        url=f"{app_origin}/photos/{photo_id}/thumbnail",
+        url=redirect_path,
         status_code=status.HTTP_301_MOVED_PERMANENTLY,
     )
 
