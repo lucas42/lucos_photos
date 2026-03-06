@@ -25,6 +25,11 @@ updates:
   - dependency-type: direct
   - dependency-type: indirect
 - package-ecosystem: docker
+  directory: "/"
+  schedule:
+    interval: daily
+    time: "07:00"
+- package-ecosystem: docker
   directory: "/api"
   schedule:
     interval: daily
