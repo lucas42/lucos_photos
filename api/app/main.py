@@ -6,7 +6,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Annotated, Optional
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile, status
@@ -23,6 +23,24 @@ from lucos_photos_common.database import SessionLocal
 from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 AUTH_DOMAIN = "https://auth.l42.eu"
+
+
+def safe_path(path: str, fallback: str = "/") -> str:
+    """Validate a URL path to prevent open redirects.
+
+    Only allows relative paths (no scheme or netloc). Anything that would be
+    interpreted as an external URL — e.g. //evil.com (protocol-relative) or
+    https://evil.com — is rejected and replaced with the fallback.
+
+    This should be applied to user-influenced path components *before* they are
+    combined with APP_ORIGIN, so that an empty APP_ORIGIN cannot be combined
+    with a crafted path to produce an external redirect.
+    """
+    parsed = urlparse(path)
+    if parsed.scheme or parsed.netloc:
+        return fallback
+    return path
+
 
 app = FastAPI(title="lucos_photos")
 
@@ -146,7 +164,11 @@ async def verify_session(request: Request, auth_token: Annotated[str | None, Coo
         if data and data.get("id"):
             # Strip the token from the URL so it doesn't linger in browser history
             app_origin = os.environ.get("APP_ORIGIN", "")
-            clean_url = f"{app_origin}{request.url.path}"
+            # Validate the path before combining with APP_ORIGIN to prevent open redirects:
+            # a crafted path like //evil.com would become a valid external redirect if
+            # APP_ORIGIN is empty.
+            path = safe_path(request.url.path)
+            clean_url = f"{app_origin}{path}"
             # Preserve any other query params except 'token'
             other_params = {k: v for k, v in request.query_params.items() if k != "token"}
             if other_params:
