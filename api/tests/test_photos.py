@@ -3,7 +3,7 @@ import uuid
 
 import pytest
 
-from lucos_photos_common.models import Face, Person, Photo, PhotoPerson, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, Person, Photo, PhotoPerson, ProcessingState, ProcessingStatus
 
 # AUTH_HEADER is used for the upload endpoint (POST /photos) which uses CLIENT_KEYS / M2M auth.
 # User-facing GET endpoints use session auth — tests for those use the authenticated_client fixture.
@@ -437,3 +437,206 @@ class TestGetPhotoFileRedirect:
         # A relative path starts with '/' and contains no scheme or netloc
         assert location.startswith("/"), f"Expected relative path, got: {location}"
         assert "://" not in location, f"Redirect must not contain a scheme: {location}"
+
+
+# ---------------------------------------------------------------------------
+# Range request support on GET /photos/{id}/original
+# ---------------------------------------------------------------------------
+
+def make_video(db, sha_seed="video", ext="mp4"):
+    sha = hashlib.sha256(sha_seed.encode()).hexdigest()
+    video = MediaItem(sha256_hash=sha, file_extension=ext, media_type="video")
+    db.add(video)
+    db.flush()
+    return video
+
+
+class TestRangeRequests:
+    def _write_original(self, tmp_path, photo, content=b"0123456789"):
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir(parents=True, exist_ok=True)
+        (originals_dir / f"{photo.sha256_hash}.{photo.file_extension}").write_bytes(content)
+        return content
+
+    def test_no_range_header_returns_200_with_accept_ranges(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        photo = make_photo(db_session, "range_full")
+        db_session.commit()
+        content = self._write_original(tmp_path, photo)
+
+        response = authenticated_client.get(f"/photos/{photo.id}/original")
+        assert response.status_code == 200
+        assert response.headers.get("accept-ranges") == "bytes"
+        assert response.content == content
+
+    def test_range_request_returns_206(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        photo = make_photo(db_session, "range_partial")
+        db_session.commit()
+        self._write_original(tmp_path, photo, b"0123456789")
+
+        response = authenticated_client.get(
+            f"/photos/{photo.id}/original",
+            headers={"Range": "bytes=2-5"},
+        )
+        assert response.status_code == 206
+        assert response.content == b"2345"
+        assert response.headers["content-range"] == "bytes 2-5/10"
+        assert response.headers.get("accept-ranges") == "bytes"
+
+    def test_range_request_from_start(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        photo = make_photo(db_session, "range_from_start")
+        db_session.commit()
+        self._write_original(tmp_path, photo, b"abcdefghij")
+
+        response = authenticated_client.get(
+            f"/photos/{photo.id}/original",
+            headers={"Range": "bytes=0-3"},
+        )
+        assert response.status_code == 206
+        assert response.content == b"abcd"
+        assert response.headers["content-range"] == "bytes 0-3/10"
+
+    def test_range_request_open_ended(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        """bytes=5- means from byte 5 to end of file."""
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        photo = make_photo(db_session, "range_open_end")
+        db_session.commit()
+        self._write_original(tmp_path, photo, b"0123456789")
+
+        response = authenticated_client.get(
+            f"/photos/{photo.id}/original",
+            headers={"Range": "bytes=5-"},
+        )
+        assert response.status_code == 206
+        assert response.content == b"56789"
+        assert response.headers["content-range"] == "bytes 5-9/10"
+
+    def test_range_request_suffix(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        """bytes=-3 means the last 3 bytes."""
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        photo = make_photo(db_session, "range_suffix")
+        db_session.commit()
+        self._write_original(tmp_path, photo, b"0123456789")
+
+        response = authenticated_client.get(
+            f"/photos/{photo.id}/original",
+            headers={"Range": "bytes=-3"},
+        )
+        assert response.status_code == 206
+        assert response.content == b"789"
+        assert response.headers["content-range"] == "bytes 7-9/10"
+
+    def test_invalid_range_returns_416(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        """Range start beyond end of file should return 416."""
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        photo = make_photo(db_session, "range_invalid")
+        db_session.commit()
+        self._write_original(tmp_path, photo, b"0123456789")
+
+        response = authenticated_client.get(
+            f"/photos/{photo.id}/original",
+            headers={"Range": "bytes=100-200"},
+        )
+        assert response.status_code == 416
+
+    def test_inverted_range_returns_416(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        """Range where start > end should return 416."""
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        photo = make_photo(db_session, "range_inverted")
+        db_session.commit()
+        self._write_original(tmp_path, photo, b"0123456789")
+
+        response = authenticated_client.get(
+            f"/photos/{photo.id}/original",
+            headers={"Range": "bytes=5-2"},
+        )
+        assert response.status_code == 416
+
+    def test_malformed_range_returns_416(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        """Malformed Range header should return 416."""
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        photo = make_photo(db_session, "range_malformed")
+        db_session.commit()
+        self._write_original(tmp_path, photo, b"0123456789")
+
+        response = authenticated_client.get(
+            f"/photos/{photo.id}/original",
+            headers={"Range": "bytes=abc-def"},
+        )
+        assert response.status_code == 416
+
+
+# ---------------------------------------------------------------------------
+# Video thumbnail — GET /photos/{id}/thumbnail for video media items
+# ---------------------------------------------------------------------------
+
+class TestVideoThumbnail:
+    def test_returns_404_when_thumbnail_not_yet_generated(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        video = make_video(db_session, "vid_nothumbnail")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{video.id}/thumbnail")
+        assert response.status_code == 404
+
+    def test_serves_jpeg_thumbnail_for_video(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        video = make_video(db_session, "vid_thumb")
+        db_session.commit()
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir(parents=True)
+        thumb_content = b"jpeg_thumbnail_bytes"
+        (derivatives_dir / f"{video.sha256_hash}_thumb.jpg").write_bytes(thumb_content)
+
+        response = authenticated_client.get(f"/photos/{video.id}/thumbnail")
+        assert response.status_code == 200
+        assert response.content == thumb_content
+        assert "image/jpeg" in response.headers["content-type"]
+
+    def test_video_thumbnail_has_cache_control(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        video = make_video(db_session, "vid_cache")
+        db_session.commit()
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir(parents=True)
+        (derivatives_dir / f"{video.sha256_hash}_thumb.jpg").write_bytes(b"bytes")
+
+        response = authenticated_client.get(f"/photos/{video.id}/thumbnail")
+        assert response.status_code == 200
+        assert "Cache-Control" in response.headers
+        assert "max-age" in response.headers["Cache-Control"]
+
+    def test_video_does_not_fall_back_to_original(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        """For videos, we should NOT fall back to the original video file as thumbnail."""
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        video = make_video(db_session, "vid_nofallback")
+        db_session.commit()
+
+        # Write original but no thumbnail
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir(parents=True)
+        (originals_dir / f"{video.sha256_hash}.mp4").write_bytes(b"video_bytes")
+
+        # Should return 404 because there's no _thumb.jpg
+        response = authenticated_client.get(f"/photos/{video.id}/thumbnail")
+        assert response.status_code == 404
