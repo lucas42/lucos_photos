@@ -14,6 +14,7 @@
             --accent-glow: rgba(56, 189, 248, 0.4);
             --card-bg: #1e293b;
             --empty-color: #64748b;
+            --processing-color: #94a3b8;
         }
 
         * {
@@ -50,6 +51,97 @@
             transition: opacity 0.3s ease;
         }
 
+        /* ------------------------------------------------------------------ */
+        /* Media cards                                                          */
+        /* ------------------------------------------------------------------ */
+
+        .media-card {
+            position: relative;
+            background: var(--card-bg);
+            border-radius: 12px;
+            overflow: hidden;
+            cursor: pointer;
+            aspect-ratio: 4 / 3;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .media-card:hover {
+            transform: scale(1.02);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        .media-card img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* Play icon overlay for videos */
+        .media-card .play-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.25);
+            pointer-events: none;
+        }
+
+        .media-card .play-overlay svg {
+            width: 56px;
+            height: 56px;
+            fill: rgba(255, 255, 255, 0.85);
+            filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6));
+            transition: transform 0.2s ease;
+        }
+
+        .media-card:hover .play-overlay svg {
+            transform: scale(1.1);
+        }
+
+        /* Processing placeholder card */
+        .media-card.processing {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            cursor: default;
+            background: var(--card-bg);
+        }
+
+        .media-card.processing:hover {
+            transform: none;
+            box-shadow: none;
+        }
+
+        .media-card .processing-label {
+            color: var(--processing-color);
+            font-size: 0.8rem;
+            font-weight: 500;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        /* Spinner animation */
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .spinner {
+            width: 36px;
+            height: 36px;
+            border: 3px solid rgba(148, 163, 184, 0.2);
+            border-top-color: var(--processing-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* Empty state                                                          */
+        /* ------------------------------------------------------------------ */
+
         .empty-state {
             display: flex;
             flex-direction: column;
@@ -58,6 +150,7 @@
             height: 60vh;
             color: var(--empty-color);
             animation: fadeIn 0.8s ease-out;
+            grid-column: 1 / -1;
         }
 
         .empty-state svg {
@@ -92,7 +185,72 @@
             }
         }
 
-        /* Subtle animated background */
+        /* ------------------------------------------------------------------ */
+        /* Lightbox                                                             */
+        /* ------------------------------------------------------------------ */
+
+        .lightbox {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.92);
+            align-items: center;
+            justify-content: center;
+        }
+
+        .lightbox.open {
+            display: flex;
+        }
+
+        .lightbox-inner {
+            position: relative;
+            max-width: 95vw;
+            max-height: 92vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .lightbox-inner img {
+            max-width: 95vw;
+            max-height: 90vh;
+            object-fit: contain;
+            border-radius: 6px;
+            box-shadow: 0 16px 64px rgba(0, 0, 0, 0.8);
+        }
+
+        .lightbox-inner video {
+            max-width: 95vw;
+            max-height: 90vh;
+            border-radius: 6px;
+            box-shadow: 0 16px 64px rgba(0, 0, 0, 0.8);
+            outline: none;
+        }
+
+        .lightbox-close {
+            position: fixed;
+            top: 1.25rem;
+            right: 1.5rem;
+            background: none;
+            border: none;
+            color: var(--text-color);
+            font-size: 2rem;
+            line-height: 1;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: opacity 0.15s ease;
+            padding: 0.25rem 0.5rem;
+        }
+
+        .lightbox-close:hover {
+            opacity: 1;
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* Background glow                                                      */
+        /* ------------------------------------------------------------------ */
+
         .bg-glow {
             position: fixed;
             top: 0;
@@ -154,21 +312,179 @@
     <main>
         <div class="container" id="app">
             <div id="photo-grid" class="photo-grid">
-                <!-- Placeholder / Empty State -->
-                <div class="empty-state">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round"
-                            d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6.75a1.5 1.5 0 00-1.5-1.5H3.75a1.5 1.5 0 00-1.5 1.5v12.75a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-                    </svg>
-                    <p>No photos here yet.</p>
-                </div>
+                <!-- Populated by JS -->
             </div>
         </div>
     </main>
 
+    <!-- Lightbox overlay -->
+    <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Media viewer">
+        <button class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
+        <div class="lightbox-inner" id="lightbox-inner">
+            <!-- Photo or video element injected by JS -->
+        </div>
+    </div>
+
     <script src="/lucos_navbar.js" type="text/javascript"></script>
     <script>
-        // Placeholder for future logic to fetch and display photos
+        const grid = document.getElementById('photo-grid');
+        const lightbox = document.getElementById('lightbox');
+        const lightboxInner = document.getElementById('lightbox-inner');
+        const lightboxClose = document.getElementById('lightbox-close');
+
+        // ------------------------------------------------------------------
+        // Lightbox
+        // ------------------------------------------------------------------
+
+        function openLightbox(mediaItem) {
+            lightboxInner.innerHTML = '';
+
+            if (mediaItem.mediaType === 'video') {
+                const video = document.createElement('video');
+                video.src = `/photos/${mediaItem.id}/original`;
+                video.controls = true;
+                video.autoplay = true;
+                video.preload = 'metadata';
+                lightboxInner.appendChild(video);
+            } else {
+                const img = document.createElement('img');
+                img.src = `/photos/${mediaItem.id}/original`;
+                img.alt = `Photo ${mediaItem.id}`;
+                lightboxInner.appendChild(img);
+            }
+
+            lightbox.classList.add('open');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeLightbox() {
+            lightbox.classList.remove('open');
+            document.body.style.overflow = '';
+            // Pause any playing video to stop audio/network activity
+            const video = lightboxInner.querySelector('video');
+            if (video) video.pause();
+            lightboxInner.innerHTML = '';
+        }
+
+        lightboxClose.addEventListener('click', closeLightbox);
+
+        lightbox.addEventListener('click', (e) => {
+            if (e.target === lightbox) closeLightbox();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && lightbox.classList.contains('open')) {
+                closeLightbox();
+            }
+        });
+
+        // ------------------------------------------------------------------
+        // Media card rendering
+        // ------------------------------------------------------------------
+
+        function renderEmptyState() {
+            const div = document.createElement('div');
+            div.className = 'empty-state';
+            div.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                        d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6.75a1.5 1.5 0 00-1.5-1.5H3.75a1.5 1.5 0 00-1.5 1.5v12.75a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                </svg>
+                <p>No photos here yet.</p>
+            `;
+            grid.appendChild(div);
+        }
+
+        function renderProcessingCard() {
+            const card = document.createElement('div');
+            card.className = 'media-card processing';
+            card.innerHTML = `
+                <div class="spinner"></div>
+                <span class="processing-label">Processing&hellip;</span>
+            `;
+            return card;
+        }
+
+        function renderVideoPlayOverlay() {
+            const overlay = document.createElement('div');
+            overlay.className = 'play-overlay';
+            overlay.innerHTML = `
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M8 5v14l11-7z"/>
+                </svg>
+            `;
+            return overlay;
+        }
+
+        function renderMediaCard(item) {
+            const isVideo = item.mediaType === 'video';
+
+            const card = document.createElement('div');
+            card.className = 'media-card';
+
+            const img = document.createElement('img');
+            img.alt = isVideo ? `Video ${item.id}` : `Photo ${item.id}`;
+            img.loading = 'lazy';
+
+            if (isVideo) {
+                img.src = `/photos/${item.id}/thumbnail`;
+                img.onerror = () => {
+                    // Thumbnail not yet available — replace card with processing state
+                    card.innerHTML = '';
+                    card.className = 'media-card processing';
+                    card.innerHTML = `
+                        <div class="spinner"></div>
+                        <span class="processing-label">Processing&hellip;</span>
+                    `;
+                    card.removeEventListener('click', clickHandler);
+                };
+                card.appendChild(img);
+                card.appendChild(renderVideoPlayOverlay());
+            } else {
+                img.src = `/photos/${item.id}/thumbnail`;
+                card.appendChild(img);
+            }
+
+            function clickHandler() {
+                openLightbox(item);
+            }
+
+            card.addEventListener('click', clickHandler);
+
+            return card;
+        }
+
+        // ------------------------------------------------------------------
+        // Load media from API
+        // ------------------------------------------------------------------
+
+        async function loadMedia() {
+            try {
+                const response = await fetch('/photos?limit=200');
+                if (!response.ok) {
+                    throw new Error(`API responded with ${response.status}`);
+                }
+                const data = await response.json();
+                const items = data.photos || [];
+
+                grid.innerHTML = '';
+
+                if (items.length === 0) {
+                    renderEmptyState();
+                    return;
+                }
+
+                for (const item of items) {
+                    grid.appendChild(renderMediaCard(item));
+                }
+            } catch (err) {
+                console.error('Failed to load media:', err);
+                grid.innerHTML = '';
+                renderEmptyState();
+            }
+        }
+
+        loadMedia();
     </script>
 </body>
 
