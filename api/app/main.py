@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -10,7 +11,7 @@ from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from PIL import Image
 from redis import Redis
 from rq import Queue
@@ -132,6 +133,97 @@ def enqueue_process_media(photo_id: str, media_type: str = "photo") -> None:
 
 # Keep the old name as an alias for backwards compatibility
 enqueue_process_photo = enqueue_process_media
+
+
+_RANGE_CHUNK_SIZE = 256 * 1024  # 256 KB streaming chunks for range responses
+
+
+def _serve_file_with_range_support(
+    file_path: Path,
+    media_type: str,
+    extra_headers: dict | None = None,
+    range_header: str | None = None,
+) -> Response:
+    """Serve a file with HTTP range request support.
+
+    Returns:
+    - 206 Partial Content with the requested byte range if a valid Range header is present.
+    - 416 Range Not Satisfiable if the range is invalid.
+    - 200 OK with the full file and `Accept-Ranges: bytes` if no Range header is given.
+
+    All responses include `Accept-Ranges: bytes` so clients know they can request ranges.
+    """
+    file_size = file_path.stat().st_size
+    headers = dict(extra_headers or {})
+    headers["Accept-Ranges"] = "bytes"
+
+    if range_header:
+        # Parse "bytes=start-end" (end is inclusive)
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+        if not match:
+            raise HTTPException(
+                status_code=416,
+                detail="Range Not Satisfiable",
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        start_str, end_str = match.group(1), match.group(2)
+
+        if start_str == "" and end_str == "":
+            raise HTTPException(
+                status_code=416,
+                detail="Range Not Satisfiable",
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        if start_str == "":
+            # Suffix range: last N bytes
+            suffix_length = int(end_str)
+            start = max(0, file_size - suffix_length)
+            end = file_size - 1
+        elif end_str == "":
+            start = int(start_str)
+            end = file_size - 1
+        else:
+            start = int(start_str)
+            end = int(end_str)
+
+        if start > end or start >= file_size or end >= file_size:
+            raise HTTPException(
+                status_code=416,
+                detail="Range Not Satisfiable",
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        content_length = end - start + 1
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+        headers["Content-Length"] = str(content_length)
+
+        def _iter_file_range():
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk = f.read(min(_RANGE_CHUNK_SIZE, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        return StreamingResponse(
+            _iter_file_range(),
+            status_code=206,
+            media_type=media_type,
+            headers=headers,
+        )
+
+    # No range header — serve the full file with Accept-Ranges advertised
+    headers["Content-Length"] = str(file_size)
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        headers=headers,
+    )
 
 
 def get_db():
@@ -572,18 +664,20 @@ def get_photo_original(
     photo_id: str,
     _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
+    range: Annotated[str | None, Header()] = None,
 ):
-    """Serve the full-resolution original photo file."""
+    """Serve the full-resolution original file, with HTTP range request support for video seeking."""
     photo = _get_photo_or_404(photo_id, db)
     ext = photo.file_extension
     media_type = EXTENSION_MIME_TYPES.get(ext, "application/octet-stream")
     file_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Photo file not found")
-    return FileResponse(
-        path=file_path,
+    return _serve_file_with_range_support(
+        file_path=file_path,
         media_type=media_type,
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        extra_headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        range_header=range,
     )
 
 
@@ -593,11 +687,27 @@ def get_photo_thumbnail(
     _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
-    """Serve the thumbnail/derivative of a photo, falling back to the original if not yet processed."""
+    """Serve the thumbnail/derivative of a media item.
+
+    For photos: tries a resized derivative, falls back to the original.
+    For videos: serves the ffmpeg-generated JPEG thumbnail (``{hash}_thumb.jpg``).
+    """
     photo = _get_photo_or_404(photo_id, db)
     ext = photo.file_extension
+
+    if photo.media_type == "video":
+        # Video thumbnails are JPEG stills extracted by the worker
+        thumb_path = PHOTOS_DIR / "derivatives" / f"{photo.sha256_hash}_thumb.jpg"
+        if not thumb_path.exists():
+            raise HTTPException(status_code=404, detail="Thumbnail not yet available")
+        return FileResponse(
+            path=thumb_path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    # Photos: try resized derivative first, fall back to original
     media_type = EXTENSION_MIME_TYPES.get(ext, "application/octet-stream")
-    # Try derivative first, fall back to original if not yet generated
     derivative_path = PHOTOS_DIR / "derivatives" / f"{photo.sha256_hash}.{ext}"
     if derivative_path.exists():
         file_path = derivative_path
