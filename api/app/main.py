@@ -5,6 +5,7 @@ import re
 import shutil
 import tempfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Optional
 from urllib.parse import quote, urlencode, urlparse
@@ -524,9 +525,31 @@ async def upload_photo(
             except Exception:
                 raise HTTPException(status_code=422, detail="Invalid image file")
 
-        # Idempotency: if a media item with this hash already exists, return it
+        # Parse the X-Taken-At header (Unix milliseconds) into a timezone-aware datetime.
+        # This is a client-supplied hint (e.g. MediaStore DATE_TAKEN on Android) used as a
+        # fallback taken_at for photos that lack an EXIF DateTimeOriginal tag.  The worker
+        # will overwrite this with the EXIF value if one is present, since EXIF is more
+        # authoritative than the OS-level timestamp.
+        client_taken_at = None
+        if x_taken_at:
+            try:
+                taken_at_ms = int(x_taken_at)
+                if taken_at_ms > 0:
+                    client_taken_at = datetime.fromtimestamp(taken_at_ms / 1000.0, tz=timezone.utc)
+            except (ValueError, OverflowError, OSError):
+                # Ignore malformed or out-of-range values; taken_at will remain null.
+                pass
+
+        # Idempotency: if a media item with this hash already exists, return it.
+        # If the existing record lacks taken_at and the client supplied one this time,
+        # update the record — the first upload may have been sent without the header.
         existing = db.query(MediaItem).filter(MediaItem.sha256_hash == sha256_hash).first()
         if existing:
+            if client_taken_at is not None and existing.taken_at is None:
+                existing.taken_at = client_taken_at
+                db.commit()
+                db.refresh(existing)
+                print(f"upload_photo: updated taken_at to client-supplied {client_taken_at} for existing photo {sha256_hash}", flush=True)
             return JSONResponse(status_code=200, content=photo_to_dict(existing))
 
         # Determine file extension from filename, falling back to content type
@@ -540,21 +563,8 @@ async def upload_photo(
         tmp_path.rename(file_path)
         tmp_path = None  # temp file has been moved; don't delete it in finally block
 
-        # Parse the X-Taken-At header (Unix milliseconds) into a timezone-aware datetime.
-        # This is a client-supplied hint (e.g. MediaStore DATE_TAKEN on Android) used as a
-        # fallback taken_at for photos that lack an EXIF DateTimeOriginal tag.  The worker
-        # will overwrite this with the EXIF value if one is present, since EXIF is more
-        # authoritative than the OS-level timestamp.
-        client_taken_at = None
-        if x_taken_at:
-            try:
-                taken_at_ms = int(x_taken_at)
-                if taken_at_ms > 0:
-                    from datetime import datetime as _datetime, timezone as _tz
-                    client_taken_at = _datetime.fromtimestamp(taken_at_ms / 1000.0, tz=_tz.utc)
-            except (ValueError, OverflowError, OSError):
-                # Ignore malformed or out-of-range values; taken_at will remain null.
-                pass
+        if client_taken_at is not None:
+            print(f"upload_photo: storing client-supplied taken_at {client_taken_at} for photo {sha256_hash}", flush=True)
 
         try:
             # Create media item record and initial processing status

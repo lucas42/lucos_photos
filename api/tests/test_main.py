@@ -252,6 +252,43 @@ class TestUpload:
         second = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
         assert first.json()["id"] == second.json()["id"]
 
+    def test_duplicate_upload_with_x_taken_at_updates_null_taken_at(self, client):
+        """Re-uploading the same photo with X-Taken-At should backfill taken_at if it was null on the first upload."""
+        content = VALID_IMAGE_CONTENT
+        # First upload without X-Taken-At — taken_at is null
+        first = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+        assert first.json()["takenAt"] is None
+        # Second upload of same photo with X-Taken-At — taken_at should be updated
+        second = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "1700000000000"},
+        )
+        assert second.status_code == 200
+        assert second.json()["id"] == first.json()["id"]
+        assert second.json()["takenAt"] is not None
+        assert "2023-11-14" in second.json()["takenAt"]
+
+    def test_duplicate_upload_does_not_overwrite_existing_taken_at(self, client):
+        """Re-uploading a photo that already has taken_at set should not overwrite it."""
+        content = VALID_IMAGE_CONTENT
+        # First upload with X-Taken-At
+        first = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "1700000000000"},
+        )
+        original_taken_at = first.json()["takenAt"]
+        assert original_taken_at is not None
+        # Second upload with a different X-Taken-At — should not change the existing value
+        second = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "1600000000000"},
+        )
+        assert second.status_code == 200
+        assert second.json()["takenAt"] == original_taken_at
+
     def test_extension_taken_from_filename(self, client):
         response = client.post(
             "/photos",
