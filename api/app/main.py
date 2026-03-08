@@ -369,6 +369,11 @@ async def icon():
     return FileResponse(STATIC_DIR / "icon.png")
 
 
+@app.get("/style.css", include_in_schema=False)
+async def style():
+    return FileResponse(STATIC_DIR / "style.css")
+
+
 @app.get("/lucos_navbar.js", include_in_schema=False)
 async def navbar_js():
     return FileResponse(STATIC_DIR / "lucos_navbar.js")
