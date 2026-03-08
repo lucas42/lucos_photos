@@ -585,8 +585,17 @@ def list_photos(
     else:
         order_col = MediaItem.uploaded_at.desc()
 
-    photos = db.query(MediaItem).order_by(order_col).offset(offset).limit(limit).all()
-    total = db.query(MediaItem).count()
+    # Only include media items that have been fully processed (thumbnail generated,
+    # face detection complete). Items with pending/processing/failed status — or no
+    # status row at all — are hidden until the worker finishes with them.
+    processed_filter = (
+        db.query(MediaItem)
+        .join(ProcessingStatus, MediaItem.id == ProcessingStatus.photo_id)
+        .filter(ProcessingStatus.state == ProcessingState.complete)
+    )
+
+    photos = processed_filter.order_by(order_col).offset(offset).limit(limit).all()
+    total = processed_filter.count()
     return {
         "photos": [photo_to_dict(p) for p in photos],
         "total": total,
