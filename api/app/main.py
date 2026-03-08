@@ -12,6 +12,7 @@ from urllib.parse import quote, urlencode, urlparse
 import httpx
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from redis import Redis
 from rq import Queue
@@ -363,21 +364,7 @@ def healthcheck():
 async def root(_: Annotated[None, Depends(verify_session)]):
     return FileResponse(STATIC_DIR / "index.html")
 
-@app.get("/icon", include_in_schema=False)
-async def icon():
-    return FileResponse(STATIC_DIR / "icon.png")
-
-@app.get("/PinyonScript-Regular.ttf", include_in_schema=False)
-async def style():
-    return FileResponse(STATIC_DIR / "PinyonScript-Regular.ttf")
-
-@app.get("/style.css", include_in_schema=False)
-async def style():
-    return FileResponse(STATIC_DIR / "style.css")
-
-@app.get("/lucos_navbar.js", include_in_schema=False)
-async def navbar_js():
-    return FileResponse(STATIC_DIR / "lucos_navbar.js")
+app.mount("/", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 CHECK_TIMEOUT = 0.5  # seconds — must be well under monitoring system's 1s hard limit
@@ -475,7 +462,7 @@ async def info():
         "ci": {
             "circle": "gh/lucas42/lucos_photos",
         },
-        "icon": "/icon",
+        "icon": "/icon.png",
         "network_only": True,
         "title": "Photos",
         "show_on_homepage": True,
