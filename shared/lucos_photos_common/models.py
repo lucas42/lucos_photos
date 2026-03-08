@@ -39,7 +39,7 @@ class MediaItem(Base):
 
     faces: Mapped[list["Face"]] = relationship(back_populates="media_item")
     processing_status: Mapped[Optional["ProcessingStatus"]] = relationship(back_populates="media_item", uselist=False)
-    photo_persons: Mapped[list["PhotoPerson"]] = relationship(back_populates="media_item")
+    photo_people: Mapped[list["PhotoPerson"]] = relationship(back_populates="media_item")
 
 
 # Keep Photo as an alias so existing imports don't break all at once.
@@ -75,7 +75,7 @@ class Person(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     faces: Mapped[list["Face"]] = relationship(back_populates="person")
-    photo_persons: Mapped[list["PhotoPerson"]] = relationship(back_populates="person")
+    photo_people: Mapped[list["PhotoPerson"]] = relationship(back_populates="person")
 
 
 class Face(Base):
@@ -113,8 +113,8 @@ class PhotoPerson(Base):
     photo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("media_item.id"), primary_key=True)
     person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("person.id"), primary_key=True)
 
-    media_item: Mapped["MediaItem"] = relationship(back_populates="photo_persons")
-    person: Mapped["Person"] = relationship(back_populates="photo_persons")
+    media_item: Mapped["MediaItem"] = relationship(back_populates="photo_people")
+    person: Mapped["Person"] = relationship(back_populates="photo_people")
 
     @property
     def photo(self) -> "MediaItem":

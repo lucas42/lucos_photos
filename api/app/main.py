@@ -616,7 +616,7 @@ def get_photo(
     data = photo_to_dict(photo)
     data["processingStatus"] = processing_status.state.value if processing_status else None
     data["faces"] = [face_to_dict_simple(f) for f in faces]
-    data["persons"] = [
+    data["people"] = [
         str(pp.person_id)
         for pp in db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo_uuid).all()
     ]
@@ -758,8 +758,8 @@ def person_to_dict(person: Person, photo_count: Optional[int] = None) -> dict:
     return data
 
 
-@app.get("/persons")
-def list_persons(
+@app.get("/people")
+def list_people(
     _: Annotated[None, Depends(verify_session)],
     includePhotoCounts: bool = False,
     limit: int = 100,
@@ -775,14 +775,14 @@ def list_persons(
             func.count(PhotoPerson.photo_id).label("photo_count")
         ).outerjoin(PhotoPerson).group_by(Person.id).order_by(Person.created_at.asc())
 
-        persons_with_counts = query.offset(offset).limit(limit).all()
-        return [person_to_dict(p, count) for p, count in persons_with_counts]
+        people_with_counts = query.offset(offset).limit(limit).all()
+        return [person_to_dict(p, count) for p, count in people_with_counts]
     else:
-        persons = query.offset(offset).limit(limit).all()
-        return [person_to_dict(p) for p in persons]
+        people = query.offset(offset).limit(limit).all()
+        return [person_to_dict(p) for p in people]
 
 
-@app.post("/persons", status_code=status.HTTP_201_CREATED)
+@app.post("/people", status_code=status.HTTP_201_CREATED)
 async def create_person(
     body: dict,
     _: Annotated[None, Depends(verify_session)],
@@ -816,7 +816,7 @@ async def create_person(
     return person_to_dict(person)
 
 
-@app.get("/persons/{person_id}")
+@app.get("/people/{person_id}")
 def get_person(
     person_id: str,
     _: Annotated[None, Depends(verify_session)],
@@ -851,7 +851,7 @@ def sync_photo_person(db: Session, photo_id) -> None:
         for f in db.query(Face).filter(Face.photo_id == photo_id, Face.person_id.is_not(None)).all()
     }
 
-    # Remove photo_person rows for persons no longer assigned to any face
+    # Remove photo_person rows for people no longer assigned to any face
     existing_rows = db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo_id).all()
     for row in existing_rows:
         if row.person_id not in face_person_ids:

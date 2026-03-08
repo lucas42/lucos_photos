@@ -207,7 +207,7 @@ class TestGetPhoto:
         assert face_data["personId"] == str(person.id)
         assert face_data["personConfirmed"] is True
 
-    def test_includes_persons_list(self, authenticated_client, db_session):
+    def test_includes_people_list(self, authenticated_client, db_session):
         photo = make_photo(db_session, "personlist")
         person = make_person(db_session)
         db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
@@ -216,15 +216,15 @@ class TestGetPhoto:
         response = authenticated_client.get(f"/photos/{photo.id}")
         assert response.status_code == 200
         data = response.json()
-        assert str(person.id) in data["persons"]
+        assert str(person.id) in data["people"]
 
-    def test_persons_empty_when_no_tags(self, authenticated_client, db_session):
+    def test_people_empty_when_no_tags(self, authenticated_client, db_session):
         photo = make_photo(db_session, "notags")
         db_session.commit()
 
         response = authenticated_client.get(f"/photos/{photo.id}")
         assert response.status_code == 200
-        assert response.json()["persons"] == []
+        assert response.json()["people"] == []
 
 
 # ---------------------------------------------------------------------------

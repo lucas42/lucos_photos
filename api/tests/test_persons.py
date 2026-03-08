@@ -16,37 +16,37 @@ def make_photo(db, sha256_hash="a"*64):
     db.flush()
     return photo
 
-class TestListPersons:
-    def test_list_persons_empty(self, authenticated_client, db_session):
-        response = authenticated_client.get("/persons")
+class TestListpeople:
+    def test_list_people_empty(self, authenticated_client, db_session):
+        response = authenticated_client.get("/people")
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_list_persons(self, authenticated_client, db_session):
+    def test_list_people(self, authenticated_client, db_session):
         make_person(db_session, "Alice")
         make_person(db_session, "Bob")
         db_session.commit()
 
-        response = authenticated_client.get("/persons")
+        response = authenticated_client.get("/people")
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
         names = {p["name"] for p in data}
         assert names == {"Alice", "Bob"}
 
-    def test_list_persons_pagination(self, authenticated_client, db_session):
+    def test_list_people_pagination(self, authenticated_client, db_session):
         for i in range(5):
             make_person(db_session, f"Person {i}")
         db_session.commit()
 
-        response = authenticated_client.get("/persons?limit=2&offset=1")
+        response = authenticated_client.get("/people?limit=2&offset=1")
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
         assert data[0]["name"] == "Person 1"
         assert data[1]["name"] == "Person 2"
 
-    def test_list_persons_include_photo_counts(self, authenticated_client, db_session):
+    def test_list_people_include_photo_counts(self, authenticated_client, db_session):
         person1 = make_person(db_session, "Alice")
         person2 = make_person(db_session, "Bob")
         photo1 = make_photo(db_session, "1"*64)
@@ -56,7 +56,7 @@ class TestListPersons:
         db_session.add(PhotoPerson(photo_id=photo2.id, person_id=person1.id))
         db_session.commit()
 
-        response = authenticated_client.get("/persons?includePhotoCounts=true")
+        response = authenticated_client.get("/people?includePhotoCounts=true")
         assert response.status_code == 200
         data = response.json()
 
@@ -67,14 +67,14 @@ class TestListPersons:
         assert bob["photoCount"] == 0
 
     def test_requires_authentication(self, client):
-        response = client.get("/persons")
+        response = client.get("/people")
         assert response.status_code == 401
 
 class TestCreatePerson:
     def test_create_person(self, authenticated_client, db_session):
         with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
             response = authenticated_client.post(
-                "/persons",
+                "/people",
                 json={"name": "Charlie", "contactId": "charlie-123"},
             )
             assert response.status_code == 201
@@ -88,7 +88,7 @@ class TestCreatePerson:
 
     def test_create_person_missing_name(self, authenticated_client):
         response = authenticated_client.post(
-            "/persons",
+            "/people",
             json={"contactId": "charlie-123"},
         )
         assert response.status_code == 422
@@ -98,14 +98,14 @@ class TestCreatePerson:
         db_session.commit()
 
         response = authenticated_client.post(
-            "/persons",
+            "/people",
             json={"name": "Alice 2", "contactId": "alice-123"},
         )
         assert response.status_code == 409
         assert "already exists" in response.json()["detail"]
 
     def test_requires_authentication(self, client):
-        response = client.post("/persons", json={"name": "Charlie"})
+        response = client.post("/people", json={"name": "Charlie"})
         assert response.status_code == 401
 
 class TestGetPerson:
@@ -125,7 +125,7 @@ class TestGetPerson:
         db_session.add(face)
         db_session.commit()
 
-        response = authenticated_client.get(f"/persons/{person.id}")
+        response = authenticated_client.get(f"/people/{person.id}")
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "Alice"
@@ -135,15 +135,15 @@ class TestGetPerson:
         assert data["photos"][0]["id"] == str(photo.id)
 
     def test_get_person_not_found(self, authenticated_client):
-        response = authenticated_client.get(f"/persons/{uuid.uuid4()}")
+        response = authenticated_client.get(f"/people/{uuid.uuid4()}")
         assert response.status_code == 404
 
     def test_get_person_invalid_uuid(self, authenticated_client):
-        response = authenticated_client.get("/persons/not-a-uuid")
+        response = authenticated_client.get("/people/not-a-uuid")
         assert response.status_code == 404
 
     def test_requires_authentication(self, client, db_session):
         person = make_person(db_session, "Alice")
         db_session.commit()
-        response = client.get(f"/persons/{person.id}")
+        response = client.get(f"/people/{person.id}")
         assert response.status_code == 401
