@@ -363,16 +363,17 @@ def healthcheck():
 async def root(_: Annotated[None, Depends(verify_session)]):
     return FileResponse(STATIC_DIR / "index.html")
 
-
 @app.get("/icon", include_in_schema=False)
 async def icon():
     return FileResponse(STATIC_DIR / "icon.png")
 
+@app.get("/PinyonScript-Regular.ttf", include_in_schema=False)
+async def style():
+    return FileResponse(STATIC_DIR / "PinyonScript-Regular.ttf")
 
 @app.get("/style.css", include_in_schema=False)
 async def style():
     return FileResponse(STATIC_DIR / "style.css")
-
 
 @app.get("/lucos_navbar.js", include_in_schema=False)
 async def navbar_js():
