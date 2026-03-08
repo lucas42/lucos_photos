@@ -35,7 +35,7 @@ class TestInfo:
         assert "checks" in data
         assert "metrics" in data
         assert "ci" in data
-        assert data["icon"] == "/icon"
+        assert data["icon"] == "/icon.png"
         assert data["show_on_homepage"] is True
 
     def test_checks_structure(self, client):
@@ -174,7 +174,7 @@ class TestHealthChecks:
 
 class TestIcon:
     def test_returns_200(self, client):
-        response = client.get("/icon")
+        response = client.get("/icon.png")
         assert response.status_code == 200
         assert response.headers["content-type"] == "image/png"
 

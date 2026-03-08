@@ -364,8 +364,6 @@ def healthcheck():
 async def root(_: Annotated[None, Depends(verify_session)]):
     return FileResponse(STATIC_DIR / "index.html")
 
-app.mount("/", StaticFiles(directory=STATIC_DIR), name="static")
-
 
 CHECK_TIMEOUT = 0.5  # seconds — must be well under monitoring system's 1s hard limit
 
@@ -944,3 +942,6 @@ def unassign_person(
     face.person_confirmed = False
     sync_photo_person(db, face.photo_id)
     db.commit()
+
+
+app.mount("/", StaticFiles(directory=STATIC_DIR), name="static")
