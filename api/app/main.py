@@ -713,24 +713,6 @@ def get_photo_thumbnail(
     )
 
 
-@app.get("/photos/{photo_id}/file", include_in_schema=False)
-def get_photo_file(
-    photo_id: str,
-    _: Annotated[None, Depends(verify_session)],
-    db: Session = Depends(get_db),
-):
-    """Deprecated: redirects to /photos/{id}/thumbnail. Kept for backward compatibility."""
-    # Validate the photo exists before redirecting, so we return 404 rather than a broken redirect
-    _get_photo_or_404(photo_id, db)
-    # Use a relative redirect URL so there is no possibility of an open redirect to an external origin.
-    # safe_path ensures the constructed path cannot be a protocol-relative or absolute URL.
-    redirect_path = safe_path(f"/photos/{photo_id}/thumbnail")
-    return RedirectResponse(
-        url=redirect_path,
-        status_code=status.HTTP_301_MOVED_PERMANENTLY,
-    )
-
-
 def face_to_dict(face: Face) -> dict:
     return {
         "id": str(face.id),

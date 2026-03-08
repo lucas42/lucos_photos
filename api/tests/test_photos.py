@@ -400,46 +400,6 @@ class TestGetPhotoThumbnail:
 
 
 # ---------------------------------------------------------------------------
-# GET /photos/{id}/file  (deprecated redirect)
-# ---------------------------------------------------------------------------
-
-class TestGetPhotoFileRedirect:
-    def test_requires_auth(self, client, db_session):
-        photo = make_photo(db_session)
-        db_session.commit()
-        response = client.get(f"/photos/{photo.id}/file", follow_redirects=False)
-        assert response.status_code == 401
-
-    def test_returns_404_for_unknown_photo(self, authenticated_client):
-        response = authenticated_client.get(f"/photos/{uuid.uuid4()}/file", follow_redirects=False)
-        assert response.status_code == 404
-
-    def test_returns_404_for_invalid_uuid(self, authenticated_client):
-        response = authenticated_client.get("/photos/not-a-uuid/file", follow_redirects=False)
-        assert response.status_code == 404
-
-    def test_redirects_to_thumbnail(self, authenticated_client, db_session):
-        photo = make_photo(db_session, "redirecttest")
-        db_session.commit()
-
-        response = authenticated_client.get(f"/photos/{photo.id}/file", follow_redirects=False)
-        assert response.status_code == 301
-        assert f"/photos/{photo.id}/thumbnail" in response.headers["location"]
-
-    def test_redirect_is_relative_path(self, authenticated_client, db_session):
-        """Redirect must not include an external origin (open redirect prevention)."""
-        photo = make_photo(db_session, "redirectrelative")
-        db_session.commit()
-
-        response = authenticated_client.get(f"/photos/{photo.id}/file", follow_redirects=False)
-        assert response.status_code == 301
-        location = response.headers["location"]
-        # A relative path starts with '/' and contains no scheme or netloc
-        assert location.startswith("/"), f"Expected relative path, got: {location}"
-        assert "://" not in location, f"Redirect must not contain a scheme: {location}"
-
-
-# ---------------------------------------------------------------------------
 # Range request support on GET /photos/{id}/original
 # ---------------------------------------------------------------------------
 
