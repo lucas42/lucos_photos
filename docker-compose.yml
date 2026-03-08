@@ -39,6 +39,7 @@ services:
       - SYSTEM
       - ENVIRONMENT
       - POSTGRES_PASSWORD
+      - LOGANNE_ENDPOINT
       - POSTGRES_USER=photos
       - REDIS_URL=redis://redis:6379
     depends_on:
