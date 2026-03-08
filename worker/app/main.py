@@ -1,7 +1,7 @@
 """Worker entry point.
 
 Starts an RQ worker listening on the 'photos' queue, and a background thread
-that periodically sweeps for photos stuck in 'pending' state.
+that periodically sweeps for photos stuck in 'pending' or 'processing' state.
 """
 
 import logging
@@ -15,45 +15,86 @@ from rq import Queue, Worker
 from rq.job import Retry
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import ProcessingState, ProcessingStatus
+from lucos_photos_common.models import MediaItem, ProcessingState, ProcessingStatus
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Photos stuck in pending for longer than this will be picked up by the sweep
 PENDING_SWEEP_THRESHOLD_MINUTES = int(os.environ.get("PENDING_SWEEP_THRESHOLD_MINUTES", 5))
+# Photos stuck in processing for longer than this will be re-enqueued (longer threshold
+# to avoid interfering with genuinely in-progress jobs)
+PROCESSING_SWEEP_THRESHOLD_MINUTES = int(os.environ.get("PROCESSING_SWEEP_THRESHOLD_MINUTES", 30))
 # How often the sweep runs (seconds)
 PENDING_SWEEP_INTERVAL_SECONDS = int(os.environ.get("PENDING_SWEEP_INTERVAL_SECONDS", 60))
 
 
-def sweep_pending_photos(redis_conn: Redis) -> None:
-    """Enqueue process_photo jobs for any photos stuck in 'pending' state.
+def _enqueue_for_media_item(queue: Queue, status: ProcessingStatus) -> None:
+    """Enqueue the correct job for a media item, routing videos to process_video
+    and photos to process_photo.
 
-    This is a catch-all for cases where the API crashed between DB commit and
-    Redis enqueue, leaving photos in 'pending' with no corresponding RQ job.
+    Args:
+        queue: The RQ queue to enqueue into.
+        status: The ProcessingStatus row (must have .media_item loaded or accessible).
     """
-    from lucos_photos_common.jobs import process_photo
+    from lucos_photos_common.jobs import process_photo, process_video
 
-    threshold = datetime.now(timezone.utc) - timedelta(minutes=PENDING_SWEEP_THRESHOLD_MINUTES)
+    media_item = status.media_item
+    if media_item is not None and media_item.media_type == "video":
+        job_fn = process_video
+    else:
+        job_fn = process_photo
+
+    logger.info(
+        "sweep: enqueuing %s for stuck media item %s (state=%s)",
+        job_fn.__name__,
+        status.photo_id,
+        status.state.value,
+    )
+    queue.enqueue(
+        job_fn,
+        str(status.photo_id),
+        retry=Retry(max=3, interval=[10, 30, 60]),
+    )
+
+
+def sweep_pending_photos(redis_conn: Redis) -> None:
+    """Enqueue processing jobs for any media items stuck in 'pending' or 'processing' state.
+
+    'pending' items: stuck longer than PENDING_SWEEP_THRESHOLD_MINUTES (default 5 min).
+    These arise when the API crashes between DB commit and Redis enqueue.
+
+    'processing' items: stuck longer than PROCESSING_SWEEP_THRESHOLD_MINUTES (default 30 min).
+    These arise when the worker crashes mid-job, leaving the item in 'processing' permanently.
+
+    Both states are swept to ensure the pending count in /_info reflects reality and items
+    are not silently abandoned.
+
+    Jobs are routed correctly: videos go to process_video, photos to process_photo.
+    """
+    pending_threshold = datetime.now(timezone.utc) - timedelta(minutes=PENDING_SWEEP_THRESHOLD_MINUTES)
+    processing_threshold = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_SWEEP_THRESHOLD_MINUTES)
+
     db = SessionLocal()
     try:
         stuck = (
             db.query(ProcessingStatus)
+            .join(ProcessingStatus.media_item)
             .filter(
-                ProcessingStatus.state == ProcessingState.pending,
-                ProcessingStatus.updated_at < threshold,
+                (
+                    (ProcessingStatus.state == ProcessingState.pending) &
+                    (ProcessingStatus.updated_at < pending_threshold)
+                ) | (
+                    (ProcessingStatus.state == ProcessingState.processing) &
+                    (ProcessingStatus.updated_at < processing_threshold)
+                )
             )
             .all()
         )
         if stuck:
             queue = Queue("photos", connection=redis_conn)
             for status in stuck:
-                logger.info("sweep: enqueuing process_photo for stuck photo %s", status.photo_id)
-                queue.enqueue(
-                    process_photo,
-                    str(status.photo_id),
-                    retry=Retry(max=3, interval=[10, 30, 60]),
-                )
+                _enqueue_for_media_item(queue, status)
     except Exception:
         logger.exception("sweep: error during pending photo sweep")
     finally:
@@ -62,7 +103,8 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
 
 def run_sweep_loop(redis_conn: Redis) -> None:
     """Background thread: periodically sweep for pending photos."""
-    logger.info("Sweep loop starting (interval=%ds, threshold=%dm)", PENDING_SWEEP_INTERVAL_SECONDS, PENDING_SWEEP_THRESHOLD_MINUTES)
+    logger.info("Sweep loop starting (interval=%ds, pending_threshold=%dm, processing_threshold=%dm)",
+                PENDING_SWEEP_INTERVAL_SECONDS, PENDING_SWEEP_THRESHOLD_MINUTES, PROCESSING_SWEEP_THRESHOLD_MINUTES)
     while True:
         time.sleep(PENDING_SWEEP_INTERVAL_SECONDS)
         try:
