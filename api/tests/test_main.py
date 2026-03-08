@@ -252,6 +252,43 @@ class TestUpload:
         second = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
         assert first.json()["id"] == second.json()["id"]
 
+    def test_duplicate_upload_with_x_taken_at_updates_null_taken_at(self, client):
+        """Re-uploading the same photo with X-Taken-At should backfill taken_at if it was null on the first upload."""
+        content = VALID_IMAGE_CONTENT
+        # First upload without X-Taken-At — taken_at is null
+        first = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+        assert first.json()["takenAt"] is None
+        # Second upload of same photo with X-Taken-At — taken_at should be updated
+        second = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "1700000000000"},
+        )
+        assert second.status_code == 200
+        assert second.json()["id"] == first.json()["id"]
+        assert second.json()["takenAt"] is not None
+        assert "2023-11-14" in second.json()["takenAt"]
+
+    def test_duplicate_upload_does_not_overwrite_existing_taken_at(self, client):
+        """Re-uploading a photo that already has taken_at set should not overwrite it."""
+        content = VALID_IMAGE_CONTENT
+        # First upload with X-Taken-At
+        first = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "1700000000000"},
+        )
+        original_taken_at = first.json()["takenAt"]
+        assert original_taken_at is not None
+        # Second upload with a different X-Taken-At — should not change the existing value
+        second = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "1600000000000"},
+        )
+        assert second.status_code == 200
+        assert second.json()["takenAt"] == original_taken_at
+
     def test_extension_taken_from_filename(self, client):
         response = client.post(
             "/photos",
@@ -289,6 +326,41 @@ class TestUpload:
         assert first.status_code == 201
         assert second.status_code == 201
         assert first.json()["id"] != second.json()["id"]
+
+    def test_x_taken_at_header_sets_taken_at(self, client):
+        """X-Taken-At header (Unix milliseconds) should be stored as taken_at on the photo."""
+        # 1700000000000 ms = 2023-11-14T22:13:20+00:00
+        response = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", VALID_IMAGE_CONTENT, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "1700000000000"},
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["takenAt"] is not None
+        assert "2023-11-14" in data["takenAt"]
+
+    def test_x_taken_at_zero_is_ignored(self, client):
+        """X-Taken-At of 0 should be treated as absent — takenAt must remain null."""
+        response = client.post(
+            "/photos",
+            files={"file": ("photo2.jpg", VALID_IMAGE_CONTENT + b"\x00", "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "0"},
+        )
+        # takenAt should still be null because 0 is not a valid timestamp
+        data = response.json()
+        assert data["takenAt"] is None
+
+    def test_malformed_x_taken_at_is_ignored(self, client):
+        """A non-numeric X-Taken-At header should be silently ignored, not cause a 422."""
+        response = client.post(
+            "/photos",
+            files={"file": ("photo3.jpg", VALID_IMAGE_CONTENT + b"\x01", "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "not-a-number"},
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["takenAt"] is None
 
     def test_invalid_image_returns_422(self, client):
         response = client.post(

@@ -265,7 +265,13 @@ def process_photo(photo_id: str) -> None:
                     except ValueError:
                         logger.warning("process_photo: could not parse DateTimeOriginal %r for photo %s", raw_taken_at, photo_id)
                 else:
-                    logger.info("process_photo: no DateTimeOriginal EXIF tag for photo %s", photo_id)
+                    if photo.taken_at is not None:
+                        logger.info(
+                            "process_photo: no DateTimeOriginal EXIF tag for photo %s — keeping client-supplied taken_at %s",
+                            photo_id, photo.taken_at,
+                        )
+                    else:
+                        logger.info("process_photo: no DateTimeOriginal EXIF tag for photo %s, taken_at will be null", photo_id)
 
             # Generate thumbnail derivative
             thumb_path = DERIVATIVES_DIR / f"{photo.sha256_hash}_thumb.jpg"
