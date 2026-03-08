@@ -69,7 +69,9 @@ class TestListPhotos:
 
     def test_returns_list_of_photos(self, authenticated_client, db_session):
         p1 = make_photo(db_session, "photo1")
+        make_processing_status(db_session, p1, ProcessingState.complete)
         p2 = make_photo(db_session, "photo2")
+        make_processing_status(db_session, p2, ProcessingState.complete)
         db_session.commit()
 
         response = authenticated_client.get("/photos")
@@ -82,6 +84,7 @@ class TestListPhotos:
 
     def test_photo_has_expected_fields(self, authenticated_client, db_session):
         photo = make_photo(db_session, "fieldtest")
+        make_processing_status(db_session, photo, ProcessingState.complete)
         db_session.commit()
 
         response = authenticated_client.get("/photos")
@@ -97,7 +100,8 @@ class TestListPhotos:
 
     def test_pagination_limit(self, authenticated_client, db_session):
         for i in range(5):
-            make_photo(db_session, f"photo{i}")
+            p = make_photo(db_session, f"photo{i}")
+            make_processing_status(db_session, p, ProcessingState.complete)
         db_session.commit()
 
         response = authenticated_client.get("/photos?limit=3")
@@ -109,7 +113,8 @@ class TestListPhotos:
 
     def test_pagination_offset(self, authenticated_client, db_session):
         for i in range(5):
-            make_photo(db_session, f"photo{i}")
+            p = make_photo(db_session, f"photo{i}")
+            make_processing_status(db_session, p, ProcessingState.complete)
         db_session.commit()
 
         response = authenticated_client.get("/photos?limit=3&offset=3")
@@ -121,7 +126,9 @@ class TestListPhotos:
     def test_default_order_is_uploaded_at_descending(self, authenticated_client, db_session):
         # Insert photos with different hashes so order is deterministic from DB insert order
         p1 = make_photo(db_session, "first")
+        make_processing_status(db_session, p1, ProcessingState.complete)
         p2 = make_photo(db_session, "second")
+        make_processing_status(db_session, p2, ProcessingState.complete)
         db_session.commit()
 
         response = authenticated_client.get("/photos")
@@ -131,6 +138,51 @@ class TestListPhotos:
         # Both IDs should be present; we can't guarantee strict order in SQLite
         # without explicit timestamps, but we can check the list is non-empty
         assert len(ids) == 2
+
+    def test_hides_unprocessed_photos(self, authenticated_client, db_session):
+        """Photos that haven't been fully processed should not appear in the list."""
+        complete = make_photo(db_session, "complete_photo")
+        make_processing_status(db_session, complete, ProcessingState.complete)
+
+        pending = make_photo(db_session, "pending_photo")
+        make_processing_status(db_session, pending, ProcessingState.pending)
+
+        processing = make_photo(db_session, "processing_photo")
+        make_processing_status(db_session, processing, ProcessingState.processing)
+
+        failed = make_photo(db_session, "failed_photo")
+        make_processing_status(db_session, failed, ProcessingState.failed)
+
+        no_status = make_photo(db_session, "no_status_photo")
+        # Deliberately no ProcessingStatus row for this one
+
+        db_session.commit()
+
+        response = authenticated_client.get("/photos")
+        assert response.status_code == 200
+        data = response.json()
+
+        ids = {p["id"] for p in data["photos"]}
+        assert str(complete.id) in ids
+        assert str(pending.id) not in ids
+        assert str(processing.id) not in ids
+        assert str(failed.id) not in ids
+        assert str(no_status.id) not in ids
+        assert data["total"] == 1
+
+    def test_total_count_only_includes_processed(self, authenticated_client, db_session):
+        """The total field in the response should reflect only processed photos."""
+        complete1 = make_photo(db_session, "c1")
+        make_processing_status(db_session, complete1, ProcessingState.complete)
+        complete2 = make_photo(db_session, "c2")
+        make_processing_status(db_session, complete2, ProcessingState.complete)
+        pending = make_photo(db_session, "p1")
+        make_processing_status(db_session, pending, ProcessingState.pending)
+        db_session.commit()
+
+        response = authenticated_client.get("/photos")
+        assert response.status_code == 200
+        assert response.json()["total"] == 2
 
 
 # ---------------------------------------------------------------------------
