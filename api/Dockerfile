@@ -1,4 +1,4 @@
-FROM lucas42/lucos_navbar:2.1.3 AS navbar
+FROM lucas42/lucos_navbar:2.1.4 AS navbar
 FROM python:3.14-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
