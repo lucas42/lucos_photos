@@ -290,6 +290,41 @@ class TestUpload:
         assert second.status_code == 201
         assert first.json()["id"] != second.json()["id"]
 
+    def test_x_taken_at_header_sets_taken_at(self, client):
+        """X-Taken-At header (Unix milliseconds) should be stored as taken_at on the photo."""
+        # 1700000000000 ms = 2023-11-14T22:13:20+00:00
+        response = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", VALID_IMAGE_CONTENT, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "1700000000000"},
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["takenAt"] is not None
+        assert "2023-11-14" in data["takenAt"]
+
+    def test_x_taken_at_zero_is_ignored(self, client):
+        """X-Taken-At of 0 should be treated as absent — takenAt must remain null."""
+        response = client.post(
+            "/photos",
+            files={"file": ("photo2.jpg", VALID_IMAGE_CONTENT + b"\x00", "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "0"},
+        )
+        # takenAt should still be null because 0 is not a valid timestamp
+        data = response.json()
+        assert data["takenAt"] is None
+
+    def test_malformed_x_taken_at_is_ignored(self, client):
+        """A non-numeric X-Taken-At header should be silently ignored, not cause a 422."""
+        response = client.post(
+            "/photos",
+            files={"file": ("photo3.jpg", VALID_IMAGE_CONTENT + b"\x01", "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Taken-At": "not-a-number"},
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["takenAt"] is None
+
     def test_invalid_image_returns_422(self, client):
         response = client.post(
             "/photos",

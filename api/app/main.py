@@ -473,6 +473,7 @@ async def upload_photo(
     file: UploadFile,
     _: Annotated[None, Depends(verify_key)],
     db: Session = Depends(get_db),
+    x_taken_at: Annotated[str | None, Header()] = None,
 ):
     content_type = file.content_type or ""
     is_video = content_type in VIDEO_MIME_TYPES
@@ -539,10 +540,26 @@ async def upload_photo(
         tmp_path.rename(file_path)
         tmp_path = None  # temp file has been moved; don't delete it in finally block
 
+        # Parse the X-Taken-At header (Unix milliseconds) into a timezone-aware datetime.
+        # This is a client-supplied hint (e.g. MediaStore DATE_TAKEN on Android) used as a
+        # fallback taken_at for photos that lack an EXIF DateTimeOriginal tag.  The worker
+        # will overwrite this with the EXIF value if one is present, since EXIF is more
+        # authoritative than the OS-level timestamp.
+        client_taken_at = None
+        if x_taken_at:
+            try:
+                taken_at_ms = int(x_taken_at)
+                if taken_at_ms > 0:
+                    from datetime import datetime as _datetime, timezone as _tz
+                    client_taken_at = _datetime.fromtimestamp(taken_at_ms / 1000.0, tz=_tz.utc)
+            except (ValueError, OverflowError, OSError):
+                # Ignore malformed or out-of-range values; taken_at will remain null.
+                pass
+
         try:
             # Create media item record and initial processing status
             media_type = "video" if is_video else "photo"
-            photo = MediaItem(sha256_hash=sha256_hash, file_extension=ext, media_type=media_type)
+            photo = MediaItem(sha256_hash=sha256_hash, file_extension=ext, media_type=media_type, taken_at=client_taken_at)
             db.add(photo)
             db.flush()
             db.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))
