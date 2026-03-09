@@ -14,7 +14,6 @@ from PIL import Image
 from lucos_photos_common.jobs import (
     _extract_video_metadata,
     detect_and_save_faces,
-    emit_loganne_event,
     process_photo,
     process_video,
     reprocess_photo,
@@ -610,62 +609,34 @@ class TestDetectAndSaveFaces:
         mock_detect.assert_called_once()
 
 
-class TestEmitLoganneEvent:
-    """Tests for the emit_loganne_event helper."""
+class TestUpdateLoganne:
+    """Tests that the jobs module calls the loganne library correctly."""
 
     def test_posts_to_loganne_endpoint(self):
-        """Should POST a JSON payload to the configured LOGANNE_ENDPOINT."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
+        """Should POST a JSON payload to the Loganne endpoint via the library."""
+        with patch("loganne.session") as mock_session:
+            mock_response = MagicMock()
+            mock_response.raise_for_status.return_value = None
+            mock_session.post.return_value = mock_response
 
-        with patch("lucos_photos_common.jobs.httpx") as mock_httpx, \
-             patch.dict("os.environ", {"LOGANNE_ENDPOINT": "http://loganne.example.com/", "SYSTEM": "lucos_photos"}):
-            mock_httpx.post.return_value = mock_response
-            emit_loganne_event("photoProcessed", photoId="test-id")
+            from loganne import updateLoganne
+            updateLoganne("photoProcessed", "Photo test-id processed by lucos_photos")
 
-        mock_httpx.post.assert_called_once()
-        call_args = mock_httpx.post.call_args
-        assert call_args[0][0] == "http://loganne.example.com/"
+        mock_session.post.assert_called_once()
+        call_args = mock_session.post.call_args
         payload = call_args[1]["json"]
         assert payload["type"] == "photoProcessed"
-        assert payload["system"] == "lucos_photos"
-        assert payload["photoId"] == "test-id"
-
-    def test_skips_when_no_endpoint_configured(self):
-        """Should log a warning and return without making an HTTP call if LOGANNE_ENDPOINT is unset."""
-        with patch("lucos_photos_common.jobs.httpx") as mock_httpx, \
-             patch.dict("os.environ", {}, clear=True):
-            # Ensure LOGANNE_ENDPOINT is absent
-            import os
-            os.environ.pop("LOGANNE_ENDPOINT", None)
-            emit_loganne_event("photoProcessed", photoId="test-id")
-
-        mock_httpx.post.assert_not_called()
+        assert payload["humanReadable"] == "Photo test-id processed by lucos_photos"
 
     def test_swallows_http_errors(self):
-        """A failed HTTP call to Loganne must not propagate — the job must continue."""
-        import httpx as real_httpx
+        """A failed HTTP call to Loganne must not propagate — the library handles this."""
+        import requests
 
-        with patch("lucos_photos_common.jobs.httpx") as mock_httpx, \
-             patch.dict("os.environ", {"LOGANNE_ENDPOINT": "http://loganne.example.com/"}):
-            mock_httpx.post.side_effect = real_httpx.ConnectError("connection refused")
-            # Should not raise
-            emit_loganne_event("photoProcessed", photoId="test-id")
-
-    def test_swallows_non_2xx_responses(self):
-        """A non-2xx response from Loganne should be logged and not propagate."""
-        import httpx as real_httpx
-
-        mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = real_httpx.HTTPStatusError(
-            "500", request=MagicMock(), response=MagicMock()
-        )
-
-        with patch("lucos_photos_common.jobs.httpx") as mock_httpx, \
-             patch.dict("os.environ", {"LOGANNE_ENDPOINT": "http://loganne.example.com/"}):
-            mock_httpx.post.return_value = mock_response
-            # Should not raise
-            emit_loganne_event("photoProcessed", photoId="test-id")
+        with patch("loganne.session") as mock_session:
+            mock_session.post.side_effect = requests.ConnectionError("connection refused")
+            # Should not raise — the library swallows the error
+            from loganne import updateLoganne
+            updateLoganne("photoProcessed", "Photo test-id processed by lucos_photos")
 
 
 class TestProcessPhotoLoganne:
@@ -677,7 +648,7 @@ class TestProcessPhotoLoganne:
             yield
 
     def test_emits_loganne_event_on_success(self, db_session, pending_photo, tmp_path):
-        """process_photo should emit a photoProcessed Loganne event after successful completion."""
+        """process_photo should call updateLoganne with photoProcessed after successful completion."""
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
         derivatives_dir = tmp_path / "derivatives"
@@ -688,13 +659,14 @@ class TestProcessPhotoLoganne:
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
              patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
              patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
-             patch("lucos_photos_common.jobs.emit_loganne_event") as mock_emit:
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update:
             process_photo(str(pending_photo.id))
 
-        mock_emit.assert_called_once_with("photoProcessed", photoId=str(pending_photo.id))
+        mock_update.assert_called_once()
+        assert mock_update.call_args[0][0] == "photoProcessed"
 
     def test_does_not_emit_loganne_when_already_complete(self, db_session, pending_photo, tmp_path):
-        """process_photo should not emit a Loganne event when exiting early (already complete)."""
+        """process_photo should not call updateLoganne when exiting early (already complete)."""
         pending_photo.processing_status.state = ProcessingState.complete
         db_session.commit()
 
@@ -706,13 +678,13 @@ class TestProcessPhotoLoganne:
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
              patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
              patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
-             patch("lucos_photos_common.jobs.emit_loganne_event") as mock_emit:
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update:
             process_photo(str(pending_photo.id))
 
-        mock_emit.assert_not_called()
+        mock_update.assert_not_called()
 
     def test_does_not_emit_loganne_on_failure(self, db_session, pending_photo, tmp_path):
-        """process_photo should not emit a Loganne event when processing fails."""
+        """process_photo should not call updateLoganne when processing fails."""
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
         derivatives_dir = tmp_path / "derivatives"
@@ -722,30 +694,11 @@ class TestProcessPhotoLoganne:
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
              patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
              patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
-             patch("lucos_photos_common.jobs.emit_loganne_event") as mock_emit:
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update:
             with pytest.raises(FileNotFoundError):
                 process_photo(str(pending_photo.id))
 
-        mock_emit.assert_not_called()
-
-    def test_loganne_failure_does_not_fail_the_job(self, db_session, pending_photo, tmp_path):
-        """If emit_loganne_event raises, process_photo should still complete without re-raising."""
-        uploads_dir = tmp_path / "uploads"
-        originals_dir = tmp_path / "originals"
-        derivatives_dir = tmp_path / "derivatives"
-        uploads_dir.mkdir()
-        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
-        src.write_bytes(make_jpeg_with_exif())
-
-        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
-             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
-             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
-             patch("lucos_photos_common.jobs.emit_loganne_event", side_effect=Exception("loganne down")):
-            # Should not raise — Loganne failure must be swallowed
-            process_photo(str(pending_photo.id))
-
-        db_session.refresh(pending_photo)
-        assert pending_photo.processing_status.state == ProcessingState.complete
+        mock_update.assert_not_called()
 
 
 class TestReprocessPhoto:
@@ -1163,10 +1116,11 @@ class TestProcessVideo:
              patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
              patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
              self._mock_ffprobe(SAMPLE_FFPROBE_OUTPUT), \
-             patch("lucos_photos_common.jobs.emit_loganne_event") as mock_emit:
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update:
             process_video(str(pending_video.id))
 
-        mock_emit.assert_called_once_with("videoProcessed", photoId=str(pending_video.id))
+        mock_update.assert_called_once()
+        assert mock_update.call_args[0][0] == "videoProcessed"
 
     def test_does_not_emit_loganne_on_failure(self, db_session, pending_video, tmp_path):
         uploads_dir = tmp_path / "uploads"
@@ -1178,11 +1132,11 @@ class TestProcessVideo:
         with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
              patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
              patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
-             patch("lucos_photos_common.jobs.emit_loganne_event") as mock_emit:
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update:
             with pytest.raises(FileNotFoundError):
                 process_video(str(pending_video.id))
 
-        mock_emit.assert_not_called()
+        mock_update.assert_not_called()
 
     def test_ffmpeg_seek_at_10_percent(self, db_session, pending_video, tmp_path):
         """ffmpeg should be called with a seek time of 10% of the video duration."""

@@ -11,4 +11,5 @@ dependencies = [
     "httpx",
     "redis",
     "rq",
+    "lucos-loganne-pythonclient",
 ]
