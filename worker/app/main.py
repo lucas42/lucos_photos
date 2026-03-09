@@ -27,6 +27,9 @@ PENDING_SWEEP_THRESHOLD_MINUTES = int(os.environ.get("PENDING_SWEEP_THRESHOLD_MI
 PROCESSING_SWEEP_THRESHOLD_MINUTES = int(os.environ.get("PROCESSING_SWEEP_THRESHOLD_MINUTES", 30))
 # How often the sweep runs (seconds)
 PENDING_SWEEP_INTERVAL_SECONDS = int(os.environ.get("PENDING_SWEEP_INTERVAL_SECONDS", 60))
+# Circuit breaker: skip sweep if queue already has this many or more jobs waiting.
+# Prevents a positive-feedback flood (sweep re-enqueues -> jobs fail -> queue grows -> OOM).
+SWEEP_QUEUE_DEPTH_LIMIT = int(os.environ.get("SWEEP_QUEUE_DEPTH_LIMIT", 0))
 
 
 def _enqueue_for_media_item(queue: Queue, status: ProcessingStatus) -> None:
@@ -71,7 +74,23 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
     are not silently abandoned.
 
     Jobs are routed correctly: videos go to process_video, photos to process_photo.
+
+    Circuit breaker: if the queue already has more than SWEEP_QUEUE_DEPTH_LIMIT jobs waiting
+    (default 0), the sweep is skipped entirely. This prevents a positive-feedback flood where
+    jobs fail (e.g. due to OOM), the sweep re-enqueues them every 60 seconds, and the queue
+    grows unboundedly until Redis itself causes OOM.
     """
+    queue = Queue("photos", connection=redis_conn)
+    queue_depth = queue.count
+    if queue_depth > SWEEP_QUEUE_DEPTH_LIMIT:
+        logger.warning(
+            "sweep: skipping — queue already has %d jobs waiting (limit=%d). "
+            "Will retry when queue drains.",
+            queue_depth,
+            SWEEP_QUEUE_DEPTH_LIMIT,
+        )
+        return
+
     pending_threshold = datetime.now(timezone.utc) - timedelta(minutes=PENDING_SWEEP_THRESHOLD_MINUTES)
     processing_threshold = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_SWEEP_THRESHOLD_MINUTES)
 
@@ -92,7 +111,6 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
             .all()
         )
         if stuck:
-            queue = Queue("photos", connection=redis_conn)
             for status in stuck:
                 _enqueue_for_media_item(queue, status)
     except Exception:

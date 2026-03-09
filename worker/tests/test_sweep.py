@@ -69,6 +69,13 @@ def _make_processing_status(db_session, photo_id, state, *, age_minutes=10):
     return status
 
 
+def _make_mock_queue(count=0):
+    """Return a MagicMock queue with a configurable count (queue depth)."""
+    mock_queue = MagicMock()
+    mock_queue.count = count
+    return mock_queue
+
+
 class TestSweepPendingPhotos:
     def test_enqueues_process_photo_for_stuck_pending_photo(self, db_session):
         """A photo stuck in pending should be re-enqueued via process_photo."""
@@ -76,7 +83,7 @@ class TestSweepPendingPhotos:
         _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=10)
 
         mock_redis = MagicMock()
-        mock_queue = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
 
         with patch("app.main.Queue", return_value=mock_queue), \
              patch("lucos_photos_common.jobs.process_photo", __name__="process_photo") as mock_process_photo, \
@@ -94,7 +101,7 @@ class TestSweepPendingPhotos:
         _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=10)
 
         mock_redis = MagicMock()
-        mock_queue = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
 
         with patch("app.main.Queue", return_value=mock_queue), \
              patch("lucos_photos_common.jobs.process_photo", __name__="process_photo") as mock_process_photo, \
@@ -112,7 +119,7 @@ class TestSweepPendingPhotos:
         _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=1)
 
         mock_redis = MagicMock()
-        mock_queue = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
 
         with patch("app.main.Queue", return_value=mock_queue):
             sweep_pending_photos(mock_redis)
@@ -125,7 +132,7 @@ class TestSweepPendingPhotos:
         _make_processing_status(db_session, item.id, ProcessingState.processing, age_minutes=60)
 
         mock_redis = MagicMock()
-        mock_queue = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
 
         with patch("app.main.Queue", return_value=mock_queue), \
              patch("lucos_photos_common.jobs.process_photo", __name__="process_photo") as mock_process_photo, \
@@ -143,7 +150,7 @@ class TestSweepPendingPhotos:
         _make_processing_status(db_session, item.id, ProcessingState.processing, age_minutes=60)
 
         mock_redis = MagicMock()
-        mock_queue = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
 
         with patch("app.main.Queue", return_value=mock_queue), \
              patch("lucos_photos_common.jobs.process_photo", __name__="process_photo") as mock_process_photo, \
@@ -161,7 +168,7 @@ class TestSweepPendingPhotos:
         _make_processing_status(db_session, item.id, ProcessingState.processing, age_minutes=5)
 
         mock_redis = MagicMock()
-        mock_queue = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
 
         with patch("app.main.Queue", return_value=mock_queue):
             sweep_pending_photos(mock_redis)
@@ -174,7 +181,7 @@ class TestSweepPendingPhotos:
         _make_processing_status(db_session, item.id, ProcessingState.complete, age_minutes=60)
 
         mock_redis = MagicMock()
-        mock_queue = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
 
         with patch("app.main.Queue", return_value=mock_queue):
             sweep_pending_photos(mock_redis)
@@ -187,7 +194,7 @@ class TestSweepPendingPhotos:
         _make_processing_status(db_session, item.id, ProcessingState.failed, age_minutes=60)
 
         mock_redis = MagicMock()
-        mock_queue = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
 
         with patch("app.main.Queue", return_value=mock_queue):
             sweep_pending_photos(mock_redis)
@@ -202,7 +209,7 @@ class TestSweepPendingPhotos:
         _make_processing_status(db_session, video.id, ProcessingState.pending, age_minutes=10)
 
         mock_redis = MagicMock()
-        mock_queue = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
 
         with patch("app.main.Queue", return_value=mock_queue), \
              patch("lucos_photos_common.jobs.process_photo", __name__="process_photo") as mock_process_photo, \
@@ -215,3 +222,91 @@ class TestSweepPendingPhotos:
         enqueued = [(c.args[0], c.args[1]) for c in mock_queue.enqueue.call_args_list]
         assert (mock_process_photo, str(photo.id)) in enqueued
         assert (mock_process_video, str(video.id)) in enqueued
+
+
+class TestSweepCircuitBreaker:
+    """Tests for the queue-depth circuit breaker that prevents runaway queue floods."""
+
+    def test_skips_enqueue_when_queue_has_items(self, db_session):
+        """Sweep should not enqueue anything when the queue already has jobs waiting."""
+        item = _make_media_item(db_session, sha256_hash="5" * 64, media_type="photo")
+        _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=10)
+
+        mock_redis = MagicMock()
+        # Simulate a non-empty queue
+        mock_queue = _make_mock_queue(count=100)
+
+        with patch("app.main.Queue", return_value=mock_queue):
+            sweep_pending_photos(mock_redis)
+
+        mock_queue.enqueue.assert_not_called()
+
+    def test_skips_when_queue_has_exactly_one_item(self, db_session):
+        """Even a single queued job should trigger the circuit breaker (default limit=0)."""
+        item = _make_media_item(db_session, sha256_hash="6" * 64, media_type="photo")
+        _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=10)
+
+        mock_redis = MagicMock()
+        mock_queue = _make_mock_queue(count=1)
+
+        with patch("app.main.Queue", return_value=mock_queue):
+            sweep_pending_photos(mock_redis)
+
+        mock_queue.enqueue.assert_not_called()
+
+    def test_enqueues_when_queue_is_empty(self, db_session):
+        """When the queue is fully drained, the sweep should resume enqueuing stuck items."""
+        item = _make_media_item(db_session, sha256_hash="7" * 64, media_type="photo")
+        _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=10)
+
+        mock_redis = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs.process_photo", __name__="process_photo") as mock_process_photo, \
+             patch("lucos_photos_common.jobs.process_video", __name__="process_video"):
+            sweep_pending_photos(mock_redis)
+
+        mock_queue.enqueue.assert_called_once()
+
+    def test_respects_custom_depth_limit(self, db_session):
+        """A custom SWEEP_QUEUE_DEPTH_LIMIT should allow sweeping up to that many queued items."""
+        item = _make_media_item(db_session, sha256_hash="8" * 64, media_type="photo")
+        _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=10)
+
+        mock_redis = MagicMock()
+        # Queue has 5 items, limit is 10 — should still enqueue
+        mock_queue = _make_mock_queue(count=5)
+
+        import app.main as app_main
+        original_limit = app_main.SWEEP_QUEUE_DEPTH_LIMIT
+        try:
+            app_main.SWEEP_QUEUE_DEPTH_LIMIT = 10
+            with patch("app.main.Queue", return_value=mock_queue), \
+                 patch("lucos_photos_common.jobs.process_photo", __name__="process_photo"), \
+                 patch("lucos_photos_common.jobs.process_video", __name__="process_video"):
+                sweep_pending_photos(mock_redis)
+        finally:
+            app_main.SWEEP_QUEUE_DEPTH_LIMIT = original_limit
+
+        mock_queue.enqueue.assert_called_once()
+
+    def test_skips_when_queue_exceeds_custom_depth_limit(self, db_session):
+        """When queue depth exceeds a custom limit, the sweep should be skipped."""
+        item = _make_media_item(db_session, sha256_hash="9" * 64, media_type="photo")
+        _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=10)
+
+        mock_redis = MagicMock()
+        # Queue has 15 items, limit is 10 — should skip
+        mock_queue = _make_mock_queue(count=15)
+
+        import app.main as app_main
+        original_limit = app_main.SWEEP_QUEUE_DEPTH_LIMIT
+        try:
+            app_main.SWEEP_QUEUE_DEPTH_LIMIT = 10
+            with patch("app.main.Queue", return_value=mock_queue):
+                sweep_pending_photos(mock_redis)
+        finally:
+            app_main.SWEEP_QUEUE_DEPTH_LIMIT = original_limit
+
+        mock_queue.enqueue.assert_not_called()
