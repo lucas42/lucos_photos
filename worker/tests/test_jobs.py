@@ -149,6 +149,54 @@ class TestProcessPhoto:
              patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_photo(str(pending_photo.id))  # Should not raise
 
+    def test_reconciles_status_when_work_already_done(self, db_session, pending_photo, tmp_path):
+        """If the file and thumbnail already exist but status isn't complete, reconcile to complete."""
+        # Status is stuck in 'processing' (e.g. crashed after work, before status write)
+        pending_photo.processing_status.state = ProcessingState.processing
+        db_session.commit()
+
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        originals_dir.mkdir(parents=True)
+        derivatives_dir.mkdir(parents=True)
+
+        # Pre-create the work products so the job detects them as already done
+        dest = originals_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        dest.write_bytes(VALID_JPEG)
+        thumb = derivatives_dir / f"{pending_photo.sha256_hash}_thumb.jpg"
+        thumb.write_bytes(b"fake thumbnail")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_photo(str(pending_photo.id))  # Should not raise
+
+        db_session.refresh(pending_photo)
+        assert pending_photo.processing_status.state == ProcessingState.complete
+
+    def test_reconciles_status_when_work_done_but_status_pending(self, db_session, pending_photo, tmp_path):
+        """Status stuck in 'pending' with work products present should also be reconciled."""
+        # Status is pending — work products already exist from a previous run
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        originals_dir.mkdir(parents=True)
+        derivatives_dir.mkdir(parents=True)
+
+        dest = originals_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        dest.write_bytes(VALID_JPEG)
+        thumb = derivatives_dir / f"{pending_photo.sha256_hash}_thumb.jpg"
+        thumb.write_bytes(b"fake thumbnail")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_photo(str(pending_photo.id))
+
+        db_session.refresh(pending_photo)
+        assert pending_photo.processing_status.state == ProcessingState.complete
+
     def test_marks_failed_when_file_missing(self, db_session, pending_photo, tmp_path):
         uploads_dir = tmp_path / "uploads"
         originals_dir = tmp_path / "originals"
@@ -1032,6 +1080,52 @@ class TestProcessVideo:
              patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
              patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
             process_video(str(pending_video.id))  # Should not raise
+
+    def test_reconciles_status_when_work_already_done(self, db_session, pending_video, tmp_path):
+        """If the file and thumbnail already exist but status isn't complete, reconcile to complete."""
+        # Status is stuck in 'processing' (e.g. crashed after work, before status write)
+        pending_video.processing_status.state = ProcessingState.processing
+        db_session.commit()
+
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        originals_dir.mkdir(parents=True)
+        derivatives_dir.mkdir(parents=True)
+
+        dest = originals_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        dest.write_bytes(b"fake video")
+        thumb = derivatives_dir / f"{pending_video.sha256_hash}_thumb.jpg"
+        thumb.write_bytes(b"fake thumbnail")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_video(str(pending_video.id))
+
+        db_session.refresh(pending_video)
+        assert pending_video.processing_status.state == ProcessingState.complete
+
+    def test_reconciles_status_when_work_done_but_status_pending(self, db_session, pending_video, tmp_path):
+        """Status stuck in 'pending' with work products present should also be reconciled."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        originals_dir.mkdir(parents=True)
+        derivatives_dir.mkdir(parents=True)
+
+        dest = originals_dir / f"{pending_video.sha256_hash}.{pending_video.file_extension}"
+        dest.write_bytes(b"fake video")
+        thumb = derivatives_dir / f"{pending_video.sha256_hash}_thumb.jpg"
+        thumb.write_bytes(b"fake thumbnail")
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_video(str(pending_video.id))
+
+        db_session.refresh(pending_video)
+        assert pending_video.processing_status.state == ProcessingState.complete
 
     def test_marks_failed_when_file_missing(self, db_session, pending_video, tmp_path):
         uploads_dir = tmp_path / "uploads"

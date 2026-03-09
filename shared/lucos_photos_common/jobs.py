@@ -199,6 +199,22 @@ def process_photo(photo_id: str) -> None:
             logger.info("process_photo: photo %s already complete, skipping", photo_id)
             return
 
+        # Check if the actual work products already exist (file in originals + thumbnail).
+        # This can happen if a previous run crashed after processing but before updating status.
+        # In that case, reconcile the status to complete so the metric stays accurate.
+        dest = ORIGINALS_DIR / f"{photo.sha256_hash}.{photo.file_extension}"
+        thumb_path = DERIVATIVES_DIR / f"{photo.sha256_hash}_thumb.jpg"
+        if dest.exists() and thumb_path.exists():
+            logger.info(
+                "process_photo: photo %s work already done (originals + thumbnail present) "
+                "but status is %s — reconciling to complete",
+                photo_id, status.state.value,
+            )
+            status.state = ProcessingState.complete
+            status.error_message = None
+            db.commit()
+            return
+
         # Mark as processing
         status.state = ProcessingState.processing
         status.error_message = None
@@ -377,6 +393,22 @@ def process_video(photo_id: str) -> None:
 
         if status.state == ProcessingState.complete:
             logger.info("process_video: media item %s already complete, skipping", photo_id)
+            return
+
+        # Check if the actual work products already exist (file in originals + thumbnail).
+        # This can happen if a previous run crashed after processing but before updating status.
+        # In that case, reconcile the status to complete so the metric stays accurate.
+        dest = ORIGINALS_DIR / f"{photo.sha256_hash}.{photo.file_extension}"
+        thumb_path = DERIVATIVES_DIR / f"{photo.sha256_hash}_thumb.jpg"
+        if dest.exists() and thumb_path.exists():
+            logger.info(
+                "process_video: media item %s work already done (originals + thumbnail present) "
+                "but status is %s — reconciling to complete",
+                photo_id, status.state.value,
+            )
+            status.state = ProcessingState.complete
+            status.error_message = None
+            db.commit()
             return
 
         # Mark as processing
