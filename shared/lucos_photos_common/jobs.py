@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
-import httpx
+from loganne import updateLoganne
 from redis import Redis
 from rq import Queue
 from rq.job import Retry
@@ -174,28 +174,6 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
     logger.info("detect_and_save_faces: saved %d face record(s) for photo %s", len(detected_faces), photo.id)
 
 
-def emit_loganne_event(event_type: str, **extra_fields) -> None:
-    """Fire a best-effort POST to Loganne.
-
-    Failures are logged and swallowed — a Loganne outage must never fail a job.
-
-    Args:
-        event_type: The Loganne event type string (e.g. ``"photoProcessed"``).
-        **extra_fields: Additional key/value pairs merged into the event payload.
-    """
-    loganne_endpoint = os.environ.get("LOGANNE_ENDPOINT", "")
-    system = os.environ.get("SYSTEM", "lucos_photos")
-    if not loganne_endpoint:
-        logger.warning("emit_loganne_event: LOGANNE_ENDPOINT not set, skipping event %s", event_type)
-        return
-    payload = {"type": event_type, "humanReadable": event_type, "system": system}
-    payload.update(extra_fields)
-    try:
-        response = httpx.post(loganne_endpoint, json=payload, timeout=5.0)
-        response.raise_for_status()
-        logger.info("emit_loganne_event: emitted %s to Loganne", event_type)
-    except Exception as exc:
-        logger.warning("emit_loganne_event: failed to emit %s: %s", event_type, exc)
 
 
 def process_photo(photo_id: str) -> None:
@@ -293,11 +271,8 @@ def process_photo(photo_id: str) -> None:
             db.commit()
             logger.info("process_photo: photo %s processed successfully (%dx%d)", photo_id, photo.width, photo.height)
 
-            # Emit Loganne event — best-effort, must not fail the job
-            try:
-                emit_loganne_event("photoProcessed", photoId=photo_id)
-            except Exception:
-                logger.exception("process_photo: unexpected error emitting Loganne event for photo %s", photo_id)
+            # Emit Loganne event — updateLoganne swallows HTTP errors internally
+            updateLoganne("photoProcessed", f"Photo {photo_id} processed by lucos_photos")
 
         except Exception as exc:
             logger.exception("process_photo: error processing photo %s", photo_id)
@@ -470,11 +445,8 @@ def process_video(photo_id: str) -> None:
             db.commit()
             logger.info("process_video: media item %s processed successfully", photo_id)
 
-            # Emit Loganne event — best-effort, must not fail the job
-            try:
-                emit_loganne_event("videoProcessed", photoId=photo_id)
-            except Exception:
-                logger.exception("process_video: unexpected error emitting Loganne event for %s", photo_id)
+            # Emit Loganne event — updateLoganne swallows HTTP errors internally
+            updateLoganne("videoProcessed", f"Video {photo_id} processed by lucos_photos")
 
         except Exception as exc:
             logger.exception("process_video: error processing media item %s", photo_id)

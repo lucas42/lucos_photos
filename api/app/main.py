@@ -329,18 +329,8 @@ def _auth_challenge(request: Request):
 
 
 async def emit_loganne_event(event_type: str, human_readable: str):
-    endpoint = os.environ.get("LOGANNE_ENDPOINT")
-    if not endpoint:
-        return
-    try:
-        async with httpx.AsyncClient() as client:
-            await client.post(endpoint, json={
-                "type": event_type,
-                "source": os.environ.get("SYSTEM", "lucos_photos"),
-                "humanReadable": human_readable,
-            })
-    except Exception as e:
-        print(f"Error calling Loganne: {e}", flush=True)
+    from loganne import updateLoganne
+    await asyncio.to_thread(updateLoganne, event_type, human_readable)
 
 
 def photo_to_dict(photo: MediaItem) -> dict:

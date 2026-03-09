@@ -1,6 +1,12 @@
+import os
 import uuid
 
 import pytest
+
+# Set loganne env vars before any imports that would trigger loganne module-level code.
+# The loganne library calls sys.exit() at import time if these aren't set.
+os.environ.setdefault("LOGANNE_ENDPOINT", "http://loganne.test/events")
+os.environ.setdefault("SYSTEM", "lucos_photos")
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
