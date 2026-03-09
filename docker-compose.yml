@@ -61,6 +61,7 @@ services:
   redis:
     container_name: lucos_photos_redis
     image: redis:7-alpine
+    command: redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
     restart: unless-stopped
