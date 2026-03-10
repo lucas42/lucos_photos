@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="/icon.png" />
+    <link href="/style.css" rel="stylesheet" />
+    <title>Photo — Photos</title>
+</head>
+
+<body>
+    <lucos-navbar font="'Pinyon', cursive" title-padding="4px">Photos</lucos-navbar>
+    <nav class="site-nav" aria-label="Site navigation">
+        <a href="/">Photos</a>
+        <a href="/app">App</a>
+    </nav>
+
+    <div class="bg-glow">
+        <div class="glow-ball"></div>
+        <div class="glow-ball glow-ball-2"></div>
+    </div>
+
+    <main>
+        <div class="container" id="app">
+            <div id="photo-view" class="photo-view">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+    </main>
+
+    <script src="/lucos_navbar.js" type="text/javascript"></script>
+    <script>
+        const photoView = document.getElementById('photo-view');
+
+        function formatDate(isoString) {
+            if (!isoString) return 'Unknown';
+            const d = new Date(isoString);
+            return d.toLocaleString();
+        }
+
+        async function loadPhoto() {
+            // Extract UUID from the URL path: /photos/{uuid}
+            const match = window.location.pathname.match(/\/photos\/([^/]+)/);
+            if (!match) {
+                photoView.innerHTML = '<p class="error">Invalid photo URL.</p>';
+                return;
+            }
+            const photoId = match[1];
+
+            try {
+                const response = await fetch(`/photos/${photoId}`, {
+                    headers: { 'Accept': 'application/json' }
+                });
+                if (response.status === 404) {
+                    photoView.innerHTML = '<p class="error">Photo not found.</p>';
+                    return;
+                }
+                if (!response.ok) {
+                    throw new Error(`API responded with ${response.status}`);
+                }
+                const photo = await response.json();
+
+                document.title = `Photo ${photoId.slice(0, 8)}\u2026 — Photos`;
+
+                const isVideo = photo.mediaType === 'video';
+                let mediaEl;
+                if (isVideo) {
+                    mediaEl = document.createElement('video');
+                    mediaEl.src = `/photos/${photo.id}/original`;
+                    mediaEl.controls = true;
+                    mediaEl.preload = 'metadata';
+                    mediaEl.className = 'photo-detail-media';
+                } else {
+                    mediaEl = document.createElement('img');
+                    mediaEl.src = `/photos/${photo.id}/original`;
+                    mediaEl.alt = `Photo ${photo.id}`;
+                    mediaEl.className = 'photo-detail-media';
+                }
+
+                const meta = document.createElement('dl');
+                meta.className = 'photo-metadata';
+
+                function addMeta(label, value) {
+                    const dt = document.createElement('dt');
+                    dt.textContent = label;
+                    const dd = document.createElement('dd');
+                    dd.textContent = value || '—';
+                    meta.appendChild(dt);
+                    meta.appendChild(dd);
+                }
+
+                addMeta('Type', photo.mediaType === 'video' ? 'Video' : 'Photo');
+                addMeta('Taken', formatDate(photo.takenAt));
+                addMeta('Uploaded', formatDate(photo.uploadedAt));
+                if (photo.width && photo.height) {
+                    addMeta('Dimensions', `${photo.width} × ${photo.height}`);
+                }
+                addMeta('Format', photo.fileExtension ? photo.fileExtension.toUpperCase() : '—');
+                if (photo.processingStatus) {
+                    addMeta('Processing status', photo.processingStatus);
+                }
+
+                photoView.appendChild(mediaEl);
+                photoView.appendChild(meta);
+            } catch (err) {
+                console.error('Failed to load photo:', err);
+                photoView.innerHTML = '<p class="error">Failed to load photo.</p>';
+            }
+        }
+
+        loadPhoto();
+    </script>
+</body>
+
+</html>

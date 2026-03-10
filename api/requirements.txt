@@ -10,3 +10,4 @@ redis
 rq
 pydantic-settings
 Pillow
+python-mimeparse

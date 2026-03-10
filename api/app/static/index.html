@@ -177,6 +177,10 @@
         function renderMediaCard(item) {
             const isVideo = item.mediaType === 'video';
 
+            const link = document.createElement('a');
+            link.href = `/photos/${item.id}`;
+            link.className = 'media-card-link';
+
             const card = document.createElement('div');
             card.className = 'media-card';
 
@@ -203,13 +207,19 @@
                 card.appendChild(img);
             }
 
-            function clickHandler() {
-                openLightbox(item);
+            // Left-click opens lightbox; right-click / middle-click / "Open in new tab"
+            // uses the native browser behaviour via the <a> href.
+            function clickHandler(e) {
+                if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                    e.preventDefault();
+                    openLightbox(item);
+                }
             }
 
-            card.addEventListener('click', clickHandler);
+            link.addEventListener('click', clickHandler);
+            link.appendChild(card);
 
-            return card;
+            return link;
         }
 
         // ------------------------------------------------------------------
