@@ -94,12 +94,53 @@ class TestAppLatestAuth:
         assert response.status_code == 200
 
     def test_invalid_key_returns_401(self, client):
-        """Requests with an invalid key should be rejected."""
+        """Requests with an invalid key and no session cookie should be rejected."""
         response = client.get(
             "/api/app/latest",
             headers={"Authorization": "key wrongkey", "Accept": "application/json"},
         )
         assert response.status_code == 401
+
+    def test_invalid_key_with_valid_session_cookie_succeeds(self, client):
+        """An invalid key falls through to session cookie validation.
+
+        This is deliberate: a browser user who happens to have an unrelated or
+        stale Authorization header set (e.g. from a dev tool) should still be
+        authenticated via their session cookie rather than being locked out.
+        """
+        mock_resp = _make_github_response(200, SAMPLE_RELEASE)
+
+        # Mock the auth service to validate the session cookie
+        mock_auth_resp = MagicMock()
+        mock_auth_resp.raise_for_status.return_value = None
+        mock_auth_resp.json.return_value = {"id": 1}
+
+        mock_auth_client = AsyncMock()
+        mock_auth_client.__aenter__ = AsyncMock(return_value=mock_auth_client)
+        mock_auth_client.__aexit__ = AsyncMock(return_value=False)
+
+        # The session verification calls httpx.AsyncClient for the auth service,
+        # then the endpoint itself calls it for the GitHub API. We need to return
+        # the right mock for each call.
+        call_count = 0
+
+        async def mock_get(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if "auth.l42.eu" in url:
+                return mock_auth_resp
+            return mock_resp
+
+        mock_auth_client.get = mock_get
+
+        with patch("app.main.httpx.AsyncClient", return_value=mock_auth_client):
+            response = client.get(
+                "/api/app/latest",
+                headers={"Authorization": "key wrongkey", "Accept": "application/json"},
+                cookies={"auth_token": "valid-session-token"},
+            )
+
+        assert response.status_code == 200
 
 
 class TestAppLatestSuccess:

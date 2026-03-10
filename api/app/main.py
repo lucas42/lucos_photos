@@ -240,16 +240,28 @@ def get_db():
 WWW_AUTHENTICATE = {"WWW-Authenticate": 'Bearer realm="lucos_photos"'}
 
 
-def verify_key(authorization: Annotated[str | None, Header()] = None):
+def _is_valid_key(authorization: str | None) -> bool:
+    """Return True if the Authorization header contains a valid CLIENT_KEYS entry.
+
+    Accepts both 'Bearer <token>' and 'key <token>' schemes (the Android app uses
+    the latter). Returns False if the header is absent, malformed, or the token is
+    not in CLIENT_KEYS.
+    """
     if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header required", headers=WWW_AUTHENTICATE)
+        return False
     parts = authorization.split(" ", 1)
     if len(parts) != 2 or parts[0].lower() not in ("bearer", "key"):
-        raise HTTPException(status_code=401, detail="Expected 'Bearer' authorization scheme", headers=WWW_AUTHENTICATE)
+        return False
     token = parts[1]
     client_keys_str = os.environ.get("CLIENT_KEYS", "")
     valid_keys = {entry.split("=", 1)[1] for entry in client_keys_str.split(";") if "=" in entry}
-    if token not in valid_keys:
+    return token in valid_keys
+
+
+def verify_key(authorization: Annotated[str | None, Header()] = None):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header required", headers=WWW_AUTHENTICATE)
+    if not _is_valid_key(authorization):
         raise HTTPException(status_code=401, detail="Invalid key", headers=WWW_AUTHENTICATE)
 
 
@@ -264,15 +276,14 @@ async def verify_session_or_key(
     and from machine-to-machine clients like the Android app (key auth).
     If an Authorization header is present and contains a valid key, auth succeeds
     immediately. Otherwise, falls through to session cookie validation.
+
+    Note: if an Authorization header is present but the key is invalid, the request
+    still falls through to session cookie validation. This is intentional — a browser
+    user with a stale or unrelated Authorization header set (e.g. from a dev tool)
+    will still be authenticated via cookie rather than being locked out.
     """
-    if authorization:
-        parts = authorization.split(" ", 1)
-        if len(parts) == 2 and parts[0].lower() in ("bearer", "key"):
-            token = parts[1]
-            client_keys_str = os.environ.get("CLIENT_KEYS", "")
-            valid_keys = {entry.split("=", 1)[1] for entry in client_keys_str.split(";") if "=" in entry}
-            if token in valid_keys:
-                return  # key auth succeeded
+    if _is_valid_key(authorization):
+        return  # key auth succeeded
 
     await verify_session(request, auth_token)
 
