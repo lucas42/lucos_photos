@@ -522,3 +522,90 @@ a:hover {
 	text-align: center;
 	padding: 2rem;
 }
+
+/* ------------------------------------------------------------------ */
+/* People page                                                          */
+/* ------------------------------------------------------------------ */
+
+.page-title {
+	font-size: 1.75rem;
+	font-weight: 600;
+	margin-bottom: 2rem;
+	color: var(--text-color);
+}
+
+.people-list {
+	display: flex;
+	flex-direction: column;
+	gap: 1.5rem;
+	max-width: 700px;
+}
+
+.person-card {
+	background: var(--card-bg);
+	border-radius: 12px;
+	padding: 1.5rem;
+}
+
+.person-card-header {
+	margin-bottom: 1rem;
+}
+
+.person-name {
+	font-size: 1.1rem;
+	font-weight: 600;
+	margin: 0;
+}
+
+.person-contact {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+}
+
+.contact-status {
+	margin: 0;
+	font-size: 0.9rem;
+	opacity: 0.7;
+}
+
+.contact-status.linked {
+	color: var(--accent-color);
+	opacity: 1;
+}
+
+.contact-status.error-status {
+	color: #f87171;
+	opacity: 1;
+}
+
+.search-label {
+	font-size: 0.9rem;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+.unlink-btn {
+	display: inline-block;
+	background: none;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	color: var(--text-color);
+	border-radius: 6px;
+	padding: 0.35rem 0.75rem;
+	font-size: 0.85rem;
+	cursor: pointer;
+	transition: background 0.15s ease, border-color 0.15s ease;
+	width: fit-content;
+}
+
+.unlink-btn:hover {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: rgba(255, 255, 255, 0.4);
+}
+
+.empty-state-text {
+	opacity: 0.7;
+	font-size: 1.1rem;
+}

@@ -821,12 +821,22 @@ def person_to_dict(person: Person, photo_count: Optional[int] = None) -> dict:
 
 @app.get("/people")
 def list_people(
+    request: Request,
     _: Annotated[None, Depends(verify_session)],
     includePhotoCounts: bool = False,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
+    accept_header = request.headers.get("accept", "*/*")
+    best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
+    if best_match == "text/html":
+        arachne_key = os.environ.get("KEY_LUCOS_ARACHNE", "")
+        with open(STATIC_DIR / "people.html") as f:
+            html = f.read()
+        html = html.replace("__ARACHNE_KEY__", arachne_key)
+        return HTMLResponse(content=html)
+
     query = db.query(Person).order_by(Person.created_at.asc())
 
     if includePhotoCounts:
@@ -902,6 +912,62 @@ def get_person(
     data["photos"] = [photo_to_dict(p) for p in photos]
 
     return data
+
+
+@app.put("/people/{person_id}/contact")
+async def link_person_contact(
+    person_id: str,
+    body: dict,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    try:
+        person_uuid = uuid.UUID(person_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person = db.query(Person).filter(Person.id == person_uuid).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    contact_id = body.get("contactId")
+    if not contact_id:
+        raise HTTPException(status_code=422, detail="contactId is required")
+
+    person.contact_id = str(contact_id)
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        is_unique_violation = (e.orig and hasattr(e.orig, 'pgcode') and e.orig.pgcode == '23505') or \
+                              ("UNIQUE constraint failed" in str(e))
+        if is_unique_violation:
+            raise HTTPException(status_code=409, detail="A person with this contactId already exists")
+        raise
+    db.refresh(person)
+
+    await emit_loganne_event("personContactLinked", f"Person {person_uuid} linked to contact {contact_id} in lucos_photos")
+
+    return person_to_dict(person)
+
+
+@app.delete("/people/{person_id}/contact", status_code=status.HTTP_204_NO_CONTENT)
+async def unlink_person_contact(
+    person_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    try:
+        person_uuid = uuid.UUID(person_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person = db.query(Person).filter(Person.id == person_uuid).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person.contact_id = None
+    db.commit()
 
 
 def sync_photo_person(db: Session, photo_id) -> None:
