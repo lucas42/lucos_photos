@@ -253,6 +253,30 @@ def verify_key(authorization: Annotated[str | None, Header()] = None):
         raise HTTPException(status_code=401, detail="Invalid key", headers=WWW_AUTHENTICATE)
 
 
+async def verify_session_or_key(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+    auth_token: Annotated[str | None, Cookie()] = None,
+):
+    """Accept either key auth (Authorization: key/Bearer <token>) or a session cookie.
+
+    Used for endpoints that need to be callable both from the browser (cookie auth)
+    and from machine-to-machine clients like the Android app (key auth).
+    If an Authorization header is present and contains a valid key, auth succeeds
+    immediately. Otherwise, falls through to session cookie validation.
+    """
+    if authorization:
+        parts = authorization.split(" ", 1)
+        if len(parts) == 2 and parts[0].lower() in ("bearer", "key"):
+            token = parts[1]
+            client_keys_str = os.environ.get("CLIENT_KEYS", "")
+            valid_keys = {entry.split("=", 1)[1] for entry in client_keys_str.split(";") if "=" in entry}
+            if token in valid_keys:
+                return  # key auth succeeded
+
+    await verify_session(request, auth_token)
+
+
 async def verify_session(request: Request, auth_token: Annotated[str | None, Cookie()] = None):
     """Validate a user session via the lucos_authentication service.
 
@@ -1107,11 +1131,13 @@ async def _fetch_latest_app_release() -> dict:
 
 
 @app.get("/api/app/latest")
-async def get_app_latest(_: Annotated[None, Depends(verify_session)]):
+async def get_app_latest(_: Annotated[None, Depends(verify_session_or_key)]):
     """Return the version number and download URL of the latest Android app release.
 
     Fetches from GitHub Releases API and caches the result for 5 minutes.
     Returns 404 if no release exists yet, or 502 if the GitHub API is unreachable.
+
+    Accepts either session cookie auth (browser) or key auth (Android app).
     """
     return await _fetch_latest_app_release()
 

@@ -67,6 +67,40 @@ class TestAppLatestAuth:
             response = authenticated_client.get("/api/app/latest")
         assert response.status_code == 200
 
+    def test_key_auth_bearer_scheme_succeeds(self, client):
+        """Requests with a valid key via Bearer scheme should be accepted."""
+        mock_resp = _make_github_response(200, SAMPLE_RELEASE)
+        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            response = client.get("/api/app/latest", headers={"Authorization": "Bearer validkey"})
+        assert response.status_code == 200
+
+    def test_key_auth_key_scheme_succeeds(self, client):
+        """Requests with a valid key via 'key' scheme (Android app style) should be accepted."""
+        mock_resp = _make_github_response(200, SAMPLE_RELEASE)
+        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            response = client.get("/api/app/latest", headers={"Authorization": "key validkey"})
+        assert response.status_code == 200
+
+    def test_invalid_key_returns_401(self, client):
+        """Requests with an invalid key should be rejected."""
+        response = client.get(
+            "/api/app/latest",
+            headers={"Authorization": "key wrongkey", "Accept": "application/json"},
+        )
+        assert response.status_code == 401
+
 
 class TestAppLatestSuccess:
     """Happy-path tests for GET /api/app/latest."""
