@@ -189,6 +189,10 @@ class TestListPhotos:
 # GET /photos/{id}
 # ---------------------------------------------------------------------------
 
+JSON_ACCEPT = {"Accept": "application/json"}
+HTML_ACCEPT = {"Accept": "text/html"}
+
+
 class TestGetPhoto:
     def test_requires_auth(self, client, db_session):
         photo = make_photo(db_session)
@@ -197,18 +201,18 @@ class TestGetPhoto:
         assert response.status_code == 401
 
     def test_returns_404_for_unknown_id(self, authenticated_client):
-        response = authenticated_client.get(f"/photos/{uuid.uuid4()}")
+        response = authenticated_client.get(f"/photos/{uuid.uuid4()}", headers=JSON_ACCEPT)
         assert response.status_code == 404
 
     def test_returns_404_for_invalid_uuid(self, authenticated_client):
-        response = authenticated_client.get("/photos/not-a-uuid")
+        response = authenticated_client.get("/photos/not-a-uuid", headers=JSON_ACCEPT)
         assert response.status_code == 404
 
     def test_returns_photo_metadata(self, authenticated_client, db_session):
         photo = make_photo(db_session, "gettest")
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{photo.id}")
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == str(photo.id)
@@ -220,7 +224,7 @@ class TestGetPhoto:
         make_processing_status(db_session, photo, ProcessingState.complete)
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{photo.id}")
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
         assert response.status_code == 200
         data = response.json()
         assert data["processingStatus"] == "complete"
@@ -229,7 +233,7 @@ class TestGetPhoto:
         photo = make_photo(db_session, "nostatustest")
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{photo.id}")
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
         assert response.status_code == 200
         assert response.json()["processingStatus"] is None
 
@@ -238,7 +242,7 @@ class TestGetPhoto:
         face = make_face(db_session, photo)
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{photo.id}")
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
         assert response.status_code == 200
         data = response.json()
         assert len(data["faces"]) == 1
@@ -253,7 +257,7 @@ class TestGetPhoto:
         face = make_face(db_session, photo, person=person, confirmed=True)
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{photo.id}")
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
         assert response.status_code == 200
         face_data = response.json()["faces"][0]
         assert face_data["personId"] == str(person.id)
@@ -265,7 +269,7 @@ class TestGetPhoto:
         db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{photo.id}")
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
         assert response.status_code == 200
         data = response.json()
         assert str(person.id) in data["people"]
@@ -274,9 +278,42 @@ class TestGetPhoto:
         photo = make_photo(db_session, "notags")
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{photo.id}")
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
         assert response.status_code == 200
         assert response.json()["people"] == []
+
+    # -----------------------------------------------------------------------
+    # Content negotiation
+    # -----------------------------------------------------------------------
+
+    def test_returns_html_when_browser_accept_header(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "htmlnegotiation")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=HTML_ACCEPT)
+        assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+        assert b"<!DOCTYPE html>" in response.content
+
+    def test_returns_json_when_json_accept_header(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "jsonnegotiation")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
+        assert response.status_code == 200
+        assert "application/json" in response.headers["content-type"]
+        data = response.json()
+        assert data["id"] == str(photo.id)
+
+    def test_returns_json_when_no_accept_header(self, authenticated_client, db_session):
+        """With no Accept header (*/*), JSON should be returned as the default."""
+        photo = make_photo(db_session, "noaccept")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}")
+        assert response.status_code == 200
+        # mimeparse returns the first match for */*, which is application/json
+        assert "application/json" in response.headers["content-type"]
 
 
 # ---------------------------------------------------------------------------

@@ -464,3 +464,61 @@ a:hover {
 .back-link:hover {
 	opacity: 1;
 }
+
+/* ------------------------------------------------------------------ */
+/* Media card link wrapper                                             */
+/* ------------------------------------------------------------------ */
+
+.media-card-link {
+	display: contents; /* preserves grid layout — link wraps card without extra box */
+	text-decoration: none;
+	color: inherit;
+}
+
+/* ------------------------------------------------------------------ */
+/* Photo detail view                                                   */
+/* ------------------------------------------------------------------ */
+
+.photo-view {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2rem;
+	padding: 2rem 0;
+}
+
+.photo-detail-media {
+	max-width: 100%;
+	max-height: 80vh;
+	border-radius: 12px;
+	box-shadow: 0 8px 48px rgba(0, 0, 0, 0.6);
+	object-fit: contain;
+}
+
+.photo-metadata {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 0.5rem 1.5rem;
+	background: var(--card-bg);
+	border-radius: 12px;
+	padding: 1.5rem 2rem;
+	max-width: 480px;
+	width: 100%;
+}
+
+.photo-metadata dt {
+	font-weight: 600;
+	opacity: 0.7;
+	white-space: nowrap;
+}
+
+.photo-metadata dd {
+	margin: 0;
+	word-break: break-all;
+}
+
+.error {
+	opacity: 0.7;
+	text-align: center;
+	padding: 2rem;
+}

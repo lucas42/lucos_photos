@@ -12,8 +12,9 @@ from typing import Annotated, Optional
 from urllib.parse import quote, urlencode, urlparse
 
 import httpx
+import mimeparse
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from redis import Redis
@@ -364,9 +365,15 @@ def _auth_challenge(request: Request):
     )
 
 
-async def emit_loganne_event(event_type: str, human_readable: str):
+async def emit_loganne_event(event_type: str, human_readable: str, url: str | None = None):
     from loganne import updateLoganne
-    await asyncio.to_thread(updateLoganne, event_type, human_readable)
+    await asyncio.to_thread(updateLoganne, event_type, human_readable, url)
+
+
+def photo_url(photo_id) -> str:
+    """Return the absolute URL for a photo's HTML view."""
+    app_origin = os.environ.get("APP_ORIGIN", "")
+    return f"{app_origin}/photos/{photo_id}"
 
 
 def photo_to_dict(photo: MediaItem) -> dict:
@@ -613,9 +620,9 @@ async def upload_photo(
             tmp_path.unlink()
 
     if is_video:
-        await emit_loganne_event("videoAdded", f"Video {photo.id} added to lucos_photos")
+        await emit_loganne_event("videoAdded", f"Video {photo.id} added to lucos_photos", url=photo_url(photo.id))
     else:
-        await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos")
+        await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos", url=photo_url(photo.id))
 
     # Enqueue a job for the worker to process this media item.
     # If Redis is unavailable, we log a warning and continue — the worker's
@@ -660,6 +667,7 @@ def list_photos(
 @app.get("/photos/{photo_id}")
 def get_photo(
     photo_id: str,
+    request: Request,
     _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
@@ -671,6 +679,15 @@ def get_photo(
     photo = db.query(MediaItem).filter(MediaItem.id == photo_uuid).first()
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
+
+    # Content negotiation: use python-mimeparse to pick between HTML and JSON
+    # following the HTTP standard (quality values, specificity rules, etc.).
+    # text/html is listed first so that */* (the default when no Accept is sent)
+    # resolves to application/json — mimeparse picks the last item on equal quality.
+    accept_header = request.headers.get("accept", "*/*")
+    best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
+    if best_match == "text/html":
+        return FileResponse(STATIC_DIR / "photo.html")
 
     processing_status = db.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo_uuid).first()
     faces = db.query(Face).filter(Face.photo_id == photo_uuid).all()
@@ -962,7 +979,7 @@ async def assign_person(
     db.commit()
     db.refresh(face)
 
-    await emit_loganne_event("personTagged", f"Person {person_uuid} tagged on face {face_uuid} in photo {face.photo_id}")
+    await emit_loganne_event("personTagged", f"Person {person_uuid} tagged on face {face_uuid} in photo {face.photo_id}", url=photo_url(face.photo_id))
 
     return face_to_dict(face)
 

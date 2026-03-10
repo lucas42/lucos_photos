@@ -288,7 +288,8 @@ def process_photo(photo_id: str) -> None:
             logger.info("process_photo: photo %s processed successfully (%dx%d)", photo_id, photo.width, photo.height)
 
             # Emit Loganne event — updateLoganne swallows HTTP errors internally
-            updateLoganne("photoProcessed", f"Photo {photo_id} processed by lucos_photos")
+            app_origin = os.environ.get("APP_ORIGIN", "")
+            updateLoganne("photoProcessed", f"Photo {photo_id} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
 
         except Exception as exc:
             logger.exception("process_photo: error processing photo %s", photo_id)
@@ -478,7 +479,8 @@ def process_video(photo_id: str) -> None:
             logger.info("process_video: media item %s processed successfully", photo_id)
 
             # Emit Loganne event — updateLoganne swallows HTTP errors internally
-            updateLoganne("videoProcessed", f"Video {photo_id} processed by lucos_photos")
+            app_origin = os.environ.get("APP_ORIGIN", "")
+            updateLoganne("videoProcessed", f"Video {photo_id} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
 
         except Exception as exc:
             logger.exception("process_video: error processing media item %s", photo_id)
