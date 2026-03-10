@@ -973,13 +973,11 @@ def create_telemetry_event(
     raw_ts = body.get("timestamp")
     if raw_ts is not None:
         try:
-            from datetime import timezone as _tz
-            import re as _re
             # Replace trailing 'Z' with '+00:00' so fromisoformat works on all Python versions
-            normalized = _re.sub(r'Z$', '+00:00', str(raw_ts))
+            normalized = re.sub(r'Z$', '+00:00', str(raw_ts))
             client_timestamp = datetime.fromisoformat(normalized)
             if client_timestamp.tzinfo is None:
-                client_timestamp = client_timestamp.replace(tzinfo=_tz.utc)
+                client_timestamp = client_timestamp.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             raise HTTPException(status_code=422, detail="timestamp must be a valid ISO-8601 datetime")
 
@@ -1023,15 +1021,13 @@ def list_telemetry_events(
 
     if since:
         try:
-            import re as _re
-            from datetime import timezone as _tz
-            normalized = _re.sub(r'Z$', '+00:00', str(since))
+            normalized = re.sub(r'Z$', '+00:00', str(since))
             # Accept date-only strings by appending midnight UTC
             if 'T' not in normalized and '+' not in normalized:
                 normalized = f"{normalized}T00:00:00+00:00"
             since_dt = datetime.fromisoformat(normalized)
             if since_dt.tzinfo is None:
-                since_dt = since_dt.replace(tzinfo=_tz.utc)
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             raise HTTPException(status_code=422, detail="since must be a valid ISO-8601 date or datetime")
         query = query.filter(TelemetryEvent.received_at >= since_dt)
