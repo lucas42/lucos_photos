@@ -353,8 +353,12 @@ a:hover {
 	display: flex;
 	gap: 1rem;
 	padding: 0.5rem 2rem;
-	background: rgba(255, 255, 255, 0.04);
+	background: rgba(255, 255, 255, 0.1);
 	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.site-nav .current-page {
+	color: var(--accent-color);
 }
 
 @media (max-width: 640px) {
