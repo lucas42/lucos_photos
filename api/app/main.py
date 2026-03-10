@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1048,6 +1049,76 @@ def list_telemetry_events(
         ],
         "count": len(events),
     }
+
+
+GITHUB_RELEASES_API_URL = "https://api.github.com/repos/lucas42/lucos_photos_android/releases/latest"
+_APP_LATEST_CACHE: dict = {"data": None, "fetched_at": 0.0}
+_APP_LATEST_CACHE_TTL = 300  # 5 minutes
+
+
+async def _fetch_latest_app_release() -> dict:
+    """Fetch the latest release from GitHub Releases API, with a 5-minute in-memory cache.
+
+    Returns a dict with version, download_url, and released_at.
+    Raises HTTPException 404 if no APK asset is found on the latest release.
+    Raises HTTPException 502 if the GitHub API is unreachable.
+    """
+    now = time.monotonic()
+    if _APP_LATEST_CACHE["data"] is not None and now - _APP_LATEST_CACHE["fetched_at"] < _APP_LATEST_CACHE_TTL:
+        return _APP_LATEST_CACHE["data"]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                GITHUB_RELEASES_API_URL,
+                headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+                timeout=5.0,
+            )
+    except (httpx.HTTPError, httpx.TimeoutException) as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to reach GitHub Releases API: {exc}")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="No app releases found")
+
+    if not resp.is_success:
+        raise HTTPException(status_code=502, detail=f"GitHub Releases API returned {resp.status_code}")
+
+    release = resp.json()
+    tag_name: str = release.get("tag_name", "")
+    version = tag_name.lstrip("v") if tag_name else tag_name
+    released_at: str = release.get("published_at") or release.get("created_at", "")
+
+    # Find the APK asset
+    assets = release.get("assets", [])
+    apk_asset = next((a for a in assets if a.get("name", "").endswith(".apk")), None)
+    if not apk_asset:
+        raise HTTPException(status_code=404, detail="No APK asset found in the latest release")
+
+    download_url: str = apk_asset.get("browser_download_url", "")
+
+    result = {
+        "version": version,
+        "download_url": download_url,
+        "released_at": released_at,
+    }
+    _APP_LATEST_CACHE["data"] = result
+    _APP_LATEST_CACHE["fetched_at"] = now
+    return result
+
+
+@app.get("/api/app/latest")
+async def get_app_latest(_: Annotated[None, Depends(verify_session)]):
+    """Return the version number and download URL of the latest Android app release.
+
+    Fetches from GitHub Releases API and caches the result for 5 minutes.
+    Returns 404 if no release exists yet, or 502 if the GitHub API is unreachable.
+    """
+    return await _fetch_latest_app_release()
+
+
+@app.get("/app", include_in_schema=False)
+async def app_page(_: Annotated[None, Depends(verify_session)]):
+    return FileResponse(STATIC_DIR / "app.html")
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR), name="static")

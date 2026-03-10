@@ -332,6 +332,31 @@ main {
 	margin-left: auto;
 }
 
+/* ------------------------------------------------------------------ */
+/* Site navigation                                                      */
+/* ------------------------------------------------------------------ */
+
+.site-nav {
+	display: flex;
+	gap: 1rem;
+	padding: 0.5rem 2rem;
+	background: rgba(255, 255, 255, 0.04);
+	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.site-nav a {
+	color: var(--text-color);
+	text-decoration: none;
+	font-size: 0.9rem;
+	opacity: 0.8;
+	transition: opacity 0.15s ease;
+}
+
+.site-nav a:hover {
+	opacity: 1;
+	color: var(--accent-color);
+}
+
 @media (max-width: 640px) {
 	main {
 		padding: 1.5rem 1rem;
