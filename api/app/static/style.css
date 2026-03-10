@@ -410,6 +410,7 @@ a:hover {
 
 .download-button:hover {
 	opacity: 0.85;
+	color: #fff;
 }
 
 .download-button:focus {
