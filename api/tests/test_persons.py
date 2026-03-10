@@ -108,6 +108,105 @@ class TestCreatePerson:
         response = client.post("/people", json={"name": "Charlie"})
         assert response.status_code == 401
 
+class TestLinkPersonContact:
+    def test_link_contact(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+            response = authenticated_client.put(
+                f"/people/{person.id}/contact",
+                json={"contactId": "42"},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["contactId"] == "42"
+            mock_emit.assert_called_once()
+            assert mock_emit.call_args[0][0] == "personContactLinked"
+
+    def test_link_contact_overwrites_existing(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice", contact_id="old-id")
+        db_session.commit()
+
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock):
+            response = authenticated_client.put(
+                f"/people/{person.id}/contact",
+                json={"contactId": "new-id"},
+            )
+            assert response.status_code == 200
+            assert response.json()["contactId"] == "new-id"
+
+    def test_link_contact_duplicate(self, authenticated_client, db_session):
+        make_person(db_session, "Bob", contact_id="shared-id")
+        alice = make_person(db_session, "Alice")
+        db_session.commit()
+
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock):
+            response = authenticated_client.put(
+                f"/people/{alice.id}/contact",
+                json={"contactId": "shared-id"},
+            )
+            assert response.status_code == 409
+            assert "already exists" in response.json()["detail"]
+
+    def test_link_contact_missing_contact_id(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.put(
+            f"/people/{person.id}/contact",
+            json={},
+        )
+        assert response.status_code == 422
+
+    def test_link_contact_person_not_found(self, authenticated_client):
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock):
+            response = authenticated_client.put(
+                f"/people/{uuid.uuid4()}/contact",
+                json={"contactId": "42"},
+            )
+            assert response.status_code == 404
+
+    def test_requires_authentication(self, client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+        response = client.put(f"/people/{person.id}/contact", json={"contactId": "42"})
+        assert response.status_code == 401
+
+
+class TestUnlinkPersonContact:
+    def test_unlink_contact(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice", contact_id="42")
+        db_session.commit()
+
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+            response = authenticated_client.delete(f"/people/{person.id}/contact")
+            assert response.status_code == 204
+            mock_emit.assert_called_once()
+            assert mock_emit.call_args[0][0] == "personContactUnlinked"
+
+        db_session.refresh(person)
+        assert person.contact_id is None
+
+    def test_unlink_contact_when_not_linked(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock):
+            response = authenticated_client.delete(f"/people/{person.id}/contact")
+        assert response.status_code == 204
+
+    def test_unlink_contact_person_not_found(self, authenticated_client):
+        response = authenticated_client.delete(f"/people/{uuid.uuid4()}/contact")
+        assert response.status_code == 404
+
+    def test_requires_authentication(self, client, db_session):
+        person = make_person(db_session, "Alice", contact_id="42")
+        db_session.commit()
+        response = client.delete(f"/people/{person.id}/contact")
+        assert response.status_code == 401
+
+
 class TestGetPerson:
     def test_get_person(self, authenticated_client, db_session):
         person = make_person(db_session, "Alice", contact_id="alice-123")

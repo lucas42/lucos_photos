@@ -86,3 +86,44 @@ class TestPaginationHtml:
         assert "renderPagination" in response.text
         assert "Previous" in response.text
         assert "Next" in response.text
+
+
+# ---------------------------------------------------------------------------
+# People page HTML tests
+# ---------------------------------------------------------------------------
+
+class TestPeoplePageHtml:
+    def test_people_page_requires_auth(self, client, real_static_dir):
+        """Unauthenticated requests to GET /people (HTML) must redirect to auth."""
+        response = client.get("/people", headers={"Accept": "text/html"}, follow_redirects=False)
+        assert response.status_code == 302
+        assert "auth.l42.eu" in response.headers["location"]
+
+    def test_people_page_returns_html(self, authenticated_client, real_static_dir):
+        """GET /people with Accept: text/html returns the people page."""
+        response = authenticated_client.get("/people", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+        assert "lucos-navbar" in response.text
+        assert "lucos-search" in response.text
+
+    def test_people_page_injects_arachne_key(self, authenticated_client, real_static_dir, monkeypatch):
+        """The arachne key from KEY_LUCOS_ARACHNE env var is injected into the HTML."""
+        monkeypatch.setenv("KEY_LUCOS_ARACHNE", "test-arachne-key-abc123")
+        response = authenticated_client.get("/people", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert "test-arachne-key-abc123" in response.text
+        assert "__ARACHNE_KEY__" not in response.text
+
+    def test_people_page_handles_missing_arachne_key(self, authenticated_client, real_static_dir, monkeypatch):
+        """If KEY_LUCOS_ARACHNE is not set, the placeholder is replaced with an empty string."""
+        monkeypatch.delenv("KEY_LUCOS_ARACHNE", raising=False)
+        response = authenticated_client.get("/people", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert "__ARACHNE_KEY__" not in response.text
+
+    def test_people_returns_json_by_default(self, authenticated_client, real_static_dir):
+        """GET /people with Accept: application/json returns the JSON list."""
+        response = authenticated_client.get("/people", headers={"Accept": "application/json"})
+        assert response.status_code == 200
+        assert response.json() == []
