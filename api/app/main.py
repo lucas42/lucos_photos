@@ -1087,15 +1087,49 @@ def list_telemetry_events(
 
 
 GITHUB_RELEASES_API_URL = "https://api.github.com/repos/lucas42/lucos_photos_android/releases/latest"
+GITHUB_RELEASES_LIST_URL = "https://api.github.com/repos/lucas42/lucos_photos_android/releases?per_page=10"
 _APP_LATEST_CACHE: dict = {"data": None, "fetched_at": 0.0}
 _APP_LATEST_CACHE_TTL = 300  # 5 minutes
+
+_GITHUB_HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+
+
+def _extract_apk_result(release: dict, updating: bool = False) -> dict | None:
+    """Extract version/download_url/released_at from a GitHub release dict.
+
+    Returns None if the release has no APK asset.
+    Includes 'updating: true' when a newer release is being published.
+    """
+    assets = release.get("assets", [])
+    apk_asset = next((a for a in assets if a.get("name", "").endswith(".apk")), None)
+    if not apk_asset:
+        return None
+
+    tag_name: str = release.get("tag_name", "")
+    version = tag_name.lstrip("v") if tag_name else tag_name
+    released_at: str = release.get("published_at") or release.get("created_at", "")
+    download_url: str = apk_asset.get("browser_download_url", "")
+
+    result: dict = {
+        "version": version,
+        "download_url": download_url,
+        "released_at": released_at,
+    }
+    if updating:
+        result["updating"] = True
+    return result
 
 
 async def _fetch_latest_app_release() -> dict:
     """Fetch the latest release from GitHub Releases API, with a 5-minute in-memory cache.
 
     Returns a dict with version, download_url, and released_at.
-    Raises HTTPException 404 if no APK asset is found on the latest release.
+
+    If the latest GitHub release has no APK yet (i.e. a release is currently being
+    published), falls back to the most recent release that does have an APK, and
+    includes 'updating: true' in the response so the UI can signal this to the user.
+
+    Raises HTTPException 404 if no release with an APK is found anywhere.
     Raises HTTPException 502 if the GitHub API is unreachable.
     """
     now = time.monotonic()
@@ -1106,7 +1140,7 @@ async def _fetch_latest_app_release() -> dict:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 GITHUB_RELEASES_API_URL,
-                headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+                headers=_GITHUB_HEADERS,
                 timeout=5.0,
             )
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
@@ -1119,23 +1153,34 @@ async def _fetch_latest_app_release() -> dict:
         raise HTTPException(status_code=502, detail=f"GitHub Releases API returned {resp.status_code}")
 
     release = resp.json()
-    tag_name: str = release.get("tag_name", "")
-    version = tag_name.lstrip("v") if tag_name else tag_name
-    released_at: str = release.get("published_at") or release.get("created_at", "")
+    result = _extract_apk_result(release)
 
-    # Find the APK asset
-    assets = release.get("assets", [])
-    apk_asset = next((a for a in assets if a.get("name", "").endswith(".apk")), None)
-    if not apk_asset:
-        raise HTTPException(status_code=404, detail="No APK asset found in the latest release")
+    if result is None:
+        # The latest release exists but has no APK yet — a release is in progress.
+        # Fall back to the most recent release that does have an APK so users can
+        # still download a working version while the new one is being published.
+        try:
+            async with httpx.AsyncClient() as client:
+                list_resp = await client.get(
+                    GITHUB_RELEASES_LIST_URL,
+                    headers=_GITHUB_HEADERS,
+                    timeout=5.0,
+                )
+        except (httpx.HTTPError, httpx.TimeoutException) as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to reach GitHub Releases API: {exc}")
 
-    download_url: str = apk_asset.get("browser_download_url", "")
+        if not list_resp.is_success:
+            raise HTTPException(status_code=502, detail=f"GitHub Releases API returned {list_resp.status_code}")
 
-    result = {
-        "version": version,
-        "download_url": download_url,
-        "released_at": released_at,
-    }
+        releases = list_resp.json()
+        for candidate in releases:
+            result = _extract_apk_result(candidate, updating=True)
+            if result is not None:
+                break
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="No APK asset found in any recent release")
+
     _APP_LATEST_CACHE["data"] = result
     _APP_LATEST_CACHE["fetched_at"] = now
     return result
