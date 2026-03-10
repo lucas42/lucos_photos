@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
@@ -123,3 +123,25 @@ class PhotoPerson(Base):
     @photo.setter
     def photo(self, value: "MediaItem") -> None:
         self.media_item = value
+
+
+class TelemetryEvent(Base):
+    """Telemetry event submitted by a client (e.g. the Android app).
+
+    ``timestamp`` is the client-supplied event time (may be incorrect if the device clock
+    is wrong or the event was queued before sending).  ``received_at`` is the server-side
+    wall-clock time at which the row was inserted — always reliable.
+    """
+    __tablename__ = "telemetry_event"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    app_version: Mapped[Optional[str]] = mapped_column(String(50))
+    # Client-supplied event timestamp (ISO-8601 string stored as UTC-aware datetime)
+    timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Server-side receipt timestamp — always set on insert
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    # Flexible per-event-type payload; stored as JSONB in Postgres (JSON in SQLite for tests)
+    data: Mapped[Optional[dict]] = mapped_column(JSON)
