@@ -186,12 +186,16 @@
 
                 const data = await response.json();
 
-                versionLabel.textContent = `Version ${data.version}`;
-
-                if (data.released_at) {
-                    const date = new Date(data.released_at);
-                    const formatted = date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-                    statusMessage.textContent = `Released ${formatted}`;
+                if (data.updating) {
+                    versionLabel.textContent = `Version ${data.version} (a newer release is being published)`;
+                    statusMessage.textContent = 'A new version is being released. This link is for the previous version \u2014 check back in a few minutes for the latest.';
+                } else {
+                    versionLabel.textContent = `Version ${data.version}`;
+                    if (data.released_at) {
+                        const date = new Date(data.released_at);
+                        const formatted = date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+                        statusMessage.textContent = `Released ${formatted}`;
+                    }
                 }
 
                 downloadButton.href = data.download_url;

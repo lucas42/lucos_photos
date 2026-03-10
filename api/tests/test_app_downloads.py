@@ -30,6 +30,15 @@ def _make_github_response(status_code=200, json_body=None):
     return mock_resp
 
 
+def _make_async_client(response):
+    """Build a mock AsyncClient context manager that returns the given response."""
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    return mock_client
+
+
 SAMPLE_RELEASE = {
     "tag_name": "v1.2.3",
     "published_at": "2026-03-09T12:00:00Z",
@@ -209,7 +218,11 @@ class TestAppLatestErrors:
 
         assert response.status_code == 404
 
-    def test_returns_404_when_release_has_no_apk_asset(self, authenticated_client):
+    def test_returns_404_when_no_releases_have_apk(self, authenticated_client):
+        """When the latest release has no APK, the fallback list is also checked.
+
+        If no release in the list has an APK either, a 404 is returned.
+        """
         release_without_apk = {
             "tag_name": "v1.0.0",
             "published_at": "2026-03-01T00:00:00Z",
@@ -217,14 +230,14 @@ class TestAppLatestErrors:
                 {"name": "checksums.txt", "browser_download_url": "https://github.com/..."}
             ],
         }
-        mock_resp = _make_github_response(200, release_without_apk)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client_cls.return_value = mock_client
+        latest_resp = _make_github_response(200, release_without_apk)
+        list_resp = _make_github_response(200, [release_without_apk])
 
+        # Two separate AsyncClient context managers are used (one per HTTP call).
+        latest_client = _make_async_client(latest_resp)
+        list_client = _make_async_client(list_resp)
+
+        with patch("app.main.httpx.AsyncClient", side_effect=[latest_client, list_client]):
             response = authenticated_client.get("/api/app/latest")
 
         assert response.status_code == 404
@@ -250,6 +263,70 @@ class TestAppLatestErrors:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
+            response = authenticated_client.get("/api/app/latest")
+
+        assert response.status_code == 502
+
+
+PREVIOUS_RELEASE = {
+    "tag_name": "v1.1.0",
+    "published_at": "2026-03-01T10:00:00Z",
+    "assets": [
+        {
+            "name": "app-release.apk",
+            "browser_download_url": "https://github.com/lucas42/lucos_photos_android/releases/download/v1.1.0/app-release.apk",
+        }
+    ],
+}
+
+RELEASE_WITHOUT_APK = {
+    "tag_name": "v1.2.0",
+    "published_at": "2026-03-09T12:00:00Z",
+    "assets": [],
+}
+
+
+class TestAppLatestFallback:
+    """Tests for the fallback behaviour when the latest release has no APK yet."""
+
+    def test_falls_back_to_previous_release_when_latest_has_no_apk(self, authenticated_client):
+        """When the latest release has no APK, the previous release is served with updating=True."""
+        latest_resp = _make_github_response(200, RELEASE_WITHOUT_APK)
+        list_resp = _make_github_response(200, [RELEASE_WITHOUT_APK, PREVIOUS_RELEASE])
+
+        with patch("app.main.httpx.AsyncClient", side_effect=[
+            _make_async_client(latest_resp),
+            _make_async_client(list_resp),
+        ]):
+            response = authenticated_client.get("/api/app/latest")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["version"] == "1.1.0"
+        assert data["download_url"] == "https://github.com/lucas42/lucos_photos_android/releases/download/v1.1.0/app-release.apk"
+        assert data["updating"] is True
+
+    def test_updating_flag_absent_on_normal_release(self, authenticated_client):
+        """When the latest release has an APK, updating is not included in the response."""
+        mock_resp = _make_github_response(200, SAMPLE_RELEASE)
+        with patch("app.main.httpx.AsyncClient", return_value=_make_async_client(mock_resp)):
+            response = authenticated_client.get("/api/app/latest")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "updating" not in data
+
+    def test_returns_502_when_list_api_unreachable_after_no_apk(self, authenticated_client):
+        """502 is returned if the fallback list API call fails."""
+        latest_resp = _make_github_response(200, RELEASE_WITHOUT_APK)
+        latest_client = _make_async_client(latest_resp)
+
+        error_client = AsyncMock()
+        error_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+        error_client.__aenter__ = AsyncMock(return_value=error_client)
+        error_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("app.main.httpx.AsyncClient", side_effect=[latest_client, error_client]):
             response = authenticated_client.get("/api/app/latest")
 
         assert response.status_code == 502
