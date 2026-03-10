@@ -179,8 +179,11 @@ class TestUnlinkPersonContact:
         person = make_person(db_session, "Alice", contact_id="42")
         db_session.commit()
 
-        response = authenticated_client.delete(f"/people/{person.id}/contact")
-        assert response.status_code == 204
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+            response = authenticated_client.delete(f"/people/{person.id}/contact")
+            assert response.status_code == 204
+            mock_emit.assert_called_once()
+            assert mock_emit.call_args[0][0] == "personContactUnlinked"
 
         db_session.refresh(person)
         assert person.contact_id is None
@@ -189,7 +192,8 @@ class TestUnlinkPersonContact:
         person = make_person(db_session, "Alice")
         db_session.commit()
 
-        response = authenticated_client.delete(f"/people/{person.id}/contact")
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock):
+            response = authenticated_client.delete(f"/people/{person.id}/contact")
         assert response.status_code == 204
 
     def test_unlink_contact_person_not_found(self, authenticated_client):

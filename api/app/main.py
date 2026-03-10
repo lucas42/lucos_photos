@@ -969,6 +969,8 @@ async def unlink_person_contact(
     person.contact_id = None
     db.commit()
 
+    await emit_loganne_event("personContactUnlinked", f"Person {person_uuid} unlinked from contact in lucos_photos")
+
 
 def sync_photo_person(db: Session, photo_id) -> None:
     """Ensure photo_person table reflects all confirmed/unconfirmed person assignments for a photo."""
