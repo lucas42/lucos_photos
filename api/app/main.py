@@ -725,8 +725,13 @@ async def delete_photo(
     _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
-    """Delete a photo and all its associated data (faces, person links, processing status)."""
+    """Delete a photo, all its associated data, and its physical files on disk."""
     photo = _get_photo_or_404(photo_id, db)
+
+    # Capture file info before deleting the DB row
+    sha = photo.sha256_hash
+    ext = photo.file_extension
+    media_type = photo.media_type
 
     # Delete dependent rows manually (no cascade defined on the models)
     db.query(Face).filter(Face.photo_id == photo.id).delete()
@@ -734,6 +739,17 @@ async def delete_photo(
     db.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo.id).delete()
     db.delete(photo)
     db.commit()
+
+    # Remove physical files after the DB commit so a failed file deletion doesn't
+    # leave an orphaned DB row. Missing files are silently ignored.
+    files_to_delete = [
+        PHOTOS_DIR / "originals" / f"{sha}.{ext}",
+        PHOTOS_DIR / "derivatives" / f"{sha}.{ext}",
+    ]
+    if media_type == "video":
+        files_to_delete.append(PHOTOS_DIR / "derivatives" / f"{sha}_thumb.jpg")
+    for f in files_to_delete:
+        f.unlink(missing_ok=True)
 
     await emit_loganne_event("photoDeleted", f"Photo {photo_id} deleted from lucos_photos")
 

@@ -387,6 +387,55 @@ class TestDeletePhoto:
         db_session.expire_all()
         assert db_session.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo.id).first() is None
 
+    def test_deletes_associated_photo_person(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "deletewithperson")
+        db_session.commit()
+
+        person = Person()
+        db_session.add(person)
+        db_session.flush()
+        pp = PhotoPerson(photo_id=photo.id, person_id=person.id)
+        db_session.add(pp)
+        db_session.commit()
+
+        authenticated_client.delete(f"/photos/{photo.id}")
+
+        db_session.expire_all()
+        assert db_session.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).first() is None
+
+    def test_deletes_physical_files(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "deletephysical", ext="jpg")
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir(parents=True)
+        original_file = originals_dir / f"{photo.sha256_hash}.jpg"
+        original_file.write_bytes(b"image_data")
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir(parents=True)
+        derivative_file = derivatives_dir / f"{photo.sha256_hash}.jpg"
+        derivative_file.write_bytes(b"derivative_data")
+
+        response = authenticated_client.delete(f"/photos/{photo.id}")
+        assert response.status_code == 204
+        assert not original_file.exists()
+        assert not derivative_file.exists()
+
+    def test_missing_files_are_ignored(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        """Deletion succeeds even when physical files are not present on disk."""
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "deletenophysical")
+        db_session.commit()
+
+        response = authenticated_client.delete(f"/photos/{photo.id}")
+        assert response.status_code == 204
+
     def test_second_delete_returns_404(self, authenticated_client, db_session):
         photo = make_photo(db_session, "doubledelete")
         db_session.commit()
