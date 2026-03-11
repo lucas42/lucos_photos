@@ -79,14 +79,14 @@
 
         if (mediaItem.mediaType === 'video') {
             const video = document.createElement('video');
-            video.src = `/photos/${mediaItem.id}/original`;
+            video.src = mediaItem.originalUrl;
             video.controls = true;
             video.autoplay = true;
             video.preload = 'metadata';
             lightboxInner.appendChild(video);
         } else {
             const img = document.createElement('img');
-            img.src = `/photos/${mediaItem.id}/original`;
+            img.src = mediaItem.originalUrl;
             img.alt = `Photo ${mediaItem.id}`;
             lightboxInner.appendChild(img);
         }
@@ -169,7 +169,7 @@
         img.loading = 'lazy';
 
         if (isVideo) {
-            img.src = `/photos/${item.id}/thumbnail`;
+            img.src = item.thumbnailUrl;
             img.onerror = () => {
                 // Thumbnail not yet available — replace card with processing state
                 card.innerHTML = '';
@@ -183,7 +183,7 @@
             card.appendChild(img);
             card.appendChild(renderVideoPlayOverlay());
         } else {
-            img.src = `/photos/${item.id}/thumbnail`;
+            img.src = item.thumbnailUrl;
             card.appendChild(img);
         }
 

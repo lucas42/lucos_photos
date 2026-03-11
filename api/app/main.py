@@ -380,7 +380,17 @@ def photo_url(photo_id) -> str:
     return f"{app_origin}/photos/{photo_id}"
 
 
+def photo_file_urls(photo: MediaItem) -> tuple[str, str]:
+    """Return (originalUrl, thumbnailUrl) for a photo, using the canonical file-serving routes."""
+    ext = photo.file_extension or "bin"
+    app_origin = os.environ.get("APP_ORIGIN", "")
+    original_url = f"{app_origin}/photo_files/original/{photo.id}.{ext}"
+    thumbnail_url = f"{app_origin}/photo_files/thumbnail/{photo.id}.{ext}"
+    return original_url, thumbnail_url
+
+
 def photo_to_dict(photo: MediaItem) -> dict:
+    original_url, thumbnail_url = photo_file_urls(photo)
     return {
         "id": str(photo.id),
         "sha256Hash": photo.sha256_hash,
@@ -390,6 +400,8 @@ def photo_to_dict(photo: MediaItem) -> dict:
         "uploadedAt": photo.uploaded_at.isoformat() if photo.uploaded_at else None,
         "width": photo.width,
         "height": photo.height,
+        "originalUrl": original_url,
+        "thumbnailUrl": thumbnail_url,
     }
 
 
@@ -734,14 +746,20 @@ def _get_photo_or_404(photo_id: str, db: Session) -> MediaItem:
     return photo
 
 
-@app.get("/photos/{photo_id}/original")
+@app.get("/photo_files/original/{photo_id_with_ext}")
 def get_photo_original(
-    photo_id: str,
+    photo_id_with_ext: str,
     _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
     range: Annotated[str | None, Header()] = None,
 ):
-    """Serve the full-resolution original file, with HTTP range request support for video seeking."""
+    """Serve the full-resolution original file, with HTTP range request support for video seeking.
+
+    Expects ``{photo_id}.{ext}`` as the path segment — the extension is ignored (the authoritative
+    extension comes from the database) but is required so that browsers and download managers
+    save the file with a meaningful filename.
+    """
+    photo_id = photo_id_with_ext.rsplit(".", 1)[0]
     photo = _get_photo_or_404(photo_id, db)
     ext = photo.file_extension
     media_type = EXTENSION_MIME_TYPES.get(ext, "application/octet-stream")
@@ -756,17 +774,22 @@ def get_photo_original(
     )
 
 
-@app.get("/photos/{photo_id}/thumbnail")
+@app.get("/photo_files/thumbnail/{photo_id_with_ext}")
 def get_photo_thumbnail(
-    photo_id: str,
+    photo_id_with_ext: str,
     _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
     """Serve the thumbnail/derivative of a media item.
 
+    Expects ``{photo_id}.{ext}`` as the path segment — the extension is ignored (the authoritative
+    extension comes from the database) but is required so that browsers and download managers
+    save the file with a meaningful filename.
+
     For photos: tries a resized derivative, falls back to the original.
     For videos: serves the ffmpeg-generated JPEG thumbnail (``{hash}_thumb.jpg``).
     """
+    photo_id = photo_id_with_ext.rsplit(".", 1)[0]
     photo = _get_photo_or_404(photo_id, db)
     ext = photo.file_extension
 
@@ -794,6 +817,36 @@ def get_photo_thumbnail(
         path=file_path,
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/photos/{photo_id}/original")
+def redirect_photo_original(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Redirect legacy URL to the canonical file-serving route."""
+    photo = _get_photo_or_404(photo_id, db)
+    ext = photo.file_extension or "bin"
+    return RedirectResponse(
+        url=f"/photo_files/original/{photo.id}.{ext}",
+        status_code=status.HTTP_301_MOVED_PERMANENTLY,
+    )
+
+
+@app.get("/photos/{photo_id}/thumbnail")
+def redirect_photo_thumbnail(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Redirect legacy URL to the canonical file-serving route."""
+    photo = _get_photo_or_404(photo_id, db)
+    ext = photo.file_extension or "bin"
+    return RedirectResponse(
+        url=f"/photo_files/thumbnail/{photo.id}.{ext}",
+        status_code=status.HTTP_301_MOVED_PERMANENTLY,
     )
 
 

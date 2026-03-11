@@ -97,6 +97,8 @@ class TestListPhotos:
         assert "uploadedAt" in photo_data
         assert "width" in photo_data
         assert "height" in photo_data
+        assert "originalUrl" in photo_data
+        assert "thumbnailUrl" in photo_data
 
     def test_pagination_limit(self, authenticated_client, db_session):
         for i in range(5):
@@ -218,6 +220,8 @@ class TestGetPhoto:
         assert data["id"] == str(photo.id)
         assert data["sha256Hash"] == photo.sha256_hash
         assert data["fileExtension"] == "jpg"
+        assert data["originalUrl"] == f"/photo_files/original/{photo.id}.jpg"
+        assert data["thumbnailUrl"] == f"/photo_files/thumbnail/{photo.id}.jpg"
 
     def test_includes_processing_status(self, authenticated_client, db_session):
         photo = make_photo(db_session, "statustest")
@@ -317,22 +321,22 @@ class TestGetPhoto:
 
 
 # ---------------------------------------------------------------------------
-# GET /photos/{id}/original
+# GET /photo_files/original/{id}.{ext}  (canonical file-serving route)
 # ---------------------------------------------------------------------------
 
 class TestGetPhotoOriginal:
     def test_requires_auth(self, client, db_session):
         photo = make_photo(db_session)
         db_session.commit()
-        response = client.get(f"/photos/{photo.id}/original")
+        response = client.get(f"/photo_files/original/{photo.id}.jpg")
         assert response.status_code == 401
 
     def test_returns_404_for_unknown_photo(self, authenticated_client):
-        response = authenticated_client.get(f"/photos/{uuid.uuid4()}/original")
+        response = authenticated_client.get(f"/photo_files/original/{uuid.uuid4()}.jpg")
         assert response.status_code == 404
 
     def test_returns_404_for_invalid_uuid(self, authenticated_client):
-        response = authenticated_client.get("/photos/not-a-uuid/original")
+        response = authenticated_client.get("/photo_files/original/not-a-uuid.jpg")
         assert response.status_code == 404
 
     def test_returns_404_when_file_not_on_disk(self, authenticated_client, db_session, monkeypatch, tmp_path):
@@ -342,7 +346,7 @@ class TestGetPhotoOriginal:
         photo = make_photo(db_session, "missingoriginal")
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{photo.id}/original")
+        response = authenticated_client.get(f"/photo_files/original/{photo.id}.jpg")
         assert response.status_code == 404
 
     def test_serves_original_file(self, authenticated_client, db_session, monkeypatch, tmp_path):
@@ -361,9 +365,26 @@ class TestGetPhotoOriginal:
         derivatives_dir.mkdir(parents=True)
         (derivatives_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"derivative_content")
 
-        response = authenticated_client.get(f"/photos/{photo.id}/original")
+        response = authenticated_client.get(f"/photo_files/original/{photo.id}.jpg")
         assert response.status_code == 200
         assert response.content == b"original_content"
+
+    def test_extension_in_url_is_ignored(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        """Extension in URL path is cosmetic — authoritative extension comes from DB."""
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "extignored", ext="jpg")
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir(parents=True)
+        (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"image_bytes")
+
+        # Request with wrong extension — should still work (DB ext is used)
+        response = authenticated_client.get(f"/photo_files/original/{photo.id}.png")
+        assert response.status_code == 200
+        assert response.content == b"image_bytes"
 
     def test_sets_correct_content_type_for_jpg(self, authenticated_client, db_session, monkeypatch, tmp_path):
         import app.main as main_module
@@ -376,7 +397,7 @@ class TestGetPhotoOriginal:
         originals_dir.mkdir(parents=True)
         (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"image_bytes")
 
-        response = authenticated_client.get(f"/photos/{photo.id}/original")
+        response = authenticated_client.get(f"/photo_files/original/{photo.id}.jpg")
         assert response.status_code == 200
         assert "image/jpeg" in response.headers["content-type"]
 
@@ -391,29 +412,29 @@ class TestGetPhotoOriginal:
         originals_dir.mkdir(parents=True)
         (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"image_bytes")
 
-        response = authenticated_client.get(f"/photos/{photo.id}/original")
+        response = authenticated_client.get(f"/photo_files/original/{photo.id}.jpg")
         assert response.status_code == 200
         assert "Cache-Control" in response.headers
         assert "max-age" in response.headers["Cache-Control"]
 
 
 # ---------------------------------------------------------------------------
-# GET /photos/{id}/thumbnail
+# GET /photo_files/thumbnail/{id}.{ext}  (canonical file-serving route)
 # ---------------------------------------------------------------------------
 
 class TestGetPhotoThumbnail:
     def test_requires_auth(self, client, db_session):
         photo = make_photo(db_session)
         db_session.commit()
-        response = client.get(f"/photos/{photo.id}/thumbnail")
+        response = client.get(f"/photo_files/thumbnail/{photo.id}.jpg")
         assert response.status_code == 401
 
     def test_returns_404_for_unknown_photo(self, authenticated_client):
-        response = authenticated_client.get(f"/photos/{uuid.uuid4()}/thumbnail")
+        response = authenticated_client.get(f"/photo_files/thumbnail/{uuid.uuid4()}.jpg")
         assert response.status_code == 404
 
     def test_returns_404_for_invalid_uuid(self, authenticated_client):
-        response = authenticated_client.get("/photos/not-a-uuid/thumbnail")
+        response = authenticated_client.get("/photo_files/thumbnail/not-a-uuid.jpg")
         assert response.status_code == 404
 
     def test_returns_404_when_file_not_on_disk(self, authenticated_client, db_session, monkeypatch, tmp_path):
@@ -423,7 +444,7 @@ class TestGetPhotoThumbnail:
         photo = make_photo(db_session, "missingthumbnail")
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail")
+        response = authenticated_client.get(f"/photo_files/thumbnail/{photo.id}.jpg")
         assert response.status_code == 404
 
     def test_serves_derivative_when_available(self, authenticated_client, db_session, monkeypatch, tmp_path):
@@ -437,7 +458,7 @@ class TestGetPhotoThumbnail:
         derivatives_dir.mkdir(parents=True)
         (derivatives_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"derivative_content")
 
-        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail")
+        response = authenticated_client.get(f"/photo_files/thumbnail/{photo.id}.jpg")
         assert response.status_code == 200
         assert response.content == b"derivative_content"
 
@@ -452,7 +473,7 @@ class TestGetPhotoThumbnail:
         originals_dir.mkdir(parents=True)
         (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"original_content")
 
-        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail")
+        response = authenticated_client.get(f"/photo_files/thumbnail/{photo.id}.jpg")
         assert response.status_code == 200
         assert response.content == b"original_content"
 
@@ -467,7 +488,7 @@ class TestGetPhotoThumbnail:
         originals_dir.mkdir(parents=True)
         (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"image_bytes")
 
-        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail")
+        response = authenticated_client.get(f"/photo_files/thumbnail/{photo.id}.jpg")
         assert response.status_code == 200
         assert "image/jpeg" in response.headers["content-type"]
 
@@ -482,14 +503,56 @@ class TestGetPhotoThumbnail:
         originals_dir.mkdir(parents=True)
         (originals_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"image_bytes")
 
-        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail")
+        response = authenticated_client.get(f"/photo_files/thumbnail/{photo.id}.jpg")
         assert response.status_code == 200
         assert "Cache-Control" in response.headers
         assert "max-age" in response.headers["Cache-Control"]
 
 
 # ---------------------------------------------------------------------------
-# Range request support on GET /photos/{id}/original
+# Legacy redirects — GET /photos/{id}/original and /photos/{id}/thumbnail
+# ---------------------------------------------------------------------------
+
+class TestLegacyPhotoUrls:
+    def test_original_redirects_to_canonical(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "legacyorig", ext="jpg")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}/original", follow_redirects=False)
+        assert response.status_code == 301
+        assert response.headers["location"] == f"/photo_files/original/{photo.id}.jpg"
+
+    def test_thumbnail_redirects_to_canonical(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "legacythumb", ext="jpg")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}/thumbnail", follow_redirects=False)
+        assert response.status_code == 301
+        assert response.headers["location"] == f"/photo_files/thumbnail/{photo.id}.jpg"
+
+    def test_original_redirect_requires_auth(self, client, db_session):
+        photo = make_photo(db_session)
+        db_session.commit()
+        response = client.get(f"/photos/{photo.id}/original", follow_redirects=False)
+        assert response.status_code == 401
+
+    def test_thumbnail_redirect_requires_auth(self, client, db_session):
+        photo = make_photo(db_session)
+        db_session.commit()
+        response = client.get(f"/photos/{photo.id}/thumbnail", follow_redirects=False)
+        assert response.status_code == 401
+
+    def test_original_redirect_404_for_unknown(self, authenticated_client):
+        response = authenticated_client.get(f"/photos/{uuid.uuid4()}/original", follow_redirects=False)
+        assert response.status_code == 404
+
+    def test_thumbnail_redirect_404_for_unknown(self, authenticated_client):
+        response = authenticated_client.get(f"/photos/{uuid.uuid4()}/thumbnail", follow_redirects=False)
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Range request support on GET /photo_files/original/{id}.{ext}
 # ---------------------------------------------------------------------------
 
 def make_video(db, sha_seed="video", ext="mp4"):
@@ -514,7 +577,7 @@ class TestRangeRequests:
         db_session.commit()
         content = self._write_original(tmp_path, photo)
 
-        response = authenticated_client.get(f"/photos/{photo.id}/original")
+        response = authenticated_client.get(f"/photo_files/original/{photo.id}.{photo.file_extension}")
         assert response.status_code == 200
         assert response.headers.get("accept-ranges") == "bytes"
         assert response.content == content
@@ -527,7 +590,7 @@ class TestRangeRequests:
         self._write_original(tmp_path, photo, b"0123456789")
 
         response = authenticated_client.get(
-            f"/photos/{photo.id}/original",
+            f"/photo_files/original/{photo.id}.{photo.file_extension}",
             headers={"Range": "bytes=2-5"},
         )
         assert response.status_code == 206
@@ -543,7 +606,7 @@ class TestRangeRequests:
         self._write_original(tmp_path, photo, b"abcdefghij")
 
         response = authenticated_client.get(
-            f"/photos/{photo.id}/original",
+            f"/photo_files/original/{photo.id}.{photo.file_extension}",
             headers={"Range": "bytes=0-3"},
         )
         assert response.status_code == 206
@@ -559,7 +622,7 @@ class TestRangeRequests:
         self._write_original(tmp_path, photo, b"0123456789")
 
         response = authenticated_client.get(
-            f"/photos/{photo.id}/original",
+            f"/photo_files/original/{photo.id}.{photo.file_extension}",
             headers={"Range": "bytes=5-"},
         )
         assert response.status_code == 206
@@ -575,7 +638,7 @@ class TestRangeRequests:
         self._write_original(tmp_path, photo, b"0123456789")
 
         response = authenticated_client.get(
-            f"/photos/{photo.id}/original",
+            f"/photo_files/original/{photo.id}.{photo.file_extension}",
             headers={"Range": "bytes=-3"},
         )
         assert response.status_code == 206
@@ -591,7 +654,7 @@ class TestRangeRequests:
         self._write_original(tmp_path, photo, b"0123456789")
 
         response = authenticated_client.get(
-            f"/photos/{photo.id}/original",
+            f"/photo_files/original/{photo.id}.{photo.file_extension}",
             headers={"Range": "bytes=100-200"},
         )
         assert response.status_code == 416
@@ -605,7 +668,7 @@ class TestRangeRequests:
         self._write_original(tmp_path, photo, b"0123456789")
 
         response = authenticated_client.get(
-            f"/photos/{photo.id}/original",
+            f"/photo_files/original/{photo.id}.{photo.file_extension}",
             headers={"Range": "bytes=5-2"},
         )
         assert response.status_code == 416
@@ -619,14 +682,14 @@ class TestRangeRequests:
         self._write_original(tmp_path, photo, b"0123456789")
 
         response = authenticated_client.get(
-            f"/photos/{photo.id}/original",
+            f"/photo_files/original/{photo.id}.{photo.file_extension}",
             headers={"Range": "bytes=abc-def"},
         )
         assert response.status_code == 416
 
 
 # ---------------------------------------------------------------------------
-# Video thumbnail — GET /photos/{id}/thumbnail for video media items
+# Video thumbnail — GET /photo_files/thumbnail/{id}.{ext} for video media items
 # ---------------------------------------------------------------------------
 
 class TestVideoThumbnail:
@@ -637,7 +700,7 @@ class TestVideoThumbnail:
         video = make_video(db_session, "vid_nothumbnail")
         db_session.commit()
 
-        response = authenticated_client.get(f"/photos/{video.id}/thumbnail")
+        response = authenticated_client.get(f"/photo_files/thumbnail/{video.id}.mp4")
         assert response.status_code == 404
 
     def test_serves_jpeg_thumbnail_for_video(self, authenticated_client, db_session, monkeypatch, tmp_path):
@@ -652,7 +715,7 @@ class TestVideoThumbnail:
         thumb_content = b"jpeg_thumbnail_bytes"
         (derivatives_dir / f"{video.sha256_hash}_thumb.jpg").write_bytes(thumb_content)
 
-        response = authenticated_client.get(f"/photos/{video.id}/thumbnail")
+        response = authenticated_client.get(f"/photo_files/thumbnail/{video.id}.mp4")
         assert response.status_code == 200
         assert response.content == thumb_content
         assert "image/jpeg" in response.headers["content-type"]
@@ -668,7 +731,7 @@ class TestVideoThumbnail:
         derivatives_dir.mkdir(parents=True)
         (derivatives_dir / f"{video.sha256_hash}_thumb.jpg").write_bytes(b"bytes")
 
-        response = authenticated_client.get(f"/photos/{video.id}/thumbnail")
+        response = authenticated_client.get(f"/photo_files/thumbnail/{video.id}.mp4")
         assert response.status_code == 200
         assert "Cache-Control" in response.headers
         assert "max-age" in response.headers["Cache-Control"]
@@ -687,5 +750,5 @@ class TestVideoThumbnail:
         (originals_dir / f"{video.sha256_hash}.mp4").write_bytes(b"video_bytes")
 
         # Should return 404 because there's no _thumb.jpg
-        response = authenticated_client.get(f"/photos/{video.id}/thumbnail")
+        response = authenticated_client.get(f"/photo_files/thumbnail/{video.id}.mp4")
         assert response.status_code == 404
