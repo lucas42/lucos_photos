@@ -118,6 +118,14 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
     finally:
         db.close()
 
+    # Run face clustering after the pending sweep so newly processed photos
+    # get their faces incorporated into clusters.
+    try:
+        from lucos_photos_common.jobs import cluster_faces
+        cluster_faces()
+    except Exception:
+        logger.exception("sweep: error during face clustering")
+
 
 def run_sweep_loop(redis_conn: Redis) -> None:
     """Background thread: periodically sweep for pending photos."""

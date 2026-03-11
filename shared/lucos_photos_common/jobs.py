@@ -19,7 +19,7 @@ from rq import Queue
 from rq.job import Retry
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import Face, MediaItem, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -534,3 +534,112 @@ def reprocess_photo(photo_id: str) -> None:
 
     queue.enqueue(job_fn, photo_id, retry=Retry(max=3, interval=[10, 30, 60]))
     logger.info("reprocess_photo: enqueued %s for photo %s", job_fn.__name__, photo_id)
+
+
+def _sync_photo_person(db, photo_id) -> None:
+    """Ensure photo_person table reflects all person assignments for a photo.
+
+    Mirrors the same logic in api/app/main.py so the worker can maintain
+    the join table after face clustering assigns person_ids.
+    """
+    face_person_ids = {
+        f.person_id
+        for f in db.query(Face).filter(Face.photo_id == photo_id, Face.person_id.isnot(None)).all()
+    }
+
+    existing_rows = db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo_id).all()
+    for row in existing_rows:
+        if row.person_id not in face_person_ids:
+            db.delete(row)
+
+    existing_person_ids = {row.person_id for row in existing_rows}
+    for pid in face_person_ids:
+        if pid not in existing_person_ids:
+            db.add(PhotoPerson(photo_id=photo_id, person_id=pid))
+
+
+def cluster_faces() -> None:
+    """Cluster all unassigned face embeddings and create Person records.
+
+    Uses DBSCAN (cosine metric) to group faces that appear to show the same person.
+    For each resulting cluster, creates a Person record and assigns all faces in the
+    cluster to it. Also updates the photo_person join table.
+
+    Only processes faces where:
+      - person_id IS NULL (not yet assigned to anyone)
+      - person_confirmed IS False (not manually confirmed — those are authoritative and must not be changed)
+      - embedding IS NOT NULL (need an embedding to cluster)
+
+    Idempotent: existing confirmed assignments are never modified.
+    """
+    db = SessionLocal()
+    try:
+        # Fetch all unassigned faces with embeddings
+        unassigned = (
+            db.query(Face)
+            .filter(
+                Face.person_id.is_(None),
+                Face.person_confirmed.is_(False),
+                Face.embedding.isnot(None),
+            )
+            .all()
+        )
+
+        if not unassigned:
+            logger.info("cluster_faces: no unassigned faces with embeddings, nothing to do")
+            return
+
+        logger.info("cluster_faces: clustering %d unassigned face(s)", len(unassigned))
+
+        import numpy as np
+        from sklearn.cluster import DBSCAN
+
+        embeddings = np.array([f.embedding for f in unassigned], dtype=np.float32)
+
+        # Normalise embeddings to unit vectors so cosine distance = 1 - dot product.
+        # sklearn's cosine metric in DBSCAN computes 1 - cosine_similarity.
+        # epsilon=0.4 matches FACE_SIMILARITY_THRESHOLD used elsewhere.
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        # Avoid division by zero for zero vectors
+        norms = np.where(norms == 0, 1.0, norms)
+        normalised = embeddings / norms
+
+        clustering = DBSCAN(eps=FACE_SIMILARITY_THRESHOLD, min_samples=1, metric="cosine").fit(normalised)
+        labels = clustering.labels_
+
+        # Group face indices by cluster label (-1 = noise, skip)
+        clusters: dict[int, list[int]] = {}
+        for idx, label in enumerate(labels):
+            if label == -1:
+                continue
+            clusters.setdefault(label, []).append(idx)
+
+        logger.info("cluster_faces: found %d cluster(s) (noise faces: %d)",
+                    len(clusters), int((labels == -1).sum()))
+
+        # For each cluster, create a Person and assign faces
+        affected_photo_ids: set = set()
+        for label, indices in clusters.items():
+            person = Person()
+            db.add(person)
+            db.flush()  # get person.id
+
+            for idx in indices:
+                face = unassigned[idx]
+                face.person_id = person.id
+                affected_photo_ids.add(face.photo_id)
+
+        # Update photo_person for all affected photos
+        for photo_id in affected_photo_ids:
+            _sync_photo_person(db, photo_id)
+
+        db.commit()
+        logger.info("cluster_faces: assigned %d face(s) across %d photo(s)",
+                    sum(len(v) for v in clusters.values()), len(affected_photo_ids))
+
+    except Exception:
+        logger.exception("cluster_faces: error during face clustering")
+        db.rollback()
+        raise
+    finally:
+        db.close()
