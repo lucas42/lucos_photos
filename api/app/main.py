@@ -1175,6 +1175,8 @@ GITHUB_RELEASES_API_URL = "https://api.github.com/repos/lucas42/lucos_photos_and
 GITHUB_RELEASES_LIST_URL = "https://api.github.com/repos/lucas42/lucos_photos_android/releases?per_page=10"
 _APP_LATEST_CACHE: dict = {"data": None, "fetched_at": 0.0}
 _APP_LATEST_CACHE_TTL = 300  # 5 minutes
+_APP_LATEST_ERROR_CACHE: dict = {"error": None, "fetched_at": 0.0}
+_APP_LATEST_ERROR_CACHE_TTL = 60  # 1 minute
 
 _GITHUB_HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 
@@ -1216,10 +1218,22 @@ async def _fetch_latest_app_release() -> dict:
 
     Raises HTTPException 404 if no release with an APK is found anywhere.
     Raises HTTPException 502 if the GitHub API is unreachable.
+
+    Both successful and error results are cached to avoid hammering GitHub during
+    transient failures. Successful results are cached for 5 minutes; errors for 60 seconds.
     """
     now = time.monotonic()
     if _APP_LATEST_CACHE["data"] is not None and now - _APP_LATEST_CACHE["fetched_at"] < _APP_LATEST_CACHE_TTL:
         return _APP_LATEST_CACHE["data"]
+
+    if _APP_LATEST_ERROR_CACHE["error"] is not None and now - _APP_LATEST_ERROR_CACHE["fetched_at"] < _APP_LATEST_ERROR_CACHE_TTL:
+        cached_error = _APP_LATEST_ERROR_CACHE["error"]
+        raise HTTPException(status_code=cached_error["status_code"], detail=cached_error["detail"])
+
+    def _cache_error_and_raise(status_code: int, detail: str) -> None:
+        _APP_LATEST_ERROR_CACHE["error"] = {"status_code": status_code, "detail": detail}
+        _APP_LATEST_ERROR_CACHE["fetched_at"] = now
+        raise HTTPException(status_code=status_code, detail=detail)
 
     try:
         async with httpx.AsyncClient() as client:
@@ -1229,13 +1243,13 @@ async def _fetch_latest_app_release() -> dict:
                 timeout=5.0,
             )
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to reach GitHub Releases API: {exc}")
+        _cache_error_and_raise(502, f"Failed to reach GitHub Releases API: {exc}")
 
     if resp.status_code == 404:
-        raise HTTPException(status_code=404, detail="No app releases found")
+        _cache_error_and_raise(404, "No app releases found")
 
     if not resp.is_success:
-        raise HTTPException(status_code=502, detail=f"GitHub Releases API returned {resp.status_code}")
+        _cache_error_and_raise(502, f"GitHub Releases API returned {resp.status_code}")
 
     release = resp.json()
     result = _extract_apk_result(release)
@@ -1252,10 +1266,10 @@ async def _fetch_latest_app_release() -> dict:
                     timeout=5.0,
                 )
         except (httpx.HTTPError, httpx.TimeoutException) as exc:
-            raise HTTPException(status_code=502, detail=f"Failed to reach GitHub Releases API: {exc}")
+            _cache_error_and_raise(502, f"Failed to reach GitHub Releases API: {exc}")
 
         if not list_resp.is_success:
-            raise HTTPException(status_code=502, detail=f"GitHub Releases API returned {list_resp.status_code}")
+            _cache_error_and_raise(502, f"GitHub Releases API returned {list_resp.status_code}")
 
         releases = list_resp.json()
         for candidate in releases:
@@ -1264,7 +1278,7 @@ async def _fetch_latest_app_release() -> dict:
                 break
 
         if result is None:
-            raise HTTPException(status_code=404, detail="No APK asset found in any recent release")
+            _cache_error_and_raise(404, "No APK asset found in any recent release")
 
     _APP_LATEST_CACHE["data"] = result
     _APP_LATEST_CACHE["fetched_at"] = now
