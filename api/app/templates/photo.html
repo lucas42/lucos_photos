@@ -38,6 +38,26 @@
             <dd>{{ photo.processingStatus }}</dd>
             {% endif %}
         </dl>
+
+        <div class="photo-actions">
+            <button id="delete-btn" class="btn btn-danger">Delete</button>
+        </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.getElementById('delete-btn').addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to delete this photo? This cannot be undone.')) {
+            return;
+        }
+        const response = await fetch('/photos/{{ photo.id }}', { method: 'DELETE' });
+        if (response.ok) {
+            window.location.href = '/';
+        } else {
+            alert('Failed to delete photo. Please try again.');
+        }
+    });
+</script>
 {% endblock %}

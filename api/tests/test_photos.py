@@ -321,6 +321,131 @@ class TestGetPhoto:
 
 
 # ---------------------------------------------------------------------------
+# DELETE /photos/{id}
+# ---------------------------------------------------------------------------
+
+class TestDeletePhoto:
+    def test_requires_auth(self, client, db_session):
+        photo = make_photo(db_session)
+        db_session.commit()
+        response = client.delete(f"/photos/{photo.id}")
+        assert response.status_code == 401
+
+    def test_returns_404_for_unknown_photo(self, authenticated_client):
+        response = authenticated_client.delete(f"/photos/{uuid.uuid4()}")
+        assert response.status_code == 404
+
+    def test_returns_404_for_invalid_uuid(self, authenticated_client):
+        response = authenticated_client.delete("/photos/not-a-uuid")
+        assert response.status_code == 404
+
+    def test_deletes_photo(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "todelete")
+        db_session.commit()
+        photo_id = photo.id
+
+        response = authenticated_client.delete(f"/photos/{photo_id}")
+        assert response.status_code == 204
+
+        # Photo should no longer exist
+        db_session.expire_all()
+        assert db_session.query(MediaItem).filter(MediaItem.id == photo_id).first() is None
+
+    def test_photo_no_longer_accessible_after_deletion(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "deletedget")
+        db_session.commit()
+
+        authenticated_client.delete(f"/photos/{photo.id}")
+        response = authenticated_client.get(f"/photos/{photo.id}")
+        assert response.status_code == 404
+
+    def test_deletes_associated_faces(self, authenticated_client, db_session):
+        from lucos_photos_common.models import Face as FaceModel
+        photo = make_photo(db_session, "deletewithfaces")
+        db_session.commit()
+
+        face = FaceModel(
+            photo_id=photo.id,
+            bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2,
+        )
+        db_session.add(face)
+        db_session.commit()
+        face_id = face.id
+
+        authenticated_client.delete(f"/photos/{photo.id}")
+
+        db_session.expire_all()
+        assert db_session.query(FaceModel).filter(FaceModel.id == face_id).first() is None
+
+    def test_deletes_associated_processing_status(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "deletewithstatus")
+        make_processing_status(db_session, photo, ProcessingState.complete)
+        db_session.commit()
+
+        authenticated_client.delete(f"/photos/{photo.id}")
+
+        db_session.expire_all()
+        assert db_session.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo.id).first() is None
+
+    def test_deletes_associated_photo_person(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "deletewithperson")
+        db_session.commit()
+
+        person = Person()
+        db_session.add(person)
+        db_session.flush()
+        pp = PhotoPerson(photo_id=photo.id, person_id=person.id)
+        db_session.add(pp)
+        db_session.commit()
+
+        authenticated_client.delete(f"/photos/{photo.id}")
+
+        db_session.expire_all()
+        assert db_session.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).first() is None
+
+    def test_deletes_physical_files(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "deletephysical", ext="jpg")
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir(parents=True)
+        original_file = originals_dir / f"{photo.sha256_hash}.jpg"
+        original_file.write_bytes(b"image_data")
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir(parents=True)
+        derivative_file = derivatives_dir / f"{photo.sha256_hash}.jpg"
+        derivative_file.write_bytes(b"derivative_data")
+
+        response = authenticated_client.delete(f"/photos/{photo.id}")
+        assert response.status_code == 204
+        assert not original_file.exists()
+        assert not derivative_file.exists()
+
+    def test_missing_files_are_ignored(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        """Deletion succeeds even when physical files are not present on disk."""
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "deletenophysical")
+        db_session.commit()
+
+        response = authenticated_client.delete(f"/photos/{photo.id}")
+        assert response.status_code == 204
+
+    def test_second_delete_returns_404(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "doubledelete")
+        db_session.commit()
+
+        authenticated_client.delete(f"/photos/{photo.id}")
+        response = authenticated_client.delete(f"/photos/{photo.id}")
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # GET /photo_files/original/{id}.{ext}  (canonical file-serving route)
 # ---------------------------------------------------------------------------
 
