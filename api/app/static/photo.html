@@ -53,6 +53,11 @@
                 const response = await fetch(`/photos/${photoId}`, {
                     headers: { 'Accept': 'application/json' }
                 });
+                if (response.status === 401) {
+                    const redirectUri = encodeURIComponent(window.location.href);
+                    window.location.href = `https://auth.l42.eu/authenticate?redirect_uri=${redirectUri}`;
+                    return;
+                }
                 if (response.status === 404) {
                     photoView.innerHTML = '<p class="error">Photo not found.</p>';
                     return;
