@@ -12,12 +12,16 @@ REAL_STATIC_DIR = Path(main_module.__file__).parent / "static"
 
 @pytest.fixture(autouse=True)
 def clear_app_latest_cache():
-    """Reset the in-memory cache before each test to ensure isolation."""
+    """Reset the in-memory caches before each test to ensure isolation."""
     main_module._APP_LATEST_CACHE["data"] = None
     main_module._APP_LATEST_CACHE["fetched_at"] = 0.0
+    main_module._APP_LATEST_ERROR_CACHE["error"] = None
+    main_module._APP_LATEST_ERROR_CACHE["fetched_at"] = 0.0
     yield
     main_module._APP_LATEST_CACHE["data"] = None
     main_module._APP_LATEST_CACHE["fetched_at"] = 0.0
+    main_module._APP_LATEST_ERROR_CACHE["error"] = None
+    main_module._APP_LATEST_ERROR_CACHE["fetched_at"] = 0.0
 
 
 def _make_github_response(status_code=200, json_body=None):
@@ -266,6 +270,83 @@ class TestAppLatestErrors:
             response = authenticated_client.get("/api/app/latest")
 
         assert response.status_code == 502
+
+
+class TestAppLatestNegativeCache:
+    """Tests for negative-result caching: errors should not cause a fresh GitHub call each time."""
+
+    def test_502_error_is_cached_and_github_not_called_again(self, authenticated_client):
+        """A 502 from GitHub should be cached; the second request must not call GitHub again."""
+        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            response1 = authenticated_client.get("/api/app/latest")
+            response2 = authenticated_client.get("/api/app/latest")
+
+        assert response1.status_code == 502
+        assert response2.status_code == 502
+        # GitHub should only be called once; second response served from error cache
+        assert mock_client.get.call_count == 1
+
+    def test_404_error_is_cached_and_github_not_called_again(self, authenticated_client):
+        """A 404 from GitHub should also be cached for the negative TTL."""
+        mock_resp = _make_github_response(404)
+        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value = mock_client
+
+            response1 = authenticated_client.get("/api/app/latest")
+            response2 = authenticated_client.get("/api/app/latest")
+
+        assert response1.status_code == 404
+        assert response2.status_code == 404
+        assert mock_client.get.call_count == 1
+
+    def test_error_cache_expires_and_github_is_retried(self, authenticated_client):
+        """Once the negative TTL has elapsed, a fresh GitHub call should be made."""
+        import time as time_module
+
+        mock_resp = _make_github_response(500)
+        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            authenticated_client.get("/api/app/latest")
+
+            # Simulate the error cache having expired
+            main_module._APP_LATEST_ERROR_CACHE["fetched_at"] = (
+                time_module.monotonic() - main_module._APP_LATEST_ERROR_CACHE_TTL - 1
+            )
+
+            authenticated_client.get("/api/app/latest")
+
+        # GitHub should be called twice: once on first request, once after expiry
+        assert mock_client.get.call_count == 2
+
+    def test_successful_result_clears_error_cache(self, authenticated_client):
+        """After a successful response, the error cache should not interfere."""
+        # Pre-populate the error cache with a stale error
+        import time as time_module
+        main_module._APP_LATEST_ERROR_CACHE["error"] = {"status_code": 502, "detail": "old error"}
+        main_module._APP_LATEST_ERROR_CACHE["fetched_at"] = (
+            time_module.monotonic() - main_module._APP_LATEST_ERROR_CACHE_TTL - 1
+        )
+
+        mock_resp = _make_github_response(200, SAMPLE_RELEASE)
+        with patch("app.main.httpx.AsyncClient", return_value=_make_async_client(mock_resp)):
+            response = authenticated_client.get("/api/app/latest")
+
+        assert response.status_code == 200
+        assert response.json()["version"] == "1.2.3"
 
 
 PREVIOUS_RELEASE = {
