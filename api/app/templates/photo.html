@@ -6,11 +6,11 @@
 <div class="container" id="app">
     <div id="photo-view" class="photo-view">
         {% if photo.mediaType == 'video' %}
-        <video src="/photos/{{ photo.id }}/original"
+        <video src="{{ photo.originalUrl }}"
                controls preload="metadata"
                class="photo-detail-media"></video>
         {% else %}
-        <img src="/photos/{{ photo.id }}/original"
+        <img src="{{ photo.originalUrl }}"
              alt="Photo {{ photo.id }}"
              class="photo-detail-media" />
         {% endif %}
