@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from lucos_photos_common.database import SessionLocal
+from lucos_photos_common.jobs import sync_photo_person
 from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus, TelemetryEvent
 
 AUTH_DOMAIN = "https://auth.l42.eu"
@@ -1066,27 +1067,6 @@ async def unlink_person_contact(
     db.commit()
 
     await emit_loganne_event("personContactUnlinked", f"Person {person_uuid} unlinked from contact in lucos_photos")
-
-
-def sync_photo_person(db: Session, photo_id) -> None:
-    """Ensure photo_person table reflects all confirmed/unconfirmed person assignments for a photo."""
-    # Collect the set of person_ids currently assigned to faces for this photo
-    face_person_ids = {
-        f.person_id
-        for f in db.query(Face).filter(Face.photo_id == photo_id, Face.person_id.is_not(None)).all()
-    }
-
-    # Remove photo_person rows for people no longer assigned to any face
-    existing_rows = db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo_id).all()
-    for row in existing_rows:
-        if row.person_id not in face_person_ids:
-            db.delete(row)
-
-    # Add missing photo_person rows
-    existing_person_ids = {row.person_id for row in existing_rows}
-    for pid in face_person_ids:
-        if pid not in existing_person_ids:
-            db.add(PhotoPerson(photo_id=photo_id, person_id=pid))
 
 
 @app.get("/photos/{photo_id}/faces")
