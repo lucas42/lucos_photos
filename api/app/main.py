@@ -16,6 +16,7 @@ import mimeparse
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from PIL import Image
 from redis import Redis
 from rq import Queue
@@ -72,6 +73,9 @@ async def catch_redirect_with_cookie(request: Request, call_next):
 UPLOADS_DIR = Path("/data/uploads")
 PHOTOS_DIR = Path("/data/photos")
 STATIC_DIR = Path(__file__).parent / "static"
+TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 EXTENSION_MIME_TYPES = {
     "jpg": "image/jpeg",
@@ -395,8 +399,8 @@ def healthcheck():
 
 
 @app.get("/", include_in_schema=False)
-async def root(_: Annotated[None, Depends(verify_session)]):
-    return FileResponse(STATIC_DIR / "index.html")
+async def root(request: Request, _: Annotated[None, Depends(verify_session)]):
+    return templates.TemplateResponse(request, "index.html", {"current_page": "photos"})
 
 
 CHECK_TIMEOUT = 0.5  # seconds — must be well under monitoring system's 1s hard limit
@@ -680,15 +684,6 @@ def get_photo(
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    # Content negotiation: use python-mimeparse to pick between HTML and JSON
-    # following the HTTP standard (quality values, specificity rules, etc.).
-    # text/html is listed first so that */* (the default when no Accept is sent)
-    # resolves to application/json — mimeparse picks the last item on equal quality.
-    accept_header = request.headers.get("accept", "*/*")
-    best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
-    if best_match == "text/html":
-        return FileResponse(STATIC_DIR / "photo.html")
-
     processing_status = db.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo_uuid).first()
     faces = db.query(Face).filter(Face.photo_id == photo_uuid).all()
 
@@ -699,6 +694,16 @@ def get_photo(
         str(pp.person_id)
         for pp in db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo_uuid).all()
     ]
+
+    # Content negotiation: use python-mimeparse to pick between HTML and JSON
+    # following the HTTP standard (quality values, specificity rules, etc.).
+    # text/html is listed first so that */* (the default when no Accept is sent)
+    # resolves to application/json — mimeparse picks the last item on equal quality.
+    accept_header = request.headers.get("accept", "*/*")
+    best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
+    if best_match == "text/html":
+        return templates.TemplateResponse(request, "photo.html", {"photo": data, "current_page": "photos"})
+
     return data
 
 
@@ -828,15 +833,6 @@ def list_people(
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    accept_header = request.headers.get("accept", "*/*")
-    best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
-    if best_match == "text/html":
-        arachne_key = os.environ.get("KEY_LUCOS_ARACHNE", "")
-        with open(STATIC_DIR / "people.html") as f:
-            html = f.read()
-        html = html.replace("__ARACHNE_KEY__", arachne_key)
-        return HTMLResponse(content=html)
-
     query = db.query(Person).order_by(Person.created_at.asc())
 
     if includePhotoCounts:
@@ -847,10 +843,22 @@ def list_people(
         ).outerjoin(PhotoPerson).group_by(Person.id).order_by(Person.created_at.asc())
 
         people_with_counts = query.offset(offset).limit(limit).all()
-        return [person_to_dict(p, count) for p, count in people_with_counts]
+        people_data = [person_to_dict(p, count) for p, count in people_with_counts]
     else:
         people = query.offset(offset).limit(limit).all()
-        return [person_to_dict(p) for p in people]
+        people_data = [person_to_dict(p) for p in people]
+
+    accept_header = request.headers.get("accept", "*/*")
+    best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
+    if best_match == "text/html":
+        arachne_key = os.environ.get("KEY_LUCOS_ARACHNE", "")
+        return templates.TemplateResponse(request, "people.html", {
+            "people": people_data,
+            "arachne_key": arachne_key,
+            "current_page": "people",
+        })
+
+    return people_data
 
 
 @app.post("/people", status_code=status.HTTP_201_CREATED)

@@ -1,0 +1,132 @@
+{% extends "_base.html" %}
+
+{% block title %}People — Photos{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="page-title">People</h1>
+    <div id="people-list" class="people-list">
+        {% if people %}
+            {% for person in people %}
+            <div class="person-card" data-person-id="{{ person.id }}">
+                <div class="person-card-header">
+                    <h2 class="person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</h2>
+                </div>
+                <div class="person-contact">
+                    {% if person.contactId %}
+                    <p class="contact-status linked">Linked to contact: {{ person.contactId }}</p>
+                    {% else %}
+                    <p class="contact-status">Not linked to a contact</p>
+                    {% endif %}
+
+                    <label class="search-label">Link to contact:
+                        <span is="lucos-search" data-api-key="{{ arachne_key }}" data-types="Person">
+                            <select id="contact-search-{{ person.id }}">
+                                {% if person.contactId %}
+                                <option value="https://contacts.l42.eu/people/{{ person.contactId }}" selected>
+                                    https://contacts.l42.eu/people/{{ person.contactId }}
+                                </option>
+                                {% endif %}
+                            </select>
+                        </span>
+                    </label>
+
+                    {% if person.contactId %}
+                    <button class="unlink-btn">Unlink contact</button>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p class="empty-state-text">No people detected yet.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+    import '/lucos_search_component.js';
+
+    // Wire up contact link/unlink interactions for each person card.
+    document.querySelectorAll('.person-card').forEach(card => {
+        const personId = card.dataset.personId;
+        const select = card.querySelector('select');
+        const statusEl = card.querySelector('.contact-status');
+        const unlinkBtn = card.querySelector('.unlink-btn');
+
+        if (select) {
+            select.addEventListener('change', () => handleContactChange(personId, select, statusEl, card));
+        }
+        if (unlinkBtn) {
+            unlinkBtn.addEventListener('click', () => handleUnlink(personId, statusEl, unlinkBtn, select));
+        }
+    });
+
+    async function handleContactChange(personId, select, statusEl, card) {
+        const selectedValue = select.value;
+        if (!selectedValue) return;
+
+        // Extract numeric ID from the URI (e.g. https://contacts.l42.eu/people/42 -> "42")
+        const match = selectedValue.match(/\/people\/(\w+)\/?$/);
+        if (!match) {
+            console.error('Could not extract contact ID from URI:', selectedValue);
+            return;
+        }
+        const contactId = match[1];
+
+        try {
+            const response = await fetch(`/people/${personId}/contact`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contactId }),
+            });
+            if (response.status === 409) {
+                statusEl.textContent = 'This contact is already linked to another person.';
+                statusEl.className = 'contact-status error-status';
+                return;
+            }
+            if (!response.ok) {
+                throw new Error(`API responded with ${response.status}`);
+            }
+            statusEl.textContent = `Linked to contact: ${contactId}`;
+            statusEl.className = 'contact-status linked';
+
+            // Show unlink button if not already present
+            if (!card.querySelector('.unlink-btn')) {
+                const unlinkBtn = document.createElement('button');
+                unlinkBtn.className = 'unlink-btn';
+                unlinkBtn.textContent = 'Unlink contact';
+                unlinkBtn.addEventListener('click', () => handleUnlink(personId, statusEl, unlinkBtn, select));
+                select.closest('.person-contact').appendChild(unlinkBtn);
+            }
+        } catch (err) {
+            console.error('Failed to link contact:', err);
+            statusEl.textContent = 'Failed to link contact.';
+            statusEl.className = 'contact-status error-status';
+        }
+    }
+
+    async function handleUnlink(personId, statusEl, unlinkBtn, select) {
+        try {
+            const response = await fetch(`/people/${personId}/contact`, {
+                method: 'DELETE',
+            });
+            if (!response.ok) {
+                throw new Error(`API responded with ${response.status}`);
+            }
+            statusEl.textContent = 'Not linked to a contact';
+            statusEl.className = 'contact-status';
+            unlinkBtn.remove();
+            // Clear the search component selection
+            select.innerHTML = '';
+            // Trigger re-render of the search component
+            select.dispatchEvent(new Event('change'));
+        } catch (err) {
+            console.error('Failed to unlink contact:', err);
+            statusEl.textContent = 'Failed to unlink contact.';
+            statusEl.className = 'contact-status error-status';
+        }
+    }
+</script>
+{% endblock %}

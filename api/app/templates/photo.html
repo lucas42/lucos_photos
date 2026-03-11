@@ -1,0 +1,43 @@
+{% extends "_base.html" %}
+
+{% block title %}Photo {{ photo.id[:8] }}… — Photos{% endblock %}
+
+{% block content %}
+<div class="container" id="app">
+    <div id="photo-view" class="photo-view">
+        {% if photo.mediaType == 'video' %}
+        <video src="/photos/{{ photo.id }}/original"
+               controls preload="metadata"
+               class="photo-detail-media"></video>
+        {% else %}
+        <img src="/photos/{{ photo.id }}/original"
+             alt="Photo {{ photo.id }}"
+             class="photo-detail-media" />
+        {% endif %}
+
+        <dl class="photo-metadata">
+            <dt>Type</dt>
+            <dd>{{ 'Video' if photo.mediaType == 'video' else 'Photo' }}</dd>
+
+            <dt>Taken</dt>
+            <dd>{{ photo.takenAt if photo.takenAt else '—' }}</dd>
+
+            <dt>Uploaded</dt>
+            <dd>{{ photo.uploadedAt if photo.uploadedAt else '—' }}</dd>
+
+            {% if photo.width and photo.height %}
+            <dt>Dimensions</dt>
+            <dd>{{ photo.width }} × {{ photo.height }}</dd>
+            {% endif %}
+
+            <dt>Format</dt>
+            <dd>{{ photo.fileExtension.upper() if photo.fileExtension else '—' }}</dd>
+
+            {% if photo.processingStatus %}
+            <dt>Processing status</dt>
+            <dd>{{ photo.processingStatus }}</dd>
+            {% endif %}
+        </dl>
+    </div>
+</div>
+{% endblock %}
