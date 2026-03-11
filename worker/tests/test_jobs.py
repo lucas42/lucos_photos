@@ -13,12 +13,13 @@ from PIL import Image
 
 from lucos_photos_common.jobs import (
     _extract_video_metadata,
+    cluster_faces,
     detect_and_save_faces,
     process_photo,
     process_video,
     reprocess_photo,
 )
-from lucos_photos_common.models import Face, MediaItem, Photo, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, Person, Photo, PhotoPerson, ProcessingState, ProcessingStatus
 
 # Minimal valid 1x1 JPEG bytes
 VALID_JPEG = bytes.fromhex(
@@ -1266,3 +1267,147 @@ class TestProcessVideo:
         assert "-ss" in ffmpeg_calls[0]
         seek_index = ffmpeg_calls[0].index("-ss")
         assert float(ffmpeg_calls[0][seek_index + 1]) == pytest.approx(1.0)
+
+
+class TestClusterFaces:
+    """Tests for the cluster_faces() job that groups unassigned faces into Person records."""
+
+    def _make_photo(self, db_session, sha256_hash):
+        photo = Photo(sha256_hash=sha256_hash, file_extension="jpg", width=100, height=100)
+        db_session.add(photo)
+        db_session.flush()
+        return photo
+
+    def _make_face(self, db_session, photo_id, embedding, *, person_id=None, person_confirmed=False):
+        face = Face(
+            photo_id=photo_id,
+            person_id=person_id,
+            person_confirmed=person_confirmed,
+            bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2,
+            embedding=embedding,
+        )
+        db_session.add(face)
+        db_session.flush()
+        return face
+
+    def test_no_faces_is_a_noop(self, db_session):
+        """cluster_faces should return cleanly when there are no unassigned faces."""
+        cluster_faces()
+        # No exception — that's the assertion
+
+    def test_two_similar_faces_get_same_person(self, db_session):
+        """Two faces with nearly identical embeddings should be clustered into one Person."""
+        photo_a = self._make_photo(db_session, "a" * 64)
+        photo_b = self._make_photo(db_session, "b" * 64)
+
+        # Nearly identical embeddings — should cluster together
+        emb = [1.0] + [0.0] * 511
+        self._make_face(db_session, photo_a.id, embedding=emb)
+        self._make_face(db_session, photo_b.id, embedding=emb)
+        db_session.commit()
+
+        cluster_faces()
+
+        faces = db_session.query(Face).all()
+        assert all(f.person_id is not None for f in faces)
+        # Both faces should share the same Person
+        person_ids = {f.person_id for f in faces}
+        assert len(person_ids) == 1
+
+        person_count = db_session.query(Person).count()
+        assert person_count == 1
+
+    def test_two_dissimilar_faces_get_different_persons(self, db_session):
+        """Two faces with very different embeddings should each form their own Person cluster."""
+        photo_a = self._make_photo(db_session, "a" * 64)
+        photo_b = self._make_photo(db_session, "b" * 64)
+
+        # Orthogonal embeddings — maximum cosine distance
+        emb_a = [1.0] + [0.0] * 511
+        emb_b = [0.0, 1.0] + [0.0] * 510
+        self._make_face(db_session, photo_a.id, embedding=emb_a)
+        self._make_face(db_session, photo_b.id, embedding=emb_b)
+        db_session.commit()
+
+        cluster_faces()
+
+        faces = db_session.query(Face).all()
+        assert all(f.person_id is not None for f in faces)
+        person_ids = {f.person_id for f in faces}
+        assert len(person_ids) == 2
+
+        person_count = db_session.query(Person).count()
+        assert person_count == 2
+
+    def test_face_without_embedding_is_skipped(self, db_session):
+        """Faces with no embedding should not be clustered."""
+        photo = self._make_photo(db_session, "a" * 64)
+        face = self._make_face(db_session, photo.id, embedding=None)
+        db_session.commit()
+
+        cluster_faces()
+
+        db_session.refresh(face)
+        assert face.person_id is None
+        assert db_session.query(Person).count() == 0
+
+    def test_confirmed_face_is_not_modified(self, db_session):
+        """A face with person_confirmed=True should never be reassigned by clustering."""
+        photo = self._make_photo(db_session, "a" * 64)
+        existing_person = Person(display_name="Known Person")
+        db_session.add(existing_person)
+        db_session.flush()
+
+        face = self._make_face(
+            db_session, photo.id,
+            embedding=[1.0] + [0.0] * 511,
+            person_id=existing_person.id,
+            person_confirmed=True,
+        )
+        db_session.commit()
+
+        cluster_faces()
+
+        db_session.refresh(face)
+        assert face.person_id == existing_person.id
+        assert face.person_confirmed is True
+
+    def test_photo_person_join_table_is_populated(self, db_session):
+        """After clustering, photo_person rows should be created for each assigned face."""
+        photo = self._make_photo(db_session, "a" * 64)
+        emb = [1.0] + [0.0] * 511
+        self._make_face(db_session, photo.id, embedding=emb)
+        db_session.commit()
+
+        cluster_faces()
+
+        rows = db_session.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).all()
+        assert len(rows) == 1
+
+    def test_two_faces_same_photo_same_person_one_join_row(self, db_session):
+        """Two similar faces on the same photo should yield one photo_person row, not two."""
+        photo = self._make_photo(db_session, "a" * 64)
+        emb = [1.0] + [0.0] * 511
+        self._make_face(db_session, photo.id, embedding=emb)
+        self._make_face(db_session, photo.id, embedding=emb)
+        db_session.commit()
+
+        cluster_faces()
+
+        rows = db_session.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).all()
+        assert len(rows) == 1
+
+    def test_idempotent_when_called_twice(self, db_session):
+        """cluster_faces should not create duplicate Person records on repeated calls."""
+        photo = self._make_photo(db_session, "a" * 64)
+        emb = [1.0] + [0.0] * 511
+        self._make_face(db_session, photo.id, embedding=emb)
+        db_session.commit()
+
+        cluster_faces()
+        # On second call, all faces are already assigned (person_id is set),
+        # so they are excluded from clustering — nothing new should be created.
+        cluster_faces()
+
+        assert db_session.query(Person).count() == 1
+        assert db_session.query(PhotoPerson).count() == 1
