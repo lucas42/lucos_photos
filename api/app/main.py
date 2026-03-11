@@ -719,6 +719,25 @@ def get_photo(
     return JSONResponse(content=data, headers={"Vary": "Accept"})
 
 
+@app.delete("/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_photo(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Delete a photo and all its associated data (faces, person links, processing status)."""
+    photo = _get_photo_or_404(photo_id, db)
+
+    # Delete dependent rows manually (no cascade defined on the models)
+    db.query(Face).filter(Face.photo_id == photo.id).delete()
+    db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).delete()
+    db.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo.id).delete()
+    db.delete(photo)
+    db.commit()
+
+    await emit_loganne_event("photoDeleted", f"Photo {photo_id} deleted from lucos_photos")
+
+
 def face_to_dict_simple(face: Face) -> dict:
     """Minimal face dict for embedding inside a photo response."""
     return {
