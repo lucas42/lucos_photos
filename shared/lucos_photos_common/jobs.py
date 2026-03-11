@@ -536,11 +536,11 @@ def reprocess_photo(photo_id: str) -> None:
     logger.info("reprocess_photo: enqueued %s for photo %s", job_fn.__name__, photo_id)
 
 
-def _sync_photo_person(db, photo_id) -> None:
+def sync_photo_person(db, photo_id) -> None:
     """Ensure photo_person table reflects all person assignments for a photo.
 
-    Mirrors the same logic in api/app/main.py so the worker can maintain
-    the join table after face clustering assigns person_ids.
+    Called by both the API (after manual face assignment) and the worker
+    (after face clustering assigns person_ids).
     """
     face_person_ids = {
         f.person_id
@@ -631,7 +631,7 @@ def cluster_faces() -> None:
 
         # Update photo_person for all affected photos
         for photo_id in affected_photo_ids:
-            _sync_photo_person(db, photo_id)
+            sync_photo_person(db, photo_id)
 
         db.commit()
         logger.info("cluster_faces: assigned %d face(s) across %d photo(s)",
