@@ -581,11 +581,29 @@ class TestGetPhotoThumbnail:
 
         derivatives_dir = tmp_path / "derivatives"
         derivatives_dir.mkdir(parents=True)
-        (derivatives_dir / f"{photo.sha256_hash}.jpg").write_bytes(b"derivative_content")
+        # Worker saves thumbnails as {hash}_thumb.jpg
+        (derivatives_dir / f"{photo.sha256_hash}_thumb.jpg").write_bytes(b"derivative_content")
 
         response = authenticated_client.get(f"/photo_files/thumbnail/{photo.id}.jpg")
         assert response.status_code == 200
         assert response.content == b"derivative_content"
+
+    def test_derivative_served_as_jpeg_even_for_non_jpg_photo(self, authenticated_client, db_session, monkeypatch, tmp_path):
+        """Thumbnails are always JPEG regardless of the original's format."""
+        import app.main as main_module
+        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+
+        photo = make_photo(db_session, "thumbnailpng", ext="png")
+        db_session.commit()
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir(parents=True)
+        (derivatives_dir / f"{photo.sha256_hash}_thumb.jpg").write_bytes(b"jpeg_thumb_bytes")
+
+        response = authenticated_client.get(f"/photo_files/thumbnail/{photo.id}.png")
+        assert response.status_code == 200
+        assert response.content == b"jpeg_thumb_bytes"
+        assert "image/jpeg" in response.headers["content-type"]
 
     def test_falls_back_to_original_when_no_derivative(self, authenticated_client, db_session, monkeypatch, tmp_path):
         import app.main as main_module
