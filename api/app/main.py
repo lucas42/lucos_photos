@@ -840,17 +840,20 @@ def get_photo_thumbnail(
             headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
 
-    # Photos: try resized derivative first, fall back to original
-    media_type = EXTENSION_MIME_TYPES.get(ext, "application/octet-stream")
-    derivative_path = PHOTOS_DIR / "derivatives" / f"{photo.sha256_hash}.{ext}"
-    if derivative_path.exists():
-        file_path = derivative_path
-    else:
-        file_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
-    if not file_path.exists():
+    # Photos: try resized derivative (JPEG thumbnail) first, fall back to original
+    thumb_path = PHOTOS_DIR / "derivatives" / f"{photo.sha256_hash}_thumb.jpg"
+    if thumb_path.exists():
+        return FileResponse(
+            path=thumb_path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+    original_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
+    if not original_path.exists():
         raise HTTPException(status_code=404, detail="Photo file not found")
+    media_type = EXTENSION_MIME_TYPES.get(ext, "application/octet-stream")
     return FileResponse(
-        path=file_path,
+        path=original_path,
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
