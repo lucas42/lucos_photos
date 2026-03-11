@@ -169,6 +169,32 @@ class TestPhotoDetailHtml:
         data = response.json()
         assert data["id"] == str(photo.id)
 
+    def test_photo_page_html_has_vary_accept(self, authenticated_client, db_session):
+        """HTML response must include Vary: Accept so caches don't serve it as JSON."""
+        from lucos_photos_common.models import Photo, ProcessingStatus, ProcessingState
+        photo = Photo(sha256_hash="g" * 64, file_extension="jpg")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert response.headers.get("vary") == "Accept"
+
+    def test_photo_page_json_has_vary_accept(self, authenticated_client, db_session):
+        """JSON response must include Vary: Accept so caches don't serve it as HTML."""
+        from lucos_photos_common.models import Photo, ProcessingStatus, ProcessingState
+        photo = Photo(sha256_hash="h" * 64, file_extension="jpg")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "application/json"})
+        assert response.status_code == 200
+        assert response.headers.get("vary") == "Accept"
+
 
 # ---------------------------------------------------------------------------
 # People page HTML tests
@@ -243,3 +269,15 @@ class TestPeoplePageHtml:
         response = authenticated_client.get("/people", headers={"Accept": "application/json"})
         assert response.status_code == 200
         assert response.json() == []
+
+    def test_people_html_has_vary_accept(self, authenticated_client):
+        """HTML response must include Vary: Accept so caches don't serve it as JSON."""
+        response = authenticated_client.get("/people", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert response.headers.get("vary") == "Accept"
+
+    def test_people_json_has_vary_accept(self, authenticated_client):
+        """JSON response must include Vary: Accept so caches don't serve it as HTML."""
+        response = authenticated_client.get("/people", headers={"Accept": "application/json"})
+        assert response.status_code == 200
+        assert response.headers.get("vary") == "Accept"
