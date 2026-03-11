@@ -702,9 +702,9 @@ def get_photo(
     accept_header = request.headers.get("accept", "*/*")
     best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
     if best_match == "text/html":
-        return templates.TemplateResponse(request, "photo.html", {"photo": data, "current_page": "photos"})
+        return templates.TemplateResponse(request, "photo.html", {"photo": data, "current_page": "photos"}, headers={"Vary": "Accept"})
 
-    return data
+    return JSONResponse(content=data, headers={"Vary": "Accept"})
 
 
 def face_to_dict_simple(face: Face) -> dict:
@@ -856,9 +856,9 @@ def list_people(
             "people": people_data,
             "arachne_key": arachne_key,
             "current_page": "people",
-        })
+        }, headers={"Vary": "Accept"})
 
-    return people_data
+    return JSONResponse(content=people_data, headers={"Vary": "Accept"})
 
 
 @app.post("/people", status_code=status.HTTP_201_CREATED)
