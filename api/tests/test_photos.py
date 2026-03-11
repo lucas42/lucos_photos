@@ -312,7 +312,7 @@ class TestGetPhoto:
 
         response = authenticated_client.get(f"/photos/{photo.id}")
         assert response.status_code == 200
-        # mimeparse returns the first match for */*, which is application/json
+        # mimeparse returns the last match for */*, which is application/json
         assert "application/json" in response.headers["content-type"]
 
 
