@@ -265,10 +265,12 @@ class TestPeoplePageHtml:
         assert "current-page" in response.text
 
     def test_people_returns_json_by_default(self, authenticated_client):
-        """GET /people with Accept: application/json returns the JSON list."""
+        """GET /people with Accept: application/json returns a JSON object with a people key."""
         response = authenticated_client.get("/people", headers={"Accept": "application/json"})
         assert response.status_code == 200
-        assert response.json() == []
+        body = response.json()
+        assert body["people"] == []
+        assert body["total"] == 0
 
     def test_people_html_has_vary_accept(self, authenticated_client):
         """HTML response must include Vary: Accept so caches don't serve it as JSON."""
