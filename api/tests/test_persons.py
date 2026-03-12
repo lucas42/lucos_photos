@@ -22,7 +22,9 @@ class TestListpeople:
     def test_list_people_empty(self, authenticated_client, db_session):
         response = authenticated_client.get("/people")
         assert response.status_code == 200
-        assert response.json() == []
+        body = response.json()
+        assert body["people"] == []
+        assert body["total"] == 0
 
     def test_list_people(self, authenticated_client, db_session):
         make_person(db_session, "Alice")
@@ -31,9 +33,9 @@ class TestListpeople:
 
         response = authenticated_client.get("/people")
         assert response.status_code == 200
-        data = response.json()
-        assert len(data) == 2
-        names = {p["name"] for p in data}
+        body = response.json()
+        assert body["total"] == 2
+        names = {p["name"] for p in body["people"]}
         assert names == {"Alice", "Bob"}
 
     def test_list_people_pagination(self, authenticated_client, db_session):
@@ -43,10 +45,11 @@ class TestListpeople:
 
         response = authenticated_client.get("/people?limit=2&offset=1")
         assert response.status_code == 200
-        data = response.json()
-        assert len(data) == 2
-        assert data[0]["name"] == "Person 1"
-        assert data[1]["name"] == "Person 2"
+        body = response.json()
+        assert body["total"] == 5
+        assert body["offset"] == 1
+        assert body["limit"] == 2
+        assert len(body["people"]) == 2
 
     def test_list_people_include_photo_counts(self, authenticated_client, db_session):
         person1 = make_person(db_session, "Alice")
@@ -60,10 +63,10 @@ class TestListpeople:
 
         response = authenticated_client.get("/people?includePhotoCounts=true")
         assert response.status_code == 200
-        data = response.json()
+        body = response.json()
 
-        alice = next(p for p in data if p["name"] == "Alice")
-        bob = next(p for p in data if p["name"] == "Bob")
+        alice = next(p for p in body["people"] if p["name"] == "Alice")
+        bob = next(p for p in body["people"] if p["name"] == "Bob")
 
         assert alice["photoCount"] == 2
         assert bob["photoCount"] == 0
@@ -71,6 +74,48 @@ class TestListpeople:
     def test_requires_authentication(self, client):
         response = client.get("/people")
         assert response.status_code == 401
+
+    def test_sort_order_profile_pictures_first(self, authenticated_client, db_session):
+        """Persons with profile pictures sort before those without."""
+        no_pic = make_person(db_session, "Alice")
+        with_pic = make_person(db_session, "Zara")
+        photo = make_photo(db_session, "z"*64)
+        with_pic.profile_photo_id = photo.id
+        db_session.commit()
+
+        response = authenticated_client.get("/people")
+        assert response.status_code == 200
+        names = [p["name"] for p in response.json()["people"]]
+        assert names.index("Zara") < names.index("Alice")
+
+    def test_sort_order_alphabetical_within_group(self, authenticated_client, db_session):
+        """Within the no-profile-picture group, persons sort alphabetically by name."""
+        make_person(db_session, "Zara")
+        make_person(db_session, "Alice")
+        make_person(db_session, "Bob")
+        db_session.commit()
+
+        response = authenticated_client.get("/people")
+        assert response.status_code == 200
+        names = [p["name"] for p in response.json()["people"]]
+        assert names == ["Alice", "Bob", "Zara"]
+
+    def test_sort_order_stable_with_same_created_at(self, authenticated_client, db_session):
+        """Persons with identical created_at values produce a deterministic order (by id)."""
+        import datetime
+        ts = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+        persons = []
+        for name in ["Charlie", "Alice", "Bob"]:
+            p = Person(display_name=name, created_at=ts)
+            db_session.add(p)
+            persons.append(p)
+        db_session.commit()
+
+        response = authenticated_client.get("/people")
+        assert response.status_code == 200
+        names = [p["name"] for p in response.json()["people"]]
+        # All have same created_at — must be alphabetical, then UUID as tiebreaker
+        assert names == sorted(names)
 
 class TestCreatePerson:
     def test_create_person(self, authenticated_client, db_session):
@@ -300,7 +345,7 @@ class TestListPeopleIncludesProfilePictureUrl:
             response = authenticated_client.get("/people")
 
         assert response.status_code == 200
-        data = response.json()
+        data = response.json()["people"]
         assert data[0]["profilePictureUrl"] is None
 
     def test_profile_picture_url_set_when_file_exists(self, authenticated_client, db_session, tmp_path):
@@ -316,6 +361,6 @@ class TestListPeopleIncludesProfilePictureUrl:
             response = authenticated_client.get("/people")
 
         assert response.status_code == 200
-        data = response.json()
+        data = response.json()["people"]
         assert data[0]["profilePictureUrl"] is not None
         assert f"/people/{person.id}/profile-picture" in data[0]["profilePictureUrl"]

@@ -46,6 +46,18 @@
             <p class="empty-state-text">No people detected yet.</p>
         {% endif %}
     </div>
+
+    {% if total > limit %}
+    <nav class="pagination" aria-label="People pagination">
+        <span class="pagination-summary">Showing {{ offset + 1 }}–{{ [offset + limit, total] | min }} of {{ total }}</span>
+        {% if prev_offset is not none %}
+        <a class="pagination-prev" href="/people?offset={{ prev_offset }}&limit={{ limit }}">Previous</a>
+        {% endif %}
+        {% if next_offset is not none %}
+        <a class="pagination-next" href="/people?offset={{ next_offset }}&limit={{ limit }}">Next</a>
+        {% endif %}
+    </nav>
+    {% endif %}
 </div>
 {% endblock %}
 
