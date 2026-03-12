@@ -1032,11 +1032,11 @@ def get_person_profile_picture(
 ):
     """Serve a person's profile picture derivative file."""
     try:
-        uuid.UUID(person_id)
+        safe_id = str(uuid.UUID(person_id))
     except ValueError:
         raise HTTPException(status_code=404, detail="Person not found")
 
-    profile_path = DERIVATIVES_DIR / f"{person_id}_profile.jpg"
+    profile_path = DERIVATIVES_DIR / f"{safe_id}_profile.jpg"
     if not profile_path.exists():
         raise HTTPException(status_code=404, detail="Profile picture not yet generated")
 
