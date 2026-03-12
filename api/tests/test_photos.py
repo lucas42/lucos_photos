@@ -125,21 +125,38 @@ class TestListPhotos:
         assert len(data["photos"]) == 2
         assert data["offset"] == 3
 
-    def test_default_order_is_uploaded_at_descending(self, authenticated_client, db_session):
-        # Insert photos with different hashes so order is deterministic from DB insert order
-        p1 = make_photo(db_session, "first")
-        make_processing_status(db_session, p1, ProcessingState.complete)
-        p2 = make_photo(db_session, "second")
-        make_processing_status(db_session, p2, ProcessingState.complete)
+    def test_default_order_is_taken_at_descending(self, authenticated_client, db_session):
+        from datetime import datetime, timezone
+        older = make_photo(db_session, "older")
+        older.taken_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        make_processing_status(db_session, older, ProcessingState.complete)
+        newer = make_photo(db_session, "newer")
+        newer.taken_at = datetime(2023, 6, 15, tzinfo=timezone.utc)
+        make_processing_status(db_session, newer, ProcessingState.complete)
         db_session.commit()
 
         response = authenticated_client.get("/photos")
         data = response.json()
-        # Most recently uploaded (p2) should appear first
         ids = [p["id"] for p in data["photos"]]
-        # Both IDs should be present; we can't guarantee strict order in SQLite
-        # without explicit timestamps, but we can check the list is non-empty
-        assert len(ids) == 2
+        assert ids[0] == str(newer.id)
+        assert ids[1] == str(older.id)
+
+    def test_photos_without_taken_at_fall_back_to_uploaded_at(self, authenticated_client, db_session):
+        from datetime import datetime, timezone
+        # One photo with taken_at, one without
+        with_taken_at = make_photo(db_session, "with_taken_at")
+        with_taken_at.taken_at = datetime(2021, 3, 10, tzinfo=timezone.utc)
+        make_processing_status(db_session, with_taken_at, ProcessingState.complete)
+        without_taken_at = make_photo(db_session, "without_taken_at")
+        # No taken_at — should appear after photos with taken_at
+        make_processing_status(db_session, without_taken_at, ProcessingState.complete)
+        db_session.commit()
+
+        response = authenticated_client.get("/photos")
+        data = response.json()
+        ids = [p["id"] for p in data["photos"]]
+        assert ids[0] == str(with_taken_at.id)
+        assert ids[1] == str(without_taken_at.id)
 
     def test_hides_unprocessed_photos(self, authenticated_client, db_session):
         """Photos that haven't been fully processed should not appear in the list."""
