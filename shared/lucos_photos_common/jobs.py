@@ -745,18 +745,37 @@ def generate_profile_picture(person_id: str) -> None:
         right = left + crop_side
         bottom = top + crop_side
 
-        # Clamp to image bounds
+        # Shift the crop window to keep it square when near an edge, then hard-clamp
+        # as a final safety net (handles the degenerate case where the face itself is
+        # larger than the image).
+        if left < 0:
+            right -= left  # shift right by the overhang
+            left = 0.0
+        if top < 0:
+            bottom -= top
+            top = 0.0
+        if right > img_w:
+            left -= (right - img_w)  # shift left by the overhang
+            right = float(img_w)
+        if bottom > img_h:
+            top -= (bottom - img_h)
+            bottom = float(img_h)
+        # Final clamp: face genuinely bigger than image
         left = max(0.0, left)
         top = max(0.0, top)
-        right = min(float(img_w), right)
-        bottom = min(float(img_h), bottom)
 
         # Write derivative
         DERIVATIVES_DIR.mkdir(parents=True, exist_ok=True)
         profile_path = DERIVATIVES_DIR / f"{person_id}_profile.jpg"
 
+        # Convert to integer pixel coords; derive right/bottom from left/top + side
+        # to guarantee a perfectly square crop regardless of floating-point rounding.
+        crop_side_px = round(right - left)
+        left_px = round(left)
+        top_px = round(top)
+
         with PILImage.open(original_path) as img:
-            cropped = img.crop((int(left), int(top), int(right), int(bottom)))
+            cropped = img.crop((left_px, top_px, left_px + crop_side_px, top_px + crop_side_px))
             cropped.save(profile_path, format="JPEG", quality=90)
 
         logger.info("generate_profile_picture: saved profile picture for person %s at %s", person_id, profile_path)

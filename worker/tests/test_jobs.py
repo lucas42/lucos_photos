@@ -1438,10 +1438,10 @@ class TestFrontalityScore:
         assert _frontality_score(kps) == pytest.approx(0.0)
 
     def test_slight_offset(self):
-        # Nose 25% off-centre → score 0.5
+        # Nose 25px right of centre in a 100px span → mid_offset=0.25 → score=0.5
         kps = [[100, 200], [200, 200], [175, 250], [110, 280], [190, 280]]
         score = _frontality_score(kps)
-        assert 0.0 < score < 1.0
+        assert score == pytest.approx(0.5)
 
     def test_none_returns_zero(self):
         assert _frontality_score(None) == 0.0
@@ -1634,3 +1634,34 @@ class TestGenerateProfilePicture:
 
         updated = db_session.query(Person).filter(Person.id == person_id).first()
         assert updated.profile_photo_id == photo2_id
+
+    def test_crop_is_square_when_face_near_edge(self, db_session, tmp_path):
+        """Profile picture must be square even when the face is near an image edge."""
+        person = self._make_person(db_session)
+        person_id = person.id
+        # 1000x800 image, face centred at x=50 (very close to left edge)
+        # bbox_x=0.005, bbox_width=0.09 → face centre x=50px, face width=90px
+        photo = self._make_photo(db_session, "e" * 64, width=1000, height=800)
+        self._make_face(db_session, photo, person,
+                        bbox_x=0.005, bbox_y=0.4, bbox_width=0.09, bbox_height=0.09,
+                        det_score=0.9)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        img = Image.new("RGB", (1000, 800), color=(100, 100, 100))
+        img.save(originals_dir / f"{'e' * 64}.jpg", format="JPEG")
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))
+
+        profile_path = derivatives_dir / f"{person_id}_profile.jpg"
+        assert profile_path.exists()
+        with Image.open(profile_path) as result:
+            assert result.width == result.height, "Profile picture must be square"
