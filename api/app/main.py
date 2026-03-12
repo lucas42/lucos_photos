@@ -376,6 +376,28 @@ async def emit_loganne_event(event_type: str, human_readable: str, url: str | No
     await asyncio.to_thread(updateLoganne, event_type, human_readable, url)
 
 
+async def fetch_contact_name(contact_id: str) -> Optional[str]:
+    """Fetch a contact's name from lucos_contacts. Returns None on any failure."""
+    contacts_url = os.environ.get("LUCOS_CONTACTS_URL", "")
+    contacts_key = os.environ.get("KEY_LUCOS_CONTACTS", "")
+    if not contacts_url or not contacts_key:
+        print(f"Warning: LUCOS_CONTACTS_URL or KEY_LUCOS_CONTACTS not set, cannot fetch contact name for {contact_id}")
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{contacts_url}/people/{contact_id}",
+                headers={"Accept": "application/json", "Authorization": f"key {contacts_key}"},
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("name") or None
+    except Exception as e:
+        print(f"Warning: failed to fetch contact name for {contact_id}: {e}")
+        return None
+
+
 def photo_url(photo_id) -> str:
     """Return the absolute URL for a photo's HTML view."""
     app_origin = os.environ.get("APP_ORIGIN", "")
@@ -990,6 +1012,11 @@ async def create_person(
 
     contact_id = body.get("contactId")
 
+    if contact_id:
+        contact_name = await fetch_contact_name(str(contact_id))
+        if contact_name:
+            name = contact_name
+
     person = Person(display_name=name, contact_id=contact_id)
     db.add(person)
     try:
@@ -1088,6 +1115,12 @@ async def link_person_contact(
             raise HTTPException(status_code=409, detail="A person with this contactId already exists")
         raise
     db.refresh(person)
+
+    contact_name = await fetch_contact_name(str(contact_id))
+    if contact_name:
+        person.display_name = contact_name
+        db.commit()
+        db.refresh(person)
 
     await emit_loganne_event("personContactLinked", f"Person {person_uuid} linked to contact {contact_id} in lucos_photos")
 

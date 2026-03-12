@@ -119,7 +119,8 @@ class TestListpeople:
 
 class TestCreatePerson:
     def test_create_person(self, authenticated_client, db_session):
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.post(
                 "/people",
                 json={"name": "Charlie", "contactId": "charlie-123"},
@@ -151,6 +152,40 @@ class TestCreatePerson:
         assert response.status_code == 409
         assert "already exists" in response.json()["detail"]
 
+    def test_create_person_fetches_contact_name(self, authenticated_client, db_session):
+        """When a contactId is supplied and fetch_contact_name succeeds, the returned name comes from contacts."""
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value="Alice From Contacts"):
+            response = authenticated_client.post(
+                "/people",
+                json={"name": "Alice Original", "contactId": "alice-123"},
+            )
+            assert response.status_code == 201
+            data = response.json()
+            assert data["name"] == "Alice From Contacts"
+
+    def test_create_person_falls_back_to_caller_name_when_fetch_fails(self, authenticated_client, db_session):
+        """When fetch_contact_name returns None, the caller-supplied name is used."""
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
+            response = authenticated_client.post(
+                "/people",
+                json={"name": "Alice Original", "contactId": "alice-123"},
+            )
+            assert response.status_code == 201
+            assert response.json()["name"] == "Alice Original"
+
+    def test_create_person_without_contact_id_skips_fetch(self, authenticated_client, db_session):
+        """When no contactId is supplied, fetch_contact_name is never called."""
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock) as mock_fetch:
+            response = authenticated_client.post(
+                "/people",
+                json={"name": "Charlie"},
+            )
+            assert response.status_code == 201
+            mock_fetch.assert_not_called()
+
     def test_requires_authentication(self, client):
         response = client.post("/people", json={"name": "Charlie"})
         assert response.status_code == 401
@@ -160,7 +195,8 @@ class TestLinkPersonContact:
         person = make_person(db_session, "Alice")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.put(
                 f"/people/{person.id}/contact",
                 json={"contactId": "42"},
@@ -175,7 +211,8 @@ class TestLinkPersonContact:
         person = make_person(db_session, "Alice", contact_id="old-id")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock):
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.put(
                 f"/people/{person.id}/contact",
                 json={"contactId": "new-id"},
@@ -213,6 +250,37 @@ class TestLinkPersonContact:
                 json={"contactId": "42"},
             )
             assert response.status_code == 404
+
+    def test_link_contact_updates_display_name_from_contacts(self, authenticated_client, db_session):
+        """After linking, if fetch_contact_name succeeds the display_name is updated."""
+        person = make_person(db_session, "Old Name")
+        db_session.commit()
+
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value="Name From Contacts"):
+            response = authenticated_client.put(
+                f"/people/{person.id}/contact",
+                json={"contactId": "42"},
+            )
+            assert response.status_code == 200
+            assert response.json()["name"] == "Name From Contacts"
+
+        db_session.refresh(person)
+        assert person.display_name == "Name From Contacts"
+
+    def test_link_contact_keeps_display_name_when_fetch_fails(self, authenticated_client, db_session):
+        """If fetch_contact_name returns None, the existing display_name is not changed."""
+        person = make_person(db_session, "Original Name")
+        db_session.commit()
+
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
+            response = authenticated_client.put(
+                f"/people/{person.id}/contact",
+                json={"contactId": "42"},
+            )
+            assert response.status_code == 200
+            assert response.json()["name"] == "Original Name"
 
     def test_requires_authentication(self, client, db_session):
         person = make_person(db_session, "Alice")
