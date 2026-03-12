@@ -927,6 +927,13 @@ def person_to_dict(person: Person, photo_count: Optional[int] = None) -> dict:
     return data
 
 
+PEOPLE_SORT_ORDER = [
+    Person.profile_photo_id.is_(None).asc(),
+    Person.display_name.asc().nullslast(),
+    Person.id.asc(),
+]
+
+
 @app.get("/people")
 def list_people(
     request: Request,
@@ -936,32 +943,39 @@ def list_people(
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    query = db.query(Person).order_by(Person.created_at.asc())
+    total = db.query(func.count(Person.id)).scalar()
 
     if includePhotoCounts:
         # Join with PhotoPerson to count photos
         query = db.query(
             Person,
             func.count(PhotoPerson.photo_id).label("photo_count")
-        ).outerjoin(PhotoPerson).group_by(Person.id).order_by(Person.created_at.asc())
+        ).outerjoin(PhotoPerson).group_by(Person.id).order_by(*PEOPLE_SORT_ORDER)
 
         people_with_counts = query.offset(offset).limit(limit).all()
         people_data = [person_to_dict(p, count) for p, count in people_with_counts]
     else:
-        people = query.offset(offset).limit(limit).all()
+        people = db.query(Person).order_by(*PEOPLE_SORT_ORDER).offset(offset).limit(limit).all()
         people_data = [person_to_dict(p) for p in people]
 
     accept_header = request.headers.get("accept", "*/*")
     best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
     if best_match == "text/html":
         arachne_key = os.environ.get("KEY_LUCOS_ARACHNE", "")
+        prev_offset = max(0, offset - limit) if offset > 0 else None
+        next_offset = offset + limit if offset + limit < total else None
         return templates.TemplateResponse(request, "people.html", {
             "people": people_data,
             "arachne_key": arachne_key,
             "current_page": "people",
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "prev_offset": prev_offset,
+            "next_offset": next_offset,
         }, headers={"Vary": "Accept"})
 
-    return JSONResponse(content=people_data, headers={"Vary": "Accept"})
+    return JSONResponse(content={"people": people_data, "total": total, "offset": offset, "limit": limit}, headers={"Vary": "Accept"})
 
 
 @app.post("/people", status_code=status.HTTP_201_CREATED)
