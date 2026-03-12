@@ -1546,7 +1546,8 @@ class TestGenerateProfilePicture:
 
         with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
              patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
-             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update:
             mock_session_local.return_value = db_session
 
             generate_profile_picture(str(person_id))
@@ -1558,6 +1559,60 @@ class TestGenerateProfilePicture:
         updated = db_session.query(Person).filter(Person.id == person_id).first()
         assert updated.profile_photo_id == photo_id
         assert updated.profile_auto_generated is True
+
+        mock_update.assert_called_once_with(
+            "profilePhotoUpdated",
+            f"Profile photo updated for person {person_id} in lucos_photos",
+            url=mock_update.call_args[1]["url"],
+        )
+        assert f"/people/{person_id}" in mock_update.call_args[1]["url"]
+
+    def test_emits_loganne_event_on_success(self, db_session, tmp_path):
+        """Should emit profilePhotoUpdated to Loganne after a successful profile picture write."""
+        person = self._make_person(db_session)
+        photo = self._make_photo(db_session, "f" * 64, width=200, height=200)
+        self._make_face(db_session, photo, person, bbox_x=0.2, bbox_y=0.2, bbox_width=0.6, bbox_height=0.6)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        img = Image.new("RGB", (200, 200), color=(50, 100, 150))
+        img.save(originals_dir / f"{'f' * 64}.jpg", format="JPEG")
+
+        person_id = person.id
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update, \
+             patch.dict("os.environ", {"APP_ORIGIN": "https://photos.example.com"}):
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))
+
+        mock_update.assert_called_once_with(
+            "profilePhotoUpdated",
+            f"Profile photo updated for person {person_id} in lucos_photos",
+            url=f"https://photos.example.com/people/{person_id}",
+        )
+
+    def test_does_not_emit_loganne_when_no_suitable_face(self, db_session, tmp_path):
+        """Should not emit profilePhotoUpdated when no suitable face is found."""
+        person = self._make_person(db_session)
+        person_id = person.id
+        db_session.commit()
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", tmp_path / "originals"), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", tmp_path / "derivatives"), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update:
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))
+
+        mock_update.assert_not_called()
 
     def test_skips_if_no_faces(self, db_session, tmp_path):
         """Should do nothing if the person has no faces."""
