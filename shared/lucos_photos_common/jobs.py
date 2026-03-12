@@ -158,6 +158,9 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
                             distance,
                         )
 
+        det_score = float(detected.det_score) if detected.det_score is not None else None
+        kps = detected.kps.tolist() if detected.kps is not None else None
+
         face_record = Face(
             photo_id=photo.id,
             person_id=person_id,
@@ -167,6 +170,8 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
             bbox_width=norm_w,
             bbox_height=norm_h,
             embedding=embedding_vector,
+            det_score=det_score,
+            kps=kps,
         )
         db.add(face_record)
 
@@ -174,6 +179,54 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
     logger.info("detect_and_save_faces: saved %d face record(s) for photo %s", len(detected_faces), photo.id)
 
 
+
+
+def _enqueue_profile_picture_for_photo(photo_uuid) -> None:
+    """Enqueue generate_profile_picture for each person detected in a photo.
+
+    Called after process_photo completes. Non-fatal: Redis unavailability is logged but not raised.
+    """
+    try:
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        redis_conn = Redis.from_url(redis_url)
+        queue = Queue("photos", connection=redis_conn)
+
+        db = SessionLocal()
+        try:
+            person_ids = [
+                str(f.person_id)
+                for f in db.query(Face).filter(
+                    Face.photo_id == photo_uuid,
+                    Face.person_id.isnot(None),
+                ).all()
+            ]
+        finally:
+            db.close()
+
+        for pid in set(person_ids):
+            queue.enqueue(generate_profile_picture, pid, retry=Retry(max=3, interval=[10, 30, 60]))
+            logger.info("_enqueue_profile_picture_for_photo: enqueued profile picture generation for person %s", pid)
+
+    except Exception:
+        logger.exception("_enqueue_profile_picture_for_photo: failed to enqueue profile picture jobs for photo %s", photo_uuid)
+
+
+def _enqueue_profile_picture_for_persons(person_ids) -> None:
+    """Enqueue generate_profile_picture for each person in the given set of IDs.
+
+    Non-fatal: Redis unavailability is logged but not raised.
+    """
+    if not person_ids:
+        return
+    try:
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        redis_conn = Redis.from_url(redis_url)
+        queue = Queue("photos", connection=redis_conn)
+        for pid in person_ids:
+            queue.enqueue(generate_profile_picture, pid, retry=Retry(max=3, interval=[10, 30, 60]))
+            logger.info("_enqueue_profile_picture_for_persons: enqueued profile picture generation for person %s", pid)
+    except Exception:
+        logger.exception("_enqueue_profile_picture_for_persons: failed to enqueue profile picture jobs")
 
 
 def process_photo(photo_id: str) -> None:
@@ -290,6 +343,9 @@ def process_photo(photo_id: str) -> None:
             # Emit Loganne event — updateLoganne swallows HTTP errors internally
             app_origin = os.environ.get("APP_ORIGIN", "")
             updateLoganne("photoProcessed", f"Photo {photo_id} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
+
+            # Enqueue profile picture generation for each person detected in this photo
+            _enqueue_profile_picture_for_photo(photo_uuid)
 
         except Exception as exc:
             logger.exception("process_photo: error processing photo %s", photo_id)
@@ -536,6 +592,207 @@ def reprocess_photo(photo_id: str) -> None:
     logger.info("reprocess_photo: enqueued %s for photo %s", job_fn.__name__, photo_id)
 
 
+def _frontality_score(kps) -> float:
+    """Estimate how directly a face is facing the camera using 5-point keypoints.
+
+    Uses the horizontal symmetry of the two eye keypoints relative to the nose.
+    Returns a value in [0.0, 1.0] where 1.0 = perfectly frontal.
+
+    kps is a list of 5 [x, y] pairs: left eye, right eye, nose, left mouth, right mouth.
+    Returns 0.0 if kps is None or malformed.
+    """
+    try:
+        if kps is None or len(kps) < 3:
+            return 0.0
+        left_eye_x = float(kps[0][0])
+        right_eye_x = float(kps[1][0])
+        nose_x = float(kps[2][0])
+        eye_span = right_eye_x - left_eye_x
+        if eye_span <= 0:
+            return 0.0
+        # How centred is the nose between the two eyes?
+        # mid_offset ranges from 0 (perfectly centred) to 0.5 (nose at one eye)
+        mid_x = (left_eye_x + right_eye_x) / 2.0
+        mid_offset = abs(nose_x - mid_x) / eye_span
+        # Convert to a 0–1 score: 0 offset → 1.0, 0.5 offset → 0.0
+        return max(0.0, 1.0 - 2.0 * mid_offset)
+    except (TypeError, IndexError, ZeroDivisionError):
+        return 0.0
+
+
+def _score_face(face: "Face", photo: "MediaItem") -> int:
+    """Return an integer score (0–4) for how suitable a face is as a profile picture.
+
+    Criteria (each worth 1 point):
+      1. High detection confidence (det_score > 0.8) — proxy for sharpness/focus
+      2. Facing the camera (frontality derived from kps > 0.7)
+      3. Face width > 300px
+      4. Face height > 300px
+
+    Ties should be broken by taken_at DESC (most recent wins) — handled by the caller.
+    """
+    score = 0
+
+    if face.det_score is not None and face.det_score > 0.8:
+        score += 1
+
+    if _frontality_score(face.kps) > 0.7:
+        score += 1
+
+    if photo.width is not None and face.bbox_width * photo.width > 300:
+        score += 1
+
+    if photo.height is not None and face.bbox_height * photo.height > 300:
+        score += 1
+
+    return score
+
+
+def generate_profile_picture(person_id: str) -> None:
+    """Choose the best profile picture for a person and crop it to a square derivative.
+
+    Scores all photos in which this person appears, picks the highest-scoring face,
+    crops the image to a square centred on that face (~80% face area), and writes the
+    result to /data/photos/derivatives/{person_id}_profile.jpg.
+
+    Also updates person.profile_photo_id and person.profile_auto_generated in the DB.
+    Idempotent: re-running overwrites the existing derivative file.
+    """
+    from PIL import Image as PILImage
+    import math
+
+    person_uuid = UUID(person_id)
+    db = SessionLocal()
+    try:
+        person = db.query(Person).filter(Person.id == person_uuid).first()
+        if not person:
+            logger.warning("generate_profile_picture: person %s not found", person_id)
+            return
+
+        # Skip if manually overridden
+        if person.profile_auto_generated is False:
+            logger.info("generate_profile_picture: person %s has a manually chosen profile picture, skipping", person_id)
+            return
+
+        # Fetch all faces for this person that have both bbox and photo dimensions
+        faces = (
+            db.query(Face)
+            .filter(Face.person_id == person_uuid)
+            .join(Face.media_item)
+            .filter(MediaItem.width.isnot(None), MediaItem.height.isnot(None))
+            .all()
+        )
+
+        if not faces:
+            logger.info("generate_profile_picture: no suitable faces found for person %s", person_id)
+            return
+
+        # Score each face and pick the best
+        best_face = None
+        best_score = -1
+        best_photo = None
+        best_taken_at = None
+
+        for face in faces:
+            photo = face.media_item
+            score = _score_face(face, photo)
+            taken_at = photo.taken_at
+
+            if (score > best_score or
+                    (score == best_score and taken_at is not None and
+                     (best_taken_at is None or taken_at > best_taken_at))):
+                best_face = face
+                best_score = score
+                best_photo = photo
+                best_taken_at = taken_at
+
+        if best_face is None or best_photo is None:
+            logger.info("generate_profile_picture: no face selected for person %s", person_id)
+            return
+
+        logger.info(
+            "generate_profile_picture: best face for person %s is in photo %s (score=%d)",
+            person_id, best_photo.id, best_score,
+        )
+
+        # Locate the original image file
+        original_path = ORIGINALS_DIR / f"{best_photo.sha256_hash}.{best_photo.file_extension}"
+        if not original_path.exists():
+            logger.warning(
+                "generate_profile_picture: original file not found at %s for photo %s",
+                original_path, best_photo.id,
+            )
+            return
+
+        # Compute pixel coordinates of face bounding box
+        img_w = best_photo.width
+        img_h = best_photo.height
+        face_x_px = best_face.bbox_x * img_w
+        face_y_px = best_face.bbox_y * img_h
+        face_w_px = best_face.bbox_width * img_w
+        face_h_px = best_face.bbox_height * img_h
+
+        # Crop: square, face occupies ~80% of area → side = face_side / sqrt(0.8)
+        face_side = max(face_w_px, face_h_px)
+        crop_side = face_side / math.sqrt(0.8)
+
+        # Centre on the bounding box centre
+        cx = face_x_px + face_w_px / 2.0
+        cy = face_y_px + face_h_px / 2.0
+
+        left = cx - crop_side / 2.0
+        top = cy - crop_side / 2.0
+        right = left + crop_side
+        bottom = top + crop_side
+
+        # Shift the crop window to keep it square when near an edge, then hard-clamp
+        # as a final safety net (handles the degenerate case where the face itself is
+        # larger than the image).
+        if left < 0:
+            right -= left  # shift right by the overhang
+            left = 0.0
+        if top < 0:
+            bottom -= top
+            top = 0.0
+        if right > img_w:
+            left -= (right - img_w)  # shift left by the overhang
+            right = float(img_w)
+        if bottom > img_h:
+            top -= (bottom - img_h)
+            bottom = float(img_h)
+        # Final clamp: face genuinely bigger than image
+        left = max(0.0, left)
+        top = max(0.0, top)
+
+        # Write derivative
+        DERIVATIVES_DIR.mkdir(parents=True, exist_ok=True)
+        profile_path = DERIVATIVES_DIR / f"{person_id}_profile.jpg"
+
+        # Convert to integer pixel coords; derive right/bottom from left/top + side
+        # to guarantee a perfectly square crop regardless of floating-point rounding.
+        crop_side_px = round(right - left)
+        left_px = round(left)
+        top_px = round(top)
+
+        with PILImage.open(original_path) as img:
+            cropped = img.crop((left_px, top_px, left_px + crop_side_px, top_px + crop_side_px))
+            cropped.save(profile_path, format="JPEG", quality=90)
+
+        logger.info("generate_profile_picture: saved profile picture for person %s at %s", person_id, profile_path)
+
+        # Update DB
+        person.profile_photo_id = best_photo.id
+        person.profile_auto_generated = True
+        db.commit()
+
+    except Exception:
+        logger.exception("generate_profile_picture: error for person %s", person_id)
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def sync_photo_person(db, photo_id) -> None:
     """Ensure photo_person table reflects all person assignments for a photo.
 
@@ -633,9 +890,20 @@ def cluster_faces() -> None:
         for photo_id in affected_photo_ids:
             sync_photo_person(db, photo_id)
 
+        # Collect affected person IDs before commit so we can enqueue profile picture jobs
+        affected_person_ids: set = {
+            str(unassigned[idx].person_id)
+            for indices in clusters.values()
+            for idx in indices
+            if unassigned[idx].person_id is not None
+        }
+
         db.commit()
         logger.info("cluster_faces: assigned %d face(s) across %d photo(s)",
                     sum(len(v) for v in clusters.values()), len(affected_photo_ids))
+
+        # Enqueue profile picture generation for each newly-assigned person
+        _enqueue_profile_picture_for_persons(affected_person_ids)
 
     except Exception:
         logger.exception("cluster_faces: error during face clustering")

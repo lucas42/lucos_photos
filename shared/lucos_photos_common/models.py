@@ -73,9 +73,13 @@ class Person(Base):
     contact_id: Mapped[Optional[str]] = mapped_column(String, unique=True)
     display_name: Mapped[Optional[str]] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Profile picture: FK to the source media item and whether it was auto-generated
+    profile_photo_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("media_item.id"), nullable=True)
+    profile_auto_generated: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
     faces: Mapped[list["Face"]] = relationship(back_populates="person")
     photo_people: Mapped[list["PhotoPerson"]] = relationship(back_populates="person")
+    profile_photo: Mapped[Optional["MediaItem"]] = relationship(foreign_keys=[profile_photo_id])
 
 
 class Face(Base):
@@ -93,6 +97,10 @@ class Face(Base):
     bbox_height: Mapped[float] = mapped_column(Float)
     # 512-dimension vector for InsightFace embeddings
     embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(512))
+    # Detection confidence score from InsightFace (proxy for sharpness/focus)
+    det_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # 5-point keypoints [[x,y], ...] for eyes, nose, mouth corners — used for frontality estimation
+    kps: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     media_item: Mapped["MediaItem"] = relationship(back_populates="faces")
