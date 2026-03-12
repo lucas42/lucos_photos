@@ -10,6 +10,11 @@
             {% for person in people %}
             <div class="person-card" data-person-id="{{ person.id }}">
                 <div class="person-card-header">
+                    {% if person.profilePictureUrl %}
+                    <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="Profile picture" width="80" height="80">
+                    {% else %}
+                    <div class="person-profile-picture-placeholder"></div>
+                    {% endif %}
                     <h2 class="person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</h2>
                 </div>
                 <div class="person-contact">

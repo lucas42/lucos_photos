@@ -73,6 +73,7 @@ async def catch_redirect_with_cookie(request: Request, call_next):
 
 UPLOADS_DIR = Path("/data/uploads")
 PHOTOS_DIR = Path("/data/photos")
+DERIVATIVES_DIR = Path("/data/photos/derivatives")
 STATIC_DIR = Path(__file__).parent / "static"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -379,6 +380,15 @@ def photo_url(photo_id) -> str:
     """Return the absolute URL for a photo's HTML view."""
     app_origin = os.environ.get("APP_ORIGIN", "")
     return f"{app_origin}/photos/{photo_id}"
+
+
+def person_profile_picture_url(person_id) -> Optional[str]:
+    """Return the absolute URL for a person's profile picture, or None if none exists."""
+    profile_path = DERIVATIVES_DIR / f"{person_id}_profile.jpg"
+    if not profile_path.exists():
+        return None
+    app_origin = os.environ.get("APP_ORIGIN", "")
+    return f"{app_origin}/people/{person_id}/profile-picture"
 
 
 def photo_file_urls(photo: MediaItem) -> tuple[str, str]:
@@ -910,6 +920,7 @@ def person_to_dict(person: Person, photo_count: Optional[int] = None) -> dict:
         "name": person.display_name,
         "contactId": person.contact_id,
         "createdAt": person.created_at.isoformat() if person.created_at else None,
+        "profilePictureUrl": person_profile_picture_url(str(person.id)),
     }
     if photo_count is not None:
         data["photoCount"] = photo_count
@@ -1012,6 +1023,24 @@ def get_person(
     data["photos"] = [photo_to_dict(p) for p in photos]
 
     return data
+
+
+@app.get("/people/{person_id}/profile-picture")
+def get_person_profile_picture(
+    person_id: str,
+    _: Annotated[None, Depends(verify_session)],
+):
+    """Serve a person's profile picture derivative file."""
+    try:
+        uuid.UUID(person_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    profile_path = DERIVATIVES_DIR / f"{person_id}_profile.jpg"
+    if not profile_path.exists():
+        raise HTTPException(status_code=404, detail="Profile picture not yet generated")
+
+    return FileResponse(str(profile_path), media_type="image/jpeg")
 
 
 @app.put("/people/{person_id}/contact")

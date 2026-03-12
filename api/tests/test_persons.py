@@ -1,6 +1,8 @@
+import io
 import uuid
 import pytest
 from unittest.mock import AsyncMock, patch
+from PIL import Image
 from lucos_photos_common.models import Person, Photo, PhotoPerson, Face
 
 
@@ -246,3 +248,74 @@ class TestGetPerson:
         db_session.commit()
         response = client.get(f"/people/{person.id}")
         assert response.status_code == 401
+
+
+class TestGetPersonProfilePicture:
+    def test_returns_404_when_no_profile_picture(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+
+        with patch("app.main.DERIVATIVES_DIR") as mock_dir:
+            mock_path = mock_dir.__truediv__.return_value
+            mock_path.exists.return_value = False
+            response = authenticated_client.get(f"/people/{person.id}/profile-picture")
+
+        assert response.status_code == 404
+
+    def test_returns_jpeg_when_profile_picture_exists(self, authenticated_client, db_session, tmp_path):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        profile_path = derivatives_dir / f"{person.id}_profile.jpg"
+        img = Image.new("RGB", (80, 80), color=(100, 150, 200))
+        img.save(profile_path, format="JPEG")
+
+        with patch("app.main.DERIVATIVES_DIR", derivatives_dir):
+            response = authenticated_client.get(f"/people/{person.id}/profile-picture")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/jpeg"
+
+    def test_returns_404_for_invalid_uuid(self, authenticated_client):
+        response = authenticated_client.get("/people/not-a-uuid/profile-picture")
+        assert response.status_code == 404
+
+    def test_requires_authentication(self, client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+        response = client.get(f"/people/{person.id}/profile-picture")
+        assert response.status_code == 401
+
+
+class TestListPeopleIncludesProfilePictureUrl:
+    def test_profile_picture_url_null_when_no_file(self, authenticated_client, db_session):
+        make_person(db_session, "Alice")
+        db_session.commit()
+
+        with patch("app.main.DERIVATIVES_DIR") as mock_dir:
+            mock_path = mock_dir.__truediv__.return_value
+            mock_path.exists.return_value = False
+            response = authenticated_client.get("/people")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["profilePictureUrl"] is None
+
+    def test_profile_picture_url_set_when_file_exists(self, authenticated_client, db_session, tmp_path):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        profile_path = derivatives_dir / f"{person.id}_profile.jpg"
+        profile_path.write_bytes(b"fake jpeg")
+
+        with patch("app.main.DERIVATIVES_DIR", derivatives_dir):
+            response = authenticated_client.get("/people")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["profilePictureUrl"] is not None
+        assert f"/people/{person.id}/profile-picture" in data[0]["profilePictureUrl"]

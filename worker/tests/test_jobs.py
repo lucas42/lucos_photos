@@ -13,8 +13,11 @@ from PIL import Image
 
 from lucos_photos_common.jobs import (
     _extract_video_metadata,
+    _frontality_score,
+    _score_face,
     cluster_faces,
     detect_and_save_faces,
+    generate_profile_picture,
     process_photo,
     process_video,
     reprocess_photo,
@@ -432,11 +435,19 @@ class TestDetectAndSaveFaces:
         db_session.refresh(photo)
         return photo
 
-    def _make_mock_face(self, bbox, embedding=None):
+    def _make_mock_face(self, bbox, embedding=None, det_score=0.95, kps=None):
         """Build a mock InsightFace face object with the given bbox and optional embedding."""
         face = MagicMock()
         face.bbox = bbox
         face.embedding = np.array(embedding) if embedding is not None else None
+        face.det_score = det_score
+        # kps is a numpy array of shape (5, 2); tolist() must return a real list
+        if kps is not None:
+            kps_array = MagicMock()
+            kps_array.tolist.return_value = kps
+            face.kps = kps_array
+        else:
+            face.kps = None
         return face
 
     def _mock_insightface(self, mock_app_instance, mock_cv2=None):
@@ -1411,3 +1422,215 @@ class TestClusterFaces:
 
         assert db_session.query(Person).count() == 1
         assert db_session.query(PhotoPerson).count() == 1
+
+
+class TestFrontalityScore:
+    """Tests for _frontality_score()."""
+
+    def test_perfectly_centred(self):
+        # Nose at midpoint of eyes → score 1.0
+        kps = [[100, 200], [200, 200], [150, 250], [110, 280], [190, 280]]
+        assert _frontality_score(kps) == pytest.approx(1.0)
+
+    def test_nose_at_left_eye(self):
+        # Nose coincides with left eye → maximum offset → score 0.0
+        kps = [[100, 200], [200, 200], [100, 250], [110, 280], [190, 280]]
+        assert _frontality_score(kps) == pytest.approx(0.0)
+
+    def test_slight_offset(self):
+        # Nose 25% off-centre → score 0.5
+        kps = [[100, 200], [200, 200], [175, 250], [110, 280], [190, 280]]
+        score = _frontality_score(kps)
+        assert 0.0 < score < 1.0
+
+    def test_none_returns_zero(self):
+        assert _frontality_score(None) == 0.0
+
+    def test_malformed_returns_zero(self):
+        assert _frontality_score([]) == 0.0
+
+
+class TestScoreFace:
+    """Tests for _score_face()."""
+
+    def _make_face(self, det_score=0.9, kps=None, bbox_width=0.4, bbox_height=0.4):
+        face = MagicMock(spec=Face)
+        face.det_score = det_score
+        face.kps = kps
+        face.bbox_width = bbox_width
+        face.bbox_height = bbox_height
+        return face
+
+    def _make_photo(self, width=1000, height=800):
+        photo = MagicMock(spec=MediaItem)
+        photo.width = width
+        photo.height = height
+        return photo
+
+    def test_all_criteria_met(self):
+        # Perfectly frontal face, high det_score, large bbox
+        kps = [[100, 200], [200, 200], [150, 250], [110, 280], [190, 280]]
+        face = self._make_face(det_score=0.95, kps=kps, bbox_width=0.4, bbox_height=0.45)
+        photo = self._make_photo(width=1000, height=800)
+        assert _score_face(face, photo) == 4
+
+    def test_no_criteria_met(self):
+        # Low det_score, profile face (nose at edge), small bbox
+        kps = [[100, 200], [200, 200], [100, 250], [110, 280], [190, 280]]  # nose at left eye
+        face = self._make_face(det_score=0.5, kps=kps, bbox_width=0.1, bbox_height=0.1)
+        photo = self._make_photo(width=1000, height=800)
+        assert _score_face(face, photo) == 0
+
+    def test_face_size_threshold(self):
+        # Face exactly 300px wide: 300/1000 = 0.3 — NOT > 300px so criterion fails
+        kps = [[100, 200], [200, 200], [100, 250], [110, 280], [190, 280]]
+        face = self._make_face(det_score=0.5, kps=kps, bbox_width=0.3, bbox_height=0.3)
+        photo = self._make_photo(width=1000, height=1000)
+        assert _score_face(face, photo) == 0
+
+    def test_none_det_score(self):
+        face = self._make_face(det_score=None, kps=None, bbox_width=0.1, bbox_height=0.1)
+        photo = self._make_photo()
+        assert _score_face(face, photo) == 0
+
+
+class TestGenerateProfilePicture:
+    """Tests for generate_profile_picture()."""
+
+    def _make_person(self, db_session):
+        person = Person()
+        db_session.add(person)
+        db_session.flush()
+        return person
+
+    def _make_photo(self, db_session, sha256_hash, width=1000, height=800, taken_at=None):
+        photo = MediaItem(sha256_hash=sha256_hash, file_extension="jpg", width=width, height=height, taken_at=taken_at)
+        db_session.add(photo)
+        db_session.flush()
+        return photo
+
+    def _make_face(self, db_session, photo, person, bbox_x=0.1, bbox_y=0.1, bbox_width=0.4, bbox_height=0.4, det_score=0.9, kps=None):
+        face = Face(
+            photo_id=photo.id,
+            person_id=person.id,
+            person_confirmed=False,
+            bbox_x=bbox_x,
+            bbox_y=bbox_y,
+            bbox_width=bbox_width,
+            bbox_height=bbox_height,
+            det_score=det_score,
+            kps=kps,
+        )
+        db_session.add(face)
+        db_session.flush()
+        return face
+
+    def test_generates_profile_picture(self, db_session, tmp_path):
+        """Should crop and save a profile picture for a person with a qualifying face."""
+        person = self._make_person(db_session)
+        photo = self._make_photo(db_session, "a" * 64, width=200, height=200)
+        self._make_face(db_session, photo, person, bbox_x=0.2, bbox_y=0.2, bbox_width=0.6, bbox_height=0.6)
+        db_session.commit()
+
+        # Write a real JPEG to the originals dir
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        img_path = originals_dir / f"{'a' * 64}.jpg"
+        img = Image.new("RGB", (200, 200), color=(128, 64, 32))
+        img.save(img_path, format="JPEG")
+
+        person_id = person.id
+        photo_id = photo.id
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))
+
+        profile_path = derivatives_dir / f"{person_id}_profile.jpg"
+        assert profile_path.exists(), "Profile picture file should be created"
+
+        # DB should be updated — re-query since job closes its own session
+        updated = db_session.query(Person).filter(Person.id == person_id).first()
+        assert updated.profile_photo_id == photo_id
+        assert updated.profile_auto_generated is True
+
+    def test_skips_if_no_faces(self, db_session, tmp_path):
+        """Should do nothing if the person has no faces."""
+        person = self._make_person(db_session)
+        person_id = person.id
+        db_session.commit()
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", tmp_path / "originals"), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))
+
+        assert not any(derivatives_dir.iterdir())
+        updated = db_session.query(Person).filter(Person.id == person_id).first()
+        assert updated.profile_photo_id is None
+
+    def test_skips_if_manually_set(self, db_session, tmp_path):
+        """Should skip if profile_auto_generated is False (manual override)."""
+        person = self._make_person(db_session)
+        photo = self._make_photo(db_session, "b" * 64)
+        person.profile_photo_id = photo.id
+        person.profile_auto_generated = False
+        person_id = person.id
+        photo_id = photo.id
+        db_session.commit()
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", tmp_path / "originals"), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))
+
+        # profile_photo_id should be unchanged
+        updated = db_session.query(Person).filter(Person.id == person_id).first()
+        assert updated.profile_photo_id == photo_id
+        assert updated.profile_auto_generated is False
+
+    def test_picks_best_scored_face(self, db_session, tmp_path):
+        """Should pick the face with the highest score, not just the first."""
+        person = self._make_person(db_session)
+        person_id = person.id
+        # photo1: small face, low score
+        photo1 = self._make_photo(db_session, "c" * 64, width=1000, height=1000)
+        self._make_face(db_session, photo1, person, bbox_width=0.1, bbox_height=0.1, det_score=0.5)
+        # photo2: large face, high score
+        photo2 = self._make_photo(db_session, "d" * 64, width=1000, height=1000)
+        photo2_id = photo2.id
+        self._make_face(db_session, photo2, person, bbox_width=0.5, bbox_height=0.5, det_score=0.95)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        for sha, ext in [("c" * 64, "jpg"), ("d" * 64, "jpg")]:
+            img = Image.new("RGB", (1000, 1000), color=(100, 100, 100))
+            img.save(originals_dir / f"{sha}.{ext}", format="JPEG")
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))
+
+        updated = db_session.query(Person).filter(Person.id == person_id).first()
+        assert updated.profile_photo_id == photo2_id
