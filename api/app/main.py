@@ -686,13 +686,11 @@ def list_photos(
     _: Annotated[None, Depends(verify_session)],
     limit: int = 100,
     offset: int = 0,
-    order_by: str = "uploaded_at",
     db: Session = Depends(get_db),
 ):
-    if order_by == "taken_at":
-        order_col = MediaItem.taken_at.desc().nullslast()
-    else:
-        order_col = MediaItem.uploaded_at.desc()
+    # Order by taken_at (most recent first), falling back to uploaded_at for photos
+    # without a known taken_at date.
+    order_cols = [MediaItem.taken_at.desc().nullslast(), MediaItem.uploaded_at.desc()]
 
     # Only include media items that have been fully processed (thumbnail generated,
     # face detection complete). Items with pending/processing/failed status — or no
@@ -703,7 +701,7 @@ def list_photos(
         .filter(ProcessingStatus.state == ProcessingState.complete)
     )
 
-    photos = processed_filter.order_by(order_col).offset(offset).limit(limit).all()
+    photos = processed_filter.order_by(*order_cols).offset(offset).limit(limit).all()
     total = processed_filter.count()
     return {
         "photos": [photo_to_dict(p) for p in photos],
