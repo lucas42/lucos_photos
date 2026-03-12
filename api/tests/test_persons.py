@@ -119,7 +119,8 @@ class TestListpeople:
 
 class TestCreatePerson:
     def test_create_person(self, authenticated_client, db_session):
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.post(
                 "/people",
                 json={"name": "Charlie", "contactId": "charlie-123"},
@@ -194,7 +195,8 @@ class TestLinkPersonContact:
         person = make_person(db_session, "Alice")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.put(
                 f"/people/{person.id}/contact",
                 json={"contactId": "42"},
@@ -209,7 +211,8 @@ class TestLinkPersonContact:
         person = make_person(db_session, "Alice", contact_id="old-id")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock):
+        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.put(
                 f"/people/{person.id}/contact",
                 json={"contactId": "new-id"},
