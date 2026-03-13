@@ -1,0 +1,147 @@
+{% extends "_base.html" %}
+
+{% block title %}{{ person.name or ('Person ' + person.id[:8] + '…') }} — Photos{% endblock %}
+
+{% block content %}
+<div class="container" data-person-id="{{ person.id }}">
+
+    <div class="person-detail-header">
+        {% if person.profilePictureUrl %}
+        <img class="person-profile-picture-large" src="{{ person.profilePictureUrl }}" alt="Profile picture">
+        {% else %}
+        <div class="person-profile-picture-placeholder person-profile-picture-large"></div>
+        {% endif %}
+        <h1 class="page-title">{{ person.name or ('Person ' + person.id[:8] + '…') }}</h1>
+    </div>
+
+    <div class="person-contact" id="person-contact">
+        {% if person.contactId %}
+        <p class="contact-status linked" id="contact-status">
+            Linked to contact:
+            {% if contact_page_url %}
+            <a href="{{ contact_page_url }}">{{ person.contactId }}</a>
+            {% else %}
+            {{ person.contactId }}
+            {% endif %}
+        </p>
+        {% else %}
+        <p class="contact-status" id="contact-status">Not linked to a contact</p>
+        {% endif %}
+
+        <label class="search-label">{% if person.contactId %}Change contact:{% else %}Link to contact:{% endif %}
+            <span is="lucos-search" data-api-key="{{ arachne_key }}" data-types="Person">
+                <select id="contact-search">
+                    {% if person.contactId %}
+                    <option value="https://contacts.l42.eu/people/{{ person.contactId }}" selected>
+                        https://contacts.l42.eu/people/{{ person.contactId }}
+                    </option>
+                    {% endif %}
+                </select>
+            </span>
+        </label>
+
+        {% if person.contactId %}
+        <button class="unlink-btn" id="unlink-btn">Unlink contact</button>
+        {% endif %}
+    </div>
+
+    <section class="person-photos">
+        <h2>Photos ({{ person.photos | length }})</h2>
+        {% if person.photos %}
+        <div class="photo-grid">
+            {% for photo in person.photos %}
+            <a href="/photos/{{ photo.id }}" class="media-card-link">
+                <div class="media-card">
+                    <img src="{{ photo.thumbnailUrl }}" alt="Photo {{ photo.id }}" loading="lazy">
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="empty-state-text">No photos yet.</p>
+        {% endif %}
+    </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+    import '/lucos_search_component.js';
+
+    const personId = document.querySelector('[data-person-id]').dataset.personId;
+    const select = document.getElementById('contact-search');
+    const statusEl = document.getElementById('contact-status');
+    const unlinkBtn = document.getElementById('unlink-btn');
+
+    if (select) {
+        select.addEventListener('change', () => handleContactChange(select, statusEl));
+    }
+    if (unlinkBtn) {
+        unlinkBtn.addEventListener('click', () => handleUnlink(statusEl, unlinkBtn, select));
+    }
+
+    async function handleContactChange(select, statusEl) {
+        const selectedValue = select.value;
+        if (!selectedValue) return;
+
+        const match = selectedValue.match(/\/people\/(\w+)\/?$/);
+        if (!match) {
+            console.error('Could not extract contact ID from URI:', selectedValue);
+            return;
+        }
+        const contactId = match[1];
+
+        try {
+            const response = await fetch(`/people/${personId}/contact`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contactId }),
+            });
+            if (response.status === 409) {
+                statusEl.textContent = 'This contact is already linked to another person.';
+                statusEl.className = 'contact-status error-status';
+                return;
+            }
+            if (!response.ok) {
+                throw new Error(`API responded with ${response.status}`);
+            }
+            statusEl.innerHTML = `Linked to contact: <a href="/people/${personId}">${contactId}</a>`;
+            statusEl.className = 'contact-status linked';
+
+            if (!document.getElementById('unlink-btn')) {
+                const btn = document.createElement('button');
+                btn.className = 'unlink-btn';
+                btn.id = 'unlink-btn';
+                btn.textContent = 'Unlink contact';
+                btn.addEventListener('click', () => handleUnlink(statusEl, btn, select));
+                document.getElementById('person-contact').appendChild(btn);
+            }
+        } catch (err) {
+            console.error('Failed to link contact:', err);
+            statusEl.textContent = 'Failed to link contact.';
+            statusEl.className = 'contact-status error-status';
+        }
+    }
+
+    async function handleUnlink(statusEl, unlinkBtn, select) {
+        try {
+            const response = await fetch(`/people/${personId}/contact`, {
+                method: 'DELETE',
+            });
+            if (!response.ok) {
+                throw new Error(`API responded with ${response.status}`);
+            }
+            statusEl.textContent = 'Not linked to a contact';
+            statusEl.className = 'contact-status';
+            unlinkBtn.remove();
+            select.innerHTML = '';
+            select.dispatchEvent(new Event('change'));
+        } catch (err) {
+            console.error('Failed to unlink contact:', err);
+            statusEl.textContent = 'Failed to unlink contact.';
+            statusEl.className = 'contact-status error-status';
+        }
+    }
+</script>
+{% endblock %}

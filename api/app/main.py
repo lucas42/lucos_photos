@@ -1040,6 +1040,7 @@ async def create_person(
 @app.get("/people/{person_id}")
 def get_person(
     person_id: str,
+    request: Request,
     _: Annotated[None, Depends(verify_session)],
     db: Session = Depends(get_db),
 ):
@@ -1061,7 +1062,20 @@ def get_person(
     data["faceCount"] = face_count
     data["photos"] = [photo_to_dict(p) for p in photos]
 
-    return data
+    accept_header = request.headers.get("accept", "*/*")
+    best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
+    if best_match == "text/html":
+        contacts_url = os.environ.get("LUCOS_CONTACTS_URL", "")
+        arachne_key = os.environ.get("KEY_LUCOS_ARACHNE", "")
+        contact_page_url = f"{contacts_url}/people/{person.contact_id}" if person.contact_id and contacts_url else None
+        return templates.TemplateResponse(request, "person.html", {
+            "person": data,
+            "contact_page_url": contact_page_url,
+            "arachne_key": arachne_key,
+            "current_page": "people",
+        }, headers={"Vary": "Accept"})
+
+    return JSONResponse(content=data, headers={"Vary": "Accept"})
 
 
 @app.get("/people/{person_id}/profile-picture")
