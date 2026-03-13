@@ -362,6 +362,44 @@ class TestGetPerson:
         response = client.get(f"/people/{person.id}")
         assert response.status_code == 401
 
+    def test_returns_html_when_browser_accept_header(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/people/{person.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+        assert b"<!DOCTYPE html>" in response.content
+        assert b"Alice" in response.content
+
+    def test_returns_json_when_json_accept_header(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/people/{person.id}", headers={"Accept": "application/json"})
+        assert response.status_code == 200
+        assert "application/json" in response.headers["content-type"]
+        assert response.json()["name"] == "Alice"
+
+    def test_returns_json_when_no_accept_header(self, authenticated_client, db_session):
+        """With no Accept header (*/*), JSON should be returned as the default."""
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/people/{person.id}")
+        assert response.status_code == 200
+        assert "application/json" in response.headers["content-type"]
+
+    def test_html_shows_person_photos(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice")
+        photo = make_photo(db_session, "a" * 63 + "b")
+        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
+        db_session.commit()
+
+        response = authenticated_client.get(f"/people/{person.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert str(photo.id).encode() in response.content
+
 
 class TestGetPersonProfilePicture:
     def test_returns_404_when_no_profile_picture(self, authenticated_client, db_session):
