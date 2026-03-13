@@ -21,6 +21,23 @@ from rq.job import Retry
 from lucos_photos_common.database import SessionLocal
 from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
+PHOTO_PROCESSED_CHANNEL = "photos:processed"
+
+
+def _publish_photo_processed(photo_id: str) -> None:
+    """Publish a photo-processed notification to the Redis pub/sub channel.
+
+    Non-fatal: Redis unavailability is logged but not raised.
+    """
+    try:
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        redis_conn = Redis.from_url(redis_url)
+        message = json.dumps({"type": "photoProcessed", "photoId": photo_id})
+        redis_conn.publish(PHOTO_PROCESSED_CHANNEL, message)
+        logger.info("_publish_photo_processed: published event for photo %s", photo_id)
+    except Exception:
+        logger.exception("_publish_photo_processed: failed to publish event for photo %s", photo_id)
+
 logger = logging.getLogger(__name__)
 
 UPLOADS_DIR = Path("/data/uploads")
@@ -344,6 +361,9 @@ def process_photo(photo_id: str) -> None:
             app_origin = os.environ.get("APP_ORIGIN", "")
             updateLoganne("photoProcessed", f"Photo {photo_id} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
 
+            # Notify the API's WebSocket clients that this photo is ready
+            _publish_photo_processed(photo_id)
+
             # Enqueue profile picture generation for each person detected in this photo
             _enqueue_profile_picture_for_photo(photo_uuid)
 
@@ -537,6 +557,9 @@ def process_video(photo_id: str) -> None:
             # Emit Loganne event — updateLoganne swallows HTTP errors internally
             app_origin = os.environ.get("APP_ORIGIN", "")
             updateLoganne("videoProcessed", f"Video {photo_id} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
+
+            # Notify the API's WebSocket clients that this media item is ready
+            _publish_photo_processed(photo_id)
 
         except Exception as exc:
             logger.exception("process_video: error processing media item %s", photo_id)

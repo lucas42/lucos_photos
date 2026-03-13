@@ -1,11 +1,13 @@
 import asyncio
 import hashlib
+import json
 import os
 import re
 import shutil
 import tempfile
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Optional
@@ -13,7 +15,7 @@ from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 import mimeparse
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile, status
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -49,7 +51,18 @@ def safe_path(path: str, fallback: str = "/") -> str:
     return path
 
 
-app = FastAPI(title="lucos_photos")
+@asynccontextmanager
+async def lifespan(fastapi_app):
+    task = asyncio.create_task(_redis_subscriber_task())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(title="lucos_photos", lifespan=lifespan)
 
 
 class _RedirectWithCookie(Exception):
@@ -110,6 +123,11 @@ _CONTENT_TYPE_TO_EXT = {
 
 _redis_conn: Redis | None = None
 
+PHOTO_PROCESSED_CHANNEL = "photos:processed"
+
+# Set of active WebSocket connections; modified only on the main event loop thread.
+_ws_clients: set[WebSocket] = set()
+
 
 def get_redis() -> Redis:
     global _redis_conn
@@ -117,6 +135,45 @@ def get_redis() -> Redis:
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
         _redis_conn = Redis.from_url(redis_url)
     return _redis_conn
+
+
+async def _redis_subscriber_task():
+    """Background task: subscribe to the Redis pub/sub channel and broadcast to WebSocket clients.
+
+    Runs for the lifetime of the application. Reconnects automatically on error.
+    Uses a dedicated synchronous Redis connection (pubsub blocks) run via asyncio.to_thread.
+    """
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    while True:
+        try:
+            redis_sub = Redis.from_url(redis_url)
+            pubsub = redis_sub.pubsub(ignore_subscribe_messages=True)
+            pubsub.subscribe(PHOTO_PROCESSED_CHANNEL)
+
+            async def _poll():
+                while True:
+                    message = await asyncio.to_thread(pubsub.get_message, timeout=1.0)
+                    if message and message.get("type") == "message":
+                        data = message["data"]
+                        if isinstance(data, bytes):
+                            data = data.decode()
+                        await _broadcast(data)
+
+            await _poll()
+        except Exception as exc:
+            print(f"WebSocket broadcaster: Redis subscriber error: {exc}", flush=True)
+            await asyncio.sleep(5)
+
+
+async def _broadcast(message: str):
+    """Send a text message to all connected WebSocket clients, removing any that have disconnected."""
+    disconnected = set()
+    for ws in list(_ws_clients):
+        try:
+            await ws.send_text(message)
+        except Exception:
+            disconnected.add(ws)
+    _ws_clients.difference_update(disconnected)
 
 
 def enqueue_process_media(photo_id: str, media_type: str = "photo") -> None:
@@ -436,6 +493,43 @@ def photo_to_dict(photo: MediaItem) -> dict:
         "originalUrl": original_url,
         "thumbnailUrl": thumbnail_url,
     }
+
+
+@app.websocket("/stream")
+async def websocket_stream(websocket: WebSocket):
+    """WebSocket endpoint: push photo-processed events to browser clients.
+
+    Auth: requires a valid `auth_token` cookie (same session cookie used by the web UI).
+    On successful connection the server sends a `{"type": "connected"}` message.
+    When a photo finishes processing the server sends:
+        {"type": "photoProcessed", "photoId": "<uuid>"}
+    The client is responsible for fetching photo details and inserting the card into the grid.
+    """
+    auth_token = websocket.cookies.get("auth_token")
+    if not auth_token:
+        await websocket.close(code=4401, reason="Authentication required")
+        return
+
+    data = await _validate_token_with_auth_service(auth_token)
+    if not data or not data.get("id"):
+        await websocket.close(code=4401, reason="Authentication required")
+        return
+
+    await websocket.accept()
+    _ws_clients.add(websocket)
+    try:
+        await websocket.send_text(json.dumps({"type": "connected"}))
+        # Keep the connection alive, waiting for the client to disconnect
+        while True:
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+            except asyncio.TimeoutError:
+                # Send a keepalive ping so the connection doesn't time out via proxies
+                await websocket.send_text(json.dumps({"type": "ping"}))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _ws_clients.discard(websocket)
 
 
 @app.get("/healthcheck")
