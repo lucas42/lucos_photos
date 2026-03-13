@@ -206,6 +206,11 @@
     // Load media from API
     // ------------------------------------------------------------------
 
+    // Track current pagination state so we can decide if a new photo belongs here.
+    let currentOffset = 0;
+    let currentTotal = 0;
+    let currentCount = 0;
+
     async function loadMedia() {
         const page = getCurrentPage();
         const offset = (page - 1) * PAGE_SIZE;
@@ -218,6 +223,10 @@
             const data = await response.json();
             const items = data.photos || [];
             const total = data.total || 0;
+
+            currentOffset = offset;
+            currentTotal = total;
+            currentCount = items.length;
 
             grid.innerHTML = '';
 
@@ -239,5 +248,63 @@
     }
 
     loadMedia();
+
+    // ------------------------------------------------------------------
+    // WebSocket: live photo updates
+    // ------------------------------------------------------------------
+
+    function connectWebSocket() {
+        const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+        const socket = new WebSocket(`${protocol}://${location.host}/stream`);
+
+        socket.addEventListener('message', async (event) => {
+            let msg;
+            try { msg = JSON.parse(event.data); } catch { return; }
+
+            if (msg.type !== 'photoProcessed') return;
+
+            // Only insert on page 1 (offset 0). Newly-processed photos sort to the
+            // front (most recent uploaded_at), so they always land at the top of page 1.
+            if (currentOffset !== 0) return;
+
+            try {
+                const res = await fetch(`/photos/${msg.photoId}`);
+                if (!res.ok) return;
+                const item = await res.json();
+
+                // Remove empty-state placeholder if present
+                const emptyState = grid.querySelector('.empty-state');
+                if (emptyState) emptyState.remove();
+
+                // Prepend the new card
+                const card = renderMediaCard(item);
+                grid.insertBefore(card, grid.firstChild);
+
+                // Update our local counters
+                currentCount++;
+                currentTotal++;
+
+                // If the page is now over-full, drop the last card (it shifts to page 2)
+                if (currentCount > PAGE_SIZE) {
+                    const cards = grid.querySelectorAll('.media-card-link');
+                    if (cards.length > PAGE_SIZE) {
+                        grid.removeChild(cards[cards.length - 1]);
+                        currentCount = PAGE_SIZE;
+                    }
+                }
+
+                renderPagination(getCurrentPage(), currentOffset, currentCount, currentTotal);
+            } catch (err) {
+                console.error('WebSocket: failed to fetch new photo', err);
+            }
+        });
+
+        socket.addEventListener('close', () => {
+            // Reconnect after a brief delay
+            setTimeout(connectWebSocket, 3000);
+        });
+    }
+
+    connectWebSocket();
 </script>
 {% endblock %}
