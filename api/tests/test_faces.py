@@ -241,7 +241,7 @@ class TestAssignPerson:
         face = make_face(db_session, photo)
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+        with patch("app.routers.faces.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
             authenticated_client.put(
                 f"/faces/{face.id}/person",
                 json={"personId": str(person.id)},

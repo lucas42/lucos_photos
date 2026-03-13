@@ -388,7 +388,7 @@ class TestUpload:
 
 class TestUploadLimits:
     def test_file_too_large_returns_413(self, client):
-        with patch("app.main.MAX_PHOTO_SIZE", 10):
+        with patch("app.routers.photos.MAX_PHOTO_SIZE", 10):
             response = client.post(
                 "/photos",
                 files={"file": ("photo.jpg", b"too long for limit", "image/jpeg")},
@@ -410,7 +410,7 @@ class TestUploadLimits:
             _original_init(self, *args, **kwargs)
             self.size = None
 
-        with patch("app.main.MAX_PHOTO_SIZE", len(VALID_IMAGE_CONTENT) - 1), \
+        with patch("app.routers.photos.MAX_PHOTO_SIZE", len(VALID_IMAGE_CONTENT) - 1), \
              patch.object(StUploadFile, "__init__", _force_size_none):
             response = client.post(
                 "/photos",
@@ -436,7 +436,7 @@ class TestUploadLimits:
             _original_init(self, *args, **kwargs)
             self.size = None
 
-        with patch("app.main.MAX_PHOTO_SIZE", 10), \
+        with patch("app.routers.photos.MAX_PHOTO_SIZE", 10), \
              patch.object(StUploadFile, "__init__", _force_size_none):
             client.post(
                 "/photos",
@@ -460,9 +460,9 @@ class TestUploadLimits:
 
     def test_max_video_size_constant_exists(self):
         """MAX_VIDEO_SIZE should be defined and larger than MAX_PHOTO_SIZE."""
-        import app.main as main_module
-        assert hasattr(main_module, "MAX_VIDEO_SIZE")
-        assert main_module.MAX_VIDEO_SIZE > main_module.MAX_PHOTO_SIZE
+        import app.routers.photos as photos_module
+        assert hasattr(photos_module, "MAX_VIDEO_SIZE")
+        assert photos_module.MAX_VIDEO_SIZE > photos_module.MAX_PHOTO_SIZE
 
     def test_sha256_hash_correct_for_streamed_upload(self, client):
         """SHA256 computed during streaming should match the actual file content."""
@@ -568,7 +568,7 @@ class TestVideoUpload:
         import app.main as main_module
         # Set MAX_PHOTO_SIZE to 1 byte — video should still be accepted because
         # it uses MAX_VIDEO_SIZE instead.
-        with patch("app.main.MAX_PHOTO_SIZE", 1):
+        with patch("app.routers.photos.MAX_PHOTO_SIZE", 1):
             response = client.post(
                 "/photos",
                 files={"file": ("video.mp4", VALID_VIDEO_CONTENT, "video/mp4")},
@@ -577,7 +577,7 @@ class TestVideoUpload:
         assert response.status_code == 201
 
     def test_video_too_large_returns_413(self, client):
-        with patch("app.main.MAX_VIDEO_SIZE", 10):
+        with patch("app.routers.photos.MAX_VIDEO_SIZE", 10):
             response = client.post(
                 "/photos",
                 files={"file": ("video.mp4", VALID_VIDEO_CONTENT, "video/mp4")},

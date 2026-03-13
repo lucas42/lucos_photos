@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from pathlib import Path
 
 import app.main as main_module
+import app.routers.app_release as app_release_module
 
 REAL_STATIC_DIR = Path(main_module.__file__).parent / "static"
 
@@ -13,15 +14,15 @@ REAL_STATIC_DIR = Path(main_module.__file__).parent / "static"
 @pytest.fixture(autouse=True)
 def clear_app_latest_cache():
     """Reset the in-memory caches before each test to ensure isolation."""
-    main_module._APP_LATEST_CACHE["data"] = None
-    main_module._APP_LATEST_CACHE["fetched_at"] = 0.0
-    main_module._APP_LATEST_ERROR_CACHE["error"] = None
-    main_module._APP_LATEST_ERROR_CACHE["fetched_at"] = 0.0
+    app_release_module._APP_LATEST_CACHE["data"] = None
+    app_release_module._APP_LATEST_CACHE["fetched_at"] = 0.0
+    app_release_module._APP_LATEST_ERROR_CACHE["error"] = None
+    app_release_module._APP_LATEST_ERROR_CACHE["fetched_at"] = 0.0
     yield
-    main_module._APP_LATEST_CACHE["data"] = None
-    main_module._APP_LATEST_CACHE["fetched_at"] = 0.0
-    main_module._APP_LATEST_ERROR_CACHE["error"] = None
-    main_module._APP_LATEST_ERROR_CACHE["fetched_at"] = 0.0
+    app_release_module._APP_LATEST_CACHE["data"] = None
+    app_release_module._APP_LATEST_CACHE["fetched_at"] = 0.0
+    app_release_module._APP_LATEST_ERROR_CACHE["error"] = None
+    app_release_module._APP_LATEST_ERROR_CACHE["fetched_at"] = 0.0
 
 
 def _make_github_response(status_code=200, json_body=None):
@@ -70,7 +71,7 @@ class TestAppLatestAuth:
     def test_authenticated_request_succeeds(self, authenticated_client):
         """Authenticated requests should not be blocked by auth (GitHub API call is mocked)."""
         mock_resp = _make_github_response(200, SAMPLE_RELEASE)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -83,7 +84,7 @@ class TestAppLatestAuth:
     def test_key_auth_bearer_scheme_succeeds(self, client):
         """Requests with a valid key via Bearer scheme should be accepted."""
         mock_resp = _make_github_response(200, SAMPLE_RELEASE)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -96,7 +97,7 @@ class TestAppLatestAuth:
     def test_key_auth_key_scheme_succeeds(self, client):
         """Requests with a valid key via 'key' scheme (Android app style) should be accepted."""
         mock_resp = _make_github_response(200, SAMPLE_RELEASE)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -146,7 +147,8 @@ class TestAppLatestAuth:
 
         mock_auth_client.get = mock_get
 
-        with patch("app.main.httpx.AsyncClient", return_value=mock_auth_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_auth_client), \
+             patch("app.routers.app_release.httpx.AsyncClient", return_value=mock_auth_client):
             response = client.get(
                 "/api/app/latest",
                 headers={"Authorization": "key wrongkey", "Accept": "application/json"},
@@ -161,7 +163,7 @@ class TestAppLatestSuccess:
 
     def test_returns_version_and_download_url(self, authenticated_client):
         mock_resp = _make_github_response(200, SAMPLE_RELEASE)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -179,7 +181,7 @@ class TestAppLatestSuccess:
     def test_strips_leading_v_from_tag_name(self, authenticated_client):
         release = {**SAMPLE_RELEASE, "tag_name": "v2.0.0"}
         mock_resp = _make_github_response(200, release)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -192,7 +194,7 @@ class TestAppLatestSuccess:
 
     def test_caches_result_and_does_not_call_github_twice(self, authenticated_client):
         mock_resp = _make_github_response(200, SAMPLE_RELEASE)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -211,7 +213,7 @@ class TestAppLatestErrors:
 
     def test_returns_404_when_no_releases(self, authenticated_client):
         mock_resp = _make_github_response(404)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -241,13 +243,13 @@ class TestAppLatestErrors:
         latest_client = _make_async_client(latest_resp)
         list_client = _make_async_client(list_resp)
 
-        with patch("app.main.httpx.AsyncClient", side_effect=[latest_client, list_client]):
+        with patch("app.routers.app_release.httpx.AsyncClient", side_effect=[latest_client, list_client]):
             response = authenticated_client.get("/api/app/latest")
 
         assert response.status_code == 404
 
     def test_returns_502_when_github_api_unreachable(self, authenticated_client):
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -260,7 +262,7 @@ class TestAppLatestErrors:
 
     def test_returns_502_when_github_api_returns_server_error(self, authenticated_client):
         mock_resp = _make_github_response(500)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -277,7 +279,7 @@ class TestAppLatestNegativeCache:
 
     def test_502_error_is_cached_and_github_not_called_again(self, authenticated_client):
         """A 502 from GitHub should be cached; the second request must not call GitHub again."""
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -295,7 +297,7 @@ class TestAppLatestNegativeCache:
     def test_404_error_is_cached_and_github_not_called_again(self, authenticated_client):
         """A 404 from GitHub should also be cached for the negative TTL."""
         mock_resp = _make_github_response(404)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -313,7 +315,7 @@ class TestAppLatestNegativeCache:
         import time as time_module
 
         mock_resp = _make_github_response(500)
-        with patch("app.main.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.routers.app_release.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -323,8 +325,8 @@ class TestAppLatestNegativeCache:
             authenticated_client.get("/api/app/latest")
 
             # Simulate the error cache having expired
-            main_module._APP_LATEST_ERROR_CACHE["fetched_at"] = (
-                time_module.monotonic() - main_module._APP_LATEST_ERROR_CACHE_TTL - 1
+            app_release_module._APP_LATEST_ERROR_CACHE["fetched_at"] = (
+                time_module.monotonic() - app_release_module._APP_LATEST_ERROR_CACHE_TTL - 1
             )
 
             authenticated_client.get("/api/app/latest")
@@ -336,13 +338,13 @@ class TestAppLatestNegativeCache:
         """After a successful response, the error cache should not interfere."""
         # Pre-populate the error cache with a stale error
         import time as time_module
-        main_module._APP_LATEST_ERROR_CACHE["error"] = {"status_code": 502, "detail": "old error"}
-        main_module._APP_LATEST_ERROR_CACHE["fetched_at"] = (
-            time_module.monotonic() - main_module._APP_LATEST_ERROR_CACHE_TTL - 1
+        app_release_module._APP_LATEST_ERROR_CACHE["error"] = {"status_code": 502, "detail": "old error"}
+        app_release_module._APP_LATEST_ERROR_CACHE["fetched_at"] = (
+            time_module.monotonic() - app_release_module._APP_LATEST_ERROR_CACHE_TTL - 1
         )
 
         mock_resp = _make_github_response(200, SAMPLE_RELEASE)
-        with patch("app.main.httpx.AsyncClient", return_value=_make_async_client(mock_resp)):
+        with patch("app.routers.app_release.httpx.AsyncClient", return_value=_make_async_client(mock_resp)):
             response = authenticated_client.get("/api/app/latest")
 
         assert response.status_code == 200
@@ -375,7 +377,7 @@ class TestAppLatestFallback:
         latest_resp = _make_github_response(200, RELEASE_WITHOUT_APK)
         list_resp = _make_github_response(200, [RELEASE_WITHOUT_APK, PREVIOUS_RELEASE])
 
-        with patch("app.main.httpx.AsyncClient", side_effect=[
+        with patch("app.routers.app_release.httpx.AsyncClient", side_effect=[
             _make_async_client(latest_resp),
             _make_async_client(list_resp),
         ]):
@@ -390,7 +392,7 @@ class TestAppLatestFallback:
     def test_updating_flag_absent_on_normal_release(self, authenticated_client):
         """When the latest release has an APK, updating is not included in the response."""
         mock_resp = _make_github_response(200, SAMPLE_RELEASE)
-        with patch("app.main.httpx.AsyncClient", return_value=_make_async_client(mock_resp)):
+        with patch("app.routers.app_release.httpx.AsyncClient", return_value=_make_async_client(mock_resp)):
             response = authenticated_client.get("/api/app/latest")
 
         assert response.status_code == 200
@@ -407,7 +409,7 @@ class TestAppLatestFallback:
         error_client.__aenter__ = AsyncMock(return_value=error_client)
         error_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("app.main.httpx.AsyncClient", side_effect=[latest_client, error_client]):
+        with patch("app.routers.app_release.httpx.AsyncClient", side_effect=[latest_client, error_client]):
             response = authenticated_client.get("/api/app/latest")
 
         assert response.status_code == 502

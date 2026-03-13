@@ -110,7 +110,7 @@ class TestVerifySessionInvalidToken:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 "/photos",
                 headers={"Accept": "application/json"},
@@ -129,7 +129,7 @@ class TestVerifySessionInvalidToken:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 "/photos",
                 headers={"Accept": "application/json"},
@@ -144,7 +144,7 @@ class TestVerifySessionInvalidToken:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(side_effect=httpx.ConnectError("unreachable"))
 
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 "/photos",
                 headers={"Accept": "application/json"},
@@ -169,7 +169,7 @@ class TestVerifySessionValidToken:
 
     def test_valid_token_allows_access(self, client):
         mock_client = self._mock_valid_auth_client()
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 "/photos",
                 headers={"Accept": "application/json"},
@@ -180,7 +180,7 @@ class TestVerifySessionValidToken:
     def test_auth_service_called_with_token(self, client):
         """The auth service must be called with the cookie value as the token param."""
         mock_client = self._mock_valid_auth_client()
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             client.get(
                 "/photos",
                 headers={"Accept": "application/json"},
@@ -193,7 +193,7 @@ class TestVerifySessionValidToken:
     def test_auth_service_url_is_hardcoded(self, client):
         """The auth service URL must always be auth.l42.eu — never configurable."""
         mock_client = self._mock_valid_auth_client()
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             client.get(
                 "/photos",
                 headers={"Accept": "application/json"},
@@ -222,7 +222,7 @@ class TestVerifySessionQueryTokenCallback:
         """After validating a ?token= param, redirect to the same path without it."""
         monkeypatch.setenv("APP_ORIGIN", "https://photos.example.com")
         mock_client = self._mock_valid_auth_client()
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 "/photos?token=callback-token",
                 headers={"Accept": "text/html"},
@@ -235,7 +235,7 @@ class TestVerifySessionQueryTokenCallback:
         """The redirect response must set an auth_token cookie on the photos domain."""
         monkeypatch.setenv("APP_ORIGIN", "https://photos.example.com")
         mock_client = self._mock_valid_auth_client()
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 "/photos?token=my-callback-token",
                 headers={"Accept": "text/html"},
@@ -249,7 +249,7 @@ class TestVerifySessionQueryTokenCallback:
         """Other query params (e.g. ?limit=10) must survive the redirect."""
         monkeypatch.setenv("APP_ORIGIN", "https://photos.example.com")
         mock_client = self._mock_valid_auth_client()
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 "/photos?limit=10&token=callback-token&offset=20",
                 headers={"Accept": "text/html"},
@@ -272,7 +272,7 @@ class TestVerifySessionQueryTokenCallback:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 "/photos?token=invalid-token",
                 headers={"Accept": "text/html"},
@@ -292,7 +292,7 @@ class TestVerifySessionQueryTokenCallback:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 "/photos?token=no-id-token",
                 headers={"Accept": "text/html"},
@@ -305,7 +305,7 @@ class TestVerifySessionQueryTokenCallback:
         """The ?token= value must be sent to auth.l42.eu/data for validation."""
         monkeypatch.setenv("APP_ORIGIN", "https://photos.example.com")
         mock_client = self._mock_valid_auth_client()
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             client.get(
                 "/photos?token=specific-query-token",
                 headers={"Accept": "text/html"},
@@ -370,7 +370,7 @@ class TestOpenRedirectPrevention:
         """
         monkeypatch.setenv("APP_ORIGIN", "")
         mock_client = self._mock_valid_auth_client()
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 # TestClient normalises the path, so we can't actually send //evil.com as
                 # the raw path. Instead verify that safe_redirect_url would be called.
@@ -391,7 +391,7 @@ class TestOpenRedirectPrevention:
         """With a legitimate APP_ORIGIN, the callback redirect stays on that origin."""
         monkeypatch.setenv("APP_ORIGIN", "https://photos.example.com")
         mock_client = self._mock_valid_auth_client()
-        with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.auth.httpx.AsyncClient", return_value=mock_client):
             response = client.get(
                 "/photos?token=callback-token",
                 headers={"Accept": "text/html"},
