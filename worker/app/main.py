@@ -126,6 +126,13 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
     except Exception:
         logger.exception("sweep: error during face clustering")
 
+    # Sync person display_names with lucos_contacts to catch any drift.
+    try:
+        from lucos_photos_common.jobs import sweep_contact_display_names
+        sweep_contact_display_names()
+    except Exception:
+        logger.exception("sweep: error during contact display name sync")
+
 
 def run_sweep_loop(redis_conn: Redis) -> None:
     """Background thread: periodically sweep for pending photos."""
