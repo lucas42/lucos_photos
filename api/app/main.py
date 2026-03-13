@@ -1149,8 +1149,15 @@ def get_person(
 
     face_count = db.query(Face).filter(Face.person_id == person_uuid).count()
 
-    # Get photos assigned to this person (via PhotoPerson)
-    photos = db.query(MediaItem).join(PhotoPerson).filter(PhotoPerson.person_id == person_uuid).all()
+    # Get photos assigned to this person (via PhotoPerson), only fully processed ones
+    photos = (
+        db.query(MediaItem)
+        .join(PhotoPerson)
+        .join(ProcessingStatus, MediaItem.id == ProcessingStatus.photo_id)
+        .filter(PhotoPerson.person_id == person_uuid)
+        .filter(ProcessingStatus.state == ProcessingState.complete)
+        .all()
+    )
 
     data = person_to_dict(person)
     data["faceCount"] = face_count

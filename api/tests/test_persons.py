@@ -3,7 +3,7 @@ import uuid
 import pytest
 from unittest.mock import AsyncMock, patch
 from PIL import Image
-from lucos_photos_common.models import Person, Photo, PhotoPerson, Face
+from lucos_photos_common.models import Person, Photo, PhotoPerson, Face, ProcessingStatus, ProcessingState
 
 
 def make_person(db, display_name="Alice", contact_id=None):
@@ -327,6 +327,7 @@ class TestGetPerson:
         person = make_person(db_session, "Alice", contact_id="alice-123")
         photo = make_photo(db_session)
         db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
 
         # Add a face for this person
         face = Face(
@@ -394,11 +395,30 @@ class TestGetPerson:
         person = make_person(db_session, "Alice")
         photo = make_photo(db_session, "a" * 63 + "b")
         db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
         db_session.commit()
 
         response = authenticated_client.get(f"/people/{person.id}", headers={"Accept": "text/html"})
         assert response.status_code == 200
         assert str(photo.id).encode() in response.content
+
+    def test_filters_out_unprocessed_photos(self, authenticated_client, db_session):
+        """Photos without a complete processing status should not appear in the per-person grid."""
+        person = make_person(db_session, "Alice")
+        complete_photo = make_photo(db_session, "c" * 64)
+        pending_photo = make_photo(db_session, "d" * 64)
+        db_session.add(PhotoPerson(photo_id=complete_photo.id, person_id=person.id))
+        db_session.add(PhotoPerson(photo_id=pending_photo.id, person_id=person.id))
+        db_session.add(ProcessingStatus(photo_id=complete_photo.id, state=ProcessingState.complete))
+        db_session.add(ProcessingStatus(photo_id=pending_photo.id, state=ProcessingState.pending))
+        db_session.commit()
+
+        response = authenticated_client.get(f"/people/{person.id}")
+        assert response.status_code == 200
+        data = response.json()
+        photo_ids = [p["id"] for p in data["photos"]]
+        assert str(complete_photo.id) in photo_ids
+        assert str(pending_photo.id) not in photo_ids
 
 
 class TestGetPersonProfilePicture:
