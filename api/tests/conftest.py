@@ -13,7 +13,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.main as main_module
-from app.main import app, get_db, verify_session, verify_session_or_key
+import app.routers.photos as photos_module
+from app.main import app
+from app.database import get_db
+from app.auth import verify_session, verify_session_or_key
 import lucos_photos_common.models  # noqa: F401 - registers all models with Base.metadata
 from lucos_photos_common.database import Base
 
@@ -41,12 +44,15 @@ def db_session(db_engine):
 @pytest.fixture
 def client(db_session, db_engine, tmp_path, monkeypatch):
     monkeypatch.setenv("CLIENT_KEYS", "test:development=validkey")
-    monkeypatch.setattr(main_module, "UPLOADS_DIR", tmp_path)
+    monkeypatch.setattr(photos_module, "UPLOADS_DIR", tmp_path)
 
-    # Patch SessionLocal so that any code calling SessionLocal() directly (e.g. check_db,
-    # get_metrics) uses the same in-memory SQLite database as the test session.
+    # Patch SessionLocal in both app.database (used by get_db) and app.main (used by
+    # check_db / get_metrics) so that all database access uses the same in-memory SQLite.
     TestSession = sessionmaker(bind=db_engine)
-    monkeypatch.setattr(main_module, "SessionLocal", TestSession)
+    import app.database as database_module
+    import app.main as main_module_inner
+    monkeypatch.setattr(database_module, "SessionLocal", TestSession)
+    monkeypatch.setattr(main_module_inner, "SessionLocal", TestSession)
 
     def override_get_db():
         yield db_session

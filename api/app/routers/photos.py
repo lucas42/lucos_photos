@@ -1,0 +1,506 @@
+"""Routes for photo upload, listing, retrieval, deletion, and file serving."""
+
+import hashlib
+import os
+import re
+import shutil
+import tempfile
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Annotated
+
+import mimeparse
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse, Response
+from fastapi.templating import Jinja2Templates
+from PIL import Image
+from sqlalchemy.orm import Session
+
+from app.auth import verify_key, verify_session
+from app.database import get_db
+from app.redis_client import enqueue_process_media
+from app.serializers import face_to_dict_simple, photo_to_dict, photo_url
+from app.services import emit_loganne_event
+from lucos_photos_common.models import Face, MediaItem, PhotoPerson, ProcessingState, ProcessingStatus
+
+router = APIRouter()
+
+UPLOADS_DIR = Path("/data/uploads")
+PHOTOS_DIR = Path("/data/photos")
+
+TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+EXTENSION_MIME_TYPES = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "heic": "image/heic",
+    "heif": "image/heif",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "mp4": "video/mp4",
+    "mov": "video/quicktime",
+}
+
+MAX_PHOTO_SIZE = int(os.environ.get("MAX_PHOTO_SIZE", 100 * 1024 * 1024))
+MAX_VIDEO_SIZE = int(os.environ.get("MAX_VIDEO_SIZE", 500 * 1024 * 1024))
+MIN_FREE_DISK_SPACE = int(os.environ.get("MIN_FREE_DISK_SPACE", 500 * 1024 * 1024))
+
+_UPLOAD_CHUNK_SIZE = 64 * 1024  # 64KB chunks
+
+VIDEO_MIME_TYPES = {"video/mp4", "video/quicktime"}
+
+_CONTENT_TYPE_TO_EXT = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/heic": "heic",
+    "image/heif": "heif",
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
+}
+
+_RANGE_CHUNK_SIZE = 256 * 1024  # 256 KB streaming chunks for range responses
+
+
+def _get_photo_or_404(photo_id: str, db: Session) -> MediaItem:
+    """Resolve a photo UUID string to a MediaItem model, raising 404 on not found or invalid UUID."""
+    try:
+        photo_uuid = uuid.UUID(photo_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    photo = db.query(MediaItem).filter(MediaItem.id == photo_uuid).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return photo
+
+
+def _serve_file_with_range_support(
+    file_path: Path,
+    media_type: str,
+    extra_headers: dict | None = None,
+    range_header: str | None = None,
+) -> Response:
+    """Serve a file with HTTP range request support.
+
+    Returns:
+    - 206 Partial Content with the requested byte range if a valid Range header is present.
+    - 416 Range Not Satisfiable if the range is invalid.
+    - 200 OK with the full file and `Accept-Ranges: bytes` if no Range header is given.
+
+    All responses include `Accept-Ranges: bytes` so clients know they can request ranges.
+    """
+    file_size = file_path.stat().st_size
+    headers = dict(extra_headers or {})
+    headers["Accept-Ranges"] = "bytes"
+
+    if range_header:
+        # Parse "bytes=start-end" (end is inclusive)
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+        if not match:
+            raise HTTPException(
+                status_code=416,
+                detail="Range Not Satisfiable",
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        start_str, end_str = match.group(1), match.group(2)
+
+        if start_str == "" and end_str == "":
+            raise HTTPException(
+                status_code=416,
+                detail="Range Not Satisfiable",
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        if start_str == "":
+            # Suffix range: last N bytes
+            suffix_length = int(end_str)
+            start = max(0, file_size - suffix_length)
+            end = file_size - 1
+        elif end_str == "":
+            start = int(start_str)
+            end = file_size - 1
+        else:
+            start = int(start_str)
+            end = int(end_str)
+
+        if start > end or start >= file_size or end >= file_size:
+            raise HTTPException(
+                status_code=416,
+                detail="Range Not Satisfiable",
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        content_length = end - start + 1
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+        headers["Content-Length"] = str(content_length)
+
+        def _iter_file_range():
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk = f.read(min(_RANGE_CHUNK_SIZE, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        return StreamingResponse(
+            _iter_file_range(),
+            status_code=206,
+            media_type=media_type,
+            headers=headers,
+        )
+
+    # No range header — serve the full file with Accept-Ranges advertised
+    headers["Content-Length"] = str(file_size)
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        headers=headers,
+    )
+
+
+@router.post("/photos", status_code=status.HTTP_201_CREATED)
+async def upload_photo(
+    file: UploadFile,
+    _: Annotated[None, Depends(verify_key)],
+    db: Session = Depends(get_db),
+    x_taken_at: Annotated[str | None, Header()] = None,
+):
+    content_type = file.content_type or ""
+    is_video = content_type in VIDEO_MIME_TYPES
+    size_limit = MAX_VIDEO_SIZE if is_video else MAX_PHOTO_SIZE
+
+    # Fast-path rejection: if Content-Length is provided and already too large, reject before streaming
+    if file.size and file.size > size_limit:
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="File too large")
+
+    # Check for sufficient free disk space
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    _, _, free = shutil.disk_usage(UPLOADS_DIR)
+    if free < MIN_FREE_DISK_SPACE:
+        raise HTTPException(status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail="Insufficient storage")
+
+    # Stream the upload to a temp file, computing SHA256 incrementally.
+    # We never hold the full file in memory — each chunk is written directly to disk.
+    tmp_file = tempfile.NamedTemporaryFile(dir=UPLOADS_DIR, delete=False)
+    tmp_path = Path(tmp_file.name)
+    try:
+        hasher = hashlib.sha256()
+        total_bytes = 0
+        try:
+            while True:
+                chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > size_limit:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail="File too large",
+                    )
+                hasher.update(chunk)
+                tmp_file.write(chunk)
+        finally:
+            tmp_file.close()
+
+        sha256_hash = hasher.hexdigest()
+
+        # Validate that the file is a valid image (videos are not validated here)
+        if not is_video:
+            try:
+                with Image.open(tmp_path) as img:
+                    img.verify()
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=422, detail="Invalid image file")
+
+        # Parse the X-Taken-At header (Unix milliseconds) into a timezone-aware datetime.
+        # This is a client-supplied hint (e.g. MediaStore DATE_TAKEN on Android) used as a
+        # fallback taken_at for photos that lack an EXIF DateTimeOriginal tag.  The worker
+        # will overwrite this with the EXIF value if one is present, since EXIF is more
+        # authoritative than the OS-level timestamp.
+        client_taken_at = None
+        if x_taken_at:
+            try:
+                taken_at_ms = int(x_taken_at)
+                if taken_at_ms > 0:
+                    client_taken_at = datetime.fromtimestamp(taken_at_ms / 1000.0, tz=timezone.utc)
+            except (ValueError, OverflowError, OSError):
+                # Ignore malformed or out-of-range values; taken_at will remain null.
+                pass
+
+        # Idempotency: if a media item with this hash already exists, return it.
+        # If the existing record lacks taken_at and the client supplied one this time,
+        # update the record — the first upload may have been sent without the header.
+        existing = db.query(MediaItem).filter(MediaItem.sha256_hash == sha256_hash).first()
+        if existing:
+            if client_taken_at is not None and existing.taken_at is None:
+                existing.taken_at = client_taken_at
+                db.commit()
+                db.refresh(existing)
+                print(f"upload_photo: updated taken_at to client-supplied {client_taken_at} for existing photo {sha256_hash}", flush=True)
+            return JSONResponse(status_code=200, content=photo_to_dict(existing))
+
+        # Determine file extension from filename, falling back to content type
+        filename = file.filename or ""
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if not ext:
+            ext = _CONTENT_TYPE_TO_EXT.get(content_type, "jpg")
+
+        # Move temp file to its final staging location
+        file_path = UPLOADS_DIR / f"{sha256_hash}.{ext}"
+        tmp_path.rename(file_path)
+        tmp_path = None  # temp file has been moved; don't delete it in finally block
+
+        if client_taken_at is not None:
+            print(f"upload_photo: storing client-supplied taken_at {client_taken_at} for photo {sha256_hash}", flush=True)
+
+        try:
+            # Create media item record and initial processing status
+            media_type = "video" if is_video else "photo"
+            photo = MediaItem(sha256_hash=sha256_hash, file_extension=ext, media_type=media_type, taken_at=client_taken_at)
+            db.add(photo)
+            db.flush()
+            db.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))
+            db.commit()
+            db.refresh(photo)
+        except Exception:
+            db.rollback()
+            if file_path.exists():
+                file_path.unlink()
+            raise
+
+    finally:
+        # Clean up the temp file if it was never moved (failure path)
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink()
+
+    if is_video:
+        await emit_loganne_event("videoAdded", f"Video {photo.id} added to lucos_photos", url=photo_url(photo.id))
+    else:
+        await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos", url=photo_url(photo.id))
+
+    # Enqueue a job for the worker to process this media item.
+    # If Redis is unavailable, we log a warning and continue — the worker's
+    # periodic pending sweep will catch it within a few minutes.
+    enqueue_process_media(str(photo.id), media_type=media_type)
+
+    return photo_to_dict(photo)
+
+
+@router.get("/photos")
+def list_photos(
+    _: Annotated[None, Depends(verify_session)],
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    # Order by taken_at (most recent first), falling back to uploaded_at for photos
+    # without a known taken_at date.
+    order_cols = [MediaItem.taken_at.desc().nullslast(), MediaItem.uploaded_at.desc()]
+
+    # Only include media items that have been fully processed (thumbnail generated,
+    # face detection complete). Items with pending/processing/failed status — or no
+    # status row at all — are hidden until the worker finishes with them.
+    processed_filter = (
+        db.query(MediaItem)
+        .join(ProcessingStatus, MediaItem.id == ProcessingStatus.photo_id)
+        .filter(ProcessingStatus.state == ProcessingState.complete)
+    )
+
+    photos = processed_filter.order_by(*order_cols).offset(offset).limit(limit).all()
+    total = processed_filter.count()
+
+    return {
+        "photos": [photo_to_dict(p) for p in photos],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/photos/{photo_id}")
+def get_photo(
+    photo_id: str,
+    request: Request,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    try:
+        photo_uuid = uuid.UUID(photo_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    photo = db.query(MediaItem).filter(MediaItem.id == photo_uuid).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    processing_status = db.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo_uuid).first()
+    faces = db.query(Face).filter(Face.photo_id == photo_uuid).all()
+
+    data = photo_to_dict(photo)
+    data["processingStatus"] = processing_status.state.value if processing_status else None
+    data["faces"] = [face_to_dict_simple(f) for f in faces]
+    data["people"] = [
+        str(pp.person_id)
+        for pp in db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo_uuid).all()
+    ]
+
+    # Content negotiation: use python-mimeparse to pick between HTML and JSON
+    # following the HTTP standard (quality values, specificity rules, etc.).
+    # text/html is listed first so that */* (the default when no Accept is sent)
+    # resolves to application/json — mimeparse picks the last item on equal quality.
+    accept_header = request.headers.get("accept", "*/*")
+    best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
+    if best_match == "text/html":
+        return templates.TemplateResponse(request, "photo.html", {"photo": data, "current_page": "photos"}, headers={"Vary": "Accept"})
+
+    return JSONResponse(content=data, headers={"Vary": "Accept"})
+
+
+@router.delete("/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_photo(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Delete a photo, all its associated data, and its physical files on disk."""
+    photo = _get_photo_or_404(photo_id, db)
+
+    # Capture file info before deleting the DB row
+    sha = photo.sha256_hash
+    ext = photo.file_extension
+    media_type = photo.media_type
+
+    # Delete dependent rows manually (no cascade defined on the models)
+    db.query(Face).filter(Face.photo_id == photo.id).delete()
+    db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).delete()
+    db.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo.id).delete()
+    db.delete(photo)
+    db.commit()
+
+    # Remove physical files after the DB commit so a failed file deletion doesn't
+    # leave an orphaned DB row. Missing files are silently ignored.
+    files_to_delete = [
+        PHOTOS_DIR / "originals" / f"{sha}.{ext}",
+        PHOTOS_DIR / "derivatives" / f"{sha}.{ext}",
+    ]
+    if media_type == "video":
+        files_to_delete.append(PHOTOS_DIR / "derivatives" / f"{sha}_thumb.jpg")
+    for f in files_to_delete:
+        f.unlink(missing_ok=True)
+
+    await emit_loganne_event("photoDeleted", f"Photo {photo_id} deleted from lucos_photos")
+
+
+@router.get("/photo_files/original/{photo_id_with_ext}")
+def get_photo_original(
+    photo_id_with_ext: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+    range: Annotated[str | None, Header()] = None,
+):
+    """Serve the full-resolution original file, with HTTP range request support for video seeking.
+
+    Expects ``{photo_id}.{ext}`` as the path segment — the extension is ignored (the authoritative
+    extension comes from the database) but is required so that browsers and download managers
+    save the file with a meaningful filename.
+    """
+    photo_id = photo_id_with_ext.rsplit(".", 1)[0]
+    photo = _get_photo_or_404(photo_id, db)
+    ext = photo.file_extension
+    media_type = EXTENSION_MIME_TYPES.get(ext, "application/octet-stream")
+    file_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Photo file not found")
+    return _serve_file_with_range_support(
+        file_path=file_path,
+        media_type=media_type,
+        extra_headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        range_header=range,
+    )
+
+
+@router.get("/photo_files/thumbnail/{photo_id_with_ext}")
+def get_photo_thumbnail(
+    photo_id_with_ext: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Serve the thumbnail/derivative of a media item.
+
+    Expects ``{photo_id}.{ext}`` as the path segment — the extension is ignored (the authoritative
+    extension comes from the database) but is required so that browsers and download managers
+    save the file with a meaningful filename.
+
+    For photos: tries a resized derivative, falls back to the original.
+    For videos: serves the ffmpeg-generated JPEG thumbnail (``{hash}_thumb.jpg``).
+    """
+    photo_id = photo_id_with_ext.rsplit(".", 1)[0]
+    photo = _get_photo_or_404(photo_id, db)
+    ext = photo.file_extension
+
+    if photo.media_type == "video":
+        # Video thumbnails are JPEG stills extracted by the worker
+        thumb_path = PHOTOS_DIR / "derivatives" / f"{photo.sha256_hash}_thumb.jpg"
+        if not thumb_path.exists():
+            raise HTTPException(status_code=404, detail="Thumbnail not yet available")
+        return FileResponse(
+            path=thumb_path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    # Photos: try resized derivative (JPEG thumbnail) first, fall back to original
+    thumb_path = PHOTOS_DIR / "derivatives" / f"{photo.sha256_hash}_thumb.jpg"
+    if thumb_path.exists():
+        return FileResponse(
+            path=thumb_path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+    original_path = PHOTOS_DIR / "originals" / f"{photo.sha256_hash}.{ext}"
+    if not original_path.exists():
+        raise HTTPException(status_code=404, detail="Photo file not found")
+    media_type = EXTENSION_MIME_TYPES.get(ext, "application/octet-stream")
+    return FileResponse(
+        path=original_path,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@router.get("/photos/{photo_id}/original")
+def redirect_photo_original(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Redirect legacy URL to the canonical file-serving route."""
+    photo = _get_photo_or_404(photo_id, db)
+    ext = photo.file_extension or "bin"
+    return RedirectResponse(
+        url=f"/photo_files/original/{photo.id}.{ext}",
+        status_code=status.HTTP_301_MOVED_PERMANENTLY,
+    )
+
+
+@router.get("/photos/{photo_id}/thumbnail")
+def redirect_photo_thumbnail(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Redirect legacy URL to the canonical file-serving route."""
+    photo = _get_photo_or_404(photo_id, db)
+    ext = photo.file_extension or "bin"
+    return RedirectResponse(
+        url=f"/photo_files/thumbnail/{photo.id}.{ext}",
+        status_code=status.HTTP_301_MOVED_PERMANENTLY,
+    )

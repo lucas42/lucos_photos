@@ -119,8 +119,8 @@ class TestListpeople:
 
 class TestCreatePerson:
     def test_create_person(self, authenticated_client, db_session):
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
-             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
+             patch("app.routers.people.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.post(
                 "/people",
                 json={"name": "Charlie", "contactId": "charlie-123"},
@@ -154,8 +154,8 @@ class TestCreatePerson:
 
     def test_create_person_fetches_contact_name(self, authenticated_client, db_session):
         """When a contactId is supplied and fetch_contact_name succeeds, the returned name comes from contacts."""
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
-             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value="Alice From Contacts"):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.people.fetch_contact_name", new_callable=AsyncMock, return_value="Alice From Contacts"):
             response = authenticated_client.post(
                 "/people",
                 json={"name": "Alice Original", "contactId": "alice-123"},
@@ -166,8 +166,8 @@ class TestCreatePerson:
 
     def test_create_person_falls_back_to_caller_name_when_fetch_fails(self, authenticated_client, db_session):
         """When fetch_contact_name returns None, the caller-supplied name is used."""
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
-             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.people.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.post(
                 "/people",
                 json={"name": "Alice Original", "contactId": "alice-123"},
@@ -177,8 +177,8 @@ class TestCreatePerson:
 
     def test_create_person_without_contact_id_skips_fetch(self, authenticated_client, db_session):
         """When no contactId is supplied, fetch_contact_name is never called."""
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
-             patch("app.main.fetch_contact_name", new_callable=AsyncMock) as mock_fetch:
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.people.fetch_contact_name", new_callable=AsyncMock) as mock_fetch:
             response = authenticated_client.post(
                 "/people",
                 json={"name": "Charlie"},
@@ -195,8 +195,8 @@ class TestLinkPersonContact:
         person = make_person(db_session, "Alice")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
-             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
+             patch("app.routers.people.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.put(
                 f"/people/{person.id}/contact",
                 json={"contactId": "42"},
@@ -211,8 +211,8 @@ class TestLinkPersonContact:
         person = make_person(db_session, "Alice", contact_id="old-id")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
-             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.people.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.put(
                 f"/people/{person.id}/contact",
                 json={"contactId": "new-id"},
@@ -225,7 +225,7 @@ class TestLinkPersonContact:
         alice = make_person(db_session, "Alice")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
             response = authenticated_client.put(
                 f"/people/{alice.id}/contact",
                 json={"contactId": "shared-id"},
@@ -244,7 +244,7 @@ class TestLinkPersonContact:
         assert response.status_code == 422
 
     def test_link_contact_person_not_found(self, authenticated_client):
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
             response = authenticated_client.put(
                 f"/people/{uuid.uuid4()}/contact",
                 json={"contactId": "42"},
@@ -256,8 +256,8 @@ class TestLinkPersonContact:
         person = make_person(db_session, "Old Name")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
-             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value="Name From Contacts"):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.people.fetch_contact_name", new_callable=AsyncMock, return_value="Name From Contacts"):
             response = authenticated_client.put(
                 f"/people/{person.id}/contact",
                 json={"contactId": "42"},
@@ -273,8 +273,8 @@ class TestLinkPersonContact:
         person = make_person(db_session, "Original Name")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock), \
-             patch("app.main.fetch_contact_name", new_callable=AsyncMock, return_value=None):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.people.fetch_contact_name", new_callable=AsyncMock, return_value=None):
             response = authenticated_client.put(
                 f"/people/{person.id}/contact",
                 json={"contactId": "42"},
@@ -294,7 +294,7 @@ class TestUnlinkPersonContact:
         person = make_person(db_session, "Alice", contact_id="42")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
             response = authenticated_client.delete(f"/people/{person.id}/contact")
             assert response.status_code == 204
             mock_emit.assert_called_once()
@@ -307,7 +307,7 @@ class TestUnlinkPersonContact:
         person = make_person(db_session, "Alice")
         db_session.commit()
 
-        with patch("app.main.emit_loganne_event", new_callable=AsyncMock):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
             response = authenticated_client.delete(f"/people/{person.id}/contact")
         assert response.status_code == 204
 
@@ -426,7 +426,7 @@ class TestGetPersonProfilePicture:
         person = make_person(db_session, "Alice")
         db_session.commit()
 
-        with patch("app.main.DERIVATIVES_DIR") as mock_dir:
+        with patch("app.routers.people.DERIVATIVES_DIR") as mock_dir:
             mock_path = mock_dir.__truediv__.return_value
             mock_path.exists.return_value = False
             response = authenticated_client.get(f"/people/{person.id}/profile-picture")
@@ -443,7 +443,7 @@ class TestGetPersonProfilePicture:
         img = Image.new("RGB", (80, 80), color=(100, 150, 200))
         img.save(profile_path, format="JPEG")
 
-        with patch("app.main.DERIVATIVES_DIR", derivatives_dir):
+        with patch("app.routers.people.DERIVATIVES_DIR", derivatives_dir):
             response = authenticated_client.get(f"/people/{person.id}/profile-picture")
 
         assert response.status_code == 200
@@ -465,7 +465,7 @@ class TestListPeopleIncludesProfilePictureUrl:
         make_person(db_session, "Alice")
         db_session.commit()
 
-        with patch("app.main.DERIVATIVES_DIR") as mock_dir:
+        with patch("app.serializers.DERIVATIVES_DIR") as mock_dir:
             mock_path = mock_dir.__truediv__.return_value
             mock_path.exists.return_value = False
             response = authenticated_client.get("/people")
@@ -483,7 +483,7 @@ class TestListPeopleIncludesProfilePictureUrl:
         profile_path = derivatives_dir / f"{person.id}_profile.jpg"
         profile_path.write_bytes(b"fake jpeg")
 
-        with patch("app.main.DERIVATIVES_DIR", derivatives_dir):
+        with patch("app.serializers.DERIVATIVES_DIR", derivatives_dir):
             response = authenticated_client.get("/people")
 
         assert response.status_code == 200

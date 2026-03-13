@@ -421,8 +421,8 @@ class TestDeletePhoto:
         assert db_session.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).first() is None
 
     def test_deletes_physical_files(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "deletephysical", ext="jpg")
         db_session.commit()
@@ -444,8 +444,8 @@ class TestDeletePhoto:
 
     def test_missing_files_are_ignored(self, authenticated_client, db_session, monkeypatch, tmp_path):
         """Deletion succeeds even when physical files are not present on disk."""
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "deletenophysical")
         db_session.commit()
@@ -482,8 +482,8 @@ class TestGetPhotoOriginal:
         assert response.status_code == 404
 
     def test_returns_404_when_file_not_on_disk(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "missingoriginal")
         db_session.commit()
@@ -492,8 +492,8 @@ class TestGetPhotoOriginal:
         assert response.status_code == 404
 
     def test_serves_original_file(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "originaltest")
         db_session.commit()
@@ -513,8 +513,8 @@ class TestGetPhotoOriginal:
 
     def test_extension_in_url_is_ignored(self, authenticated_client, db_session, monkeypatch, tmp_path):
         """Extension in URL path is cosmetic — authoritative extension comes from DB."""
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "extignored", ext="jpg")
         db_session.commit()
@@ -529,8 +529,8 @@ class TestGetPhotoOriginal:
         assert response.content == b"image_bytes"
 
     def test_sets_correct_content_type_for_jpg(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "originalcontenttype", ext="jpg")
         db_session.commit()
@@ -544,8 +544,8 @@ class TestGetPhotoOriginal:
         assert "image/jpeg" in response.headers["content-type"]
 
     def test_sets_cache_control_header(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "originalcache")
         db_session.commit()
@@ -580,8 +580,8 @@ class TestGetPhotoThumbnail:
         assert response.status_code == 404
 
     def test_returns_404_when_file_not_on_disk(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "missingthumbnail")
         db_session.commit()
@@ -590,8 +590,8 @@ class TestGetPhotoThumbnail:
         assert response.status_code == 404
 
     def test_serves_derivative_when_available(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "thumbnailderivative")
         db_session.commit()
@@ -607,8 +607,8 @@ class TestGetPhotoThumbnail:
 
     def test_derivative_served_as_jpeg_even_for_non_jpg_photo(self, authenticated_client, db_session, monkeypatch, tmp_path):
         """Thumbnails are always JPEG regardless of the original's format."""
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "thumbnailpng", ext="png")
         db_session.commit()
@@ -623,8 +623,8 @@ class TestGetPhotoThumbnail:
         assert "image/jpeg" in response.headers["content-type"]
 
     def test_falls_back_to_original_when_no_derivative(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "thumbnailfallback")
         db_session.commit()
@@ -638,8 +638,8 @@ class TestGetPhotoThumbnail:
         assert response.content == b"original_content"
 
     def test_sets_correct_content_type_for_jpg(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "thumbnailcontenttype", ext="jpg")
         db_session.commit()
@@ -653,8 +653,8 @@ class TestGetPhotoThumbnail:
         assert "image/jpeg" in response.headers["content-type"]
 
     def test_sets_cache_control_header(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         photo = make_photo(db_session, "thumbnailcache")
         db_session.commit()
@@ -731,8 +731,8 @@ class TestRangeRequests:
         return content
 
     def test_no_range_header_returns_200_with_accept_ranges(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
         photo = make_photo(db_session, "range_full")
         db_session.commit()
         content = self._write_original(tmp_path, photo)
@@ -743,8 +743,8 @@ class TestRangeRequests:
         assert response.content == content
 
     def test_range_request_returns_206(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
         photo = make_photo(db_session, "range_partial")
         db_session.commit()
         self._write_original(tmp_path, photo, b"0123456789")
@@ -759,8 +759,8 @@ class TestRangeRequests:
         assert response.headers.get("accept-ranges") == "bytes"
 
     def test_range_request_from_start(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
         photo = make_photo(db_session, "range_from_start")
         db_session.commit()
         self._write_original(tmp_path, photo, b"abcdefghij")
@@ -775,8 +775,8 @@ class TestRangeRequests:
 
     def test_range_request_open_ended(self, authenticated_client, db_session, monkeypatch, tmp_path):
         """bytes=5- means from byte 5 to end of file."""
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
         photo = make_photo(db_session, "range_open_end")
         db_session.commit()
         self._write_original(tmp_path, photo, b"0123456789")
@@ -791,8 +791,8 @@ class TestRangeRequests:
 
     def test_range_request_suffix(self, authenticated_client, db_session, monkeypatch, tmp_path):
         """bytes=-3 means the last 3 bytes."""
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
         photo = make_photo(db_session, "range_suffix")
         db_session.commit()
         self._write_original(tmp_path, photo, b"0123456789")
@@ -807,8 +807,8 @@ class TestRangeRequests:
 
     def test_invalid_range_returns_416(self, authenticated_client, db_session, monkeypatch, tmp_path):
         """Range start beyond end of file should return 416."""
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
         photo = make_photo(db_session, "range_invalid")
         db_session.commit()
         self._write_original(tmp_path, photo, b"0123456789")
@@ -821,8 +821,8 @@ class TestRangeRequests:
 
     def test_inverted_range_returns_416(self, authenticated_client, db_session, monkeypatch, tmp_path):
         """Range where start > end should return 416."""
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
         photo = make_photo(db_session, "range_inverted")
         db_session.commit()
         self._write_original(tmp_path, photo, b"0123456789")
@@ -835,8 +835,8 @@ class TestRangeRequests:
 
     def test_malformed_range_returns_416(self, authenticated_client, db_session, monkeypatch, tmp_path):
         """Malformed Range header should return 416."""
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
         photo = make_photo(db_session, "range_malformed")
         db_session.commit()
         self._write_original(tmp_path, photo, b"0123456789")
@@ -854,8 +854,8 @@ class TestRangeRequests:
 
 class TestVideoThumbnail:
     def test_returns_404_when_thumbnail_not_yet_generated(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         video = make_video(db_session, "vid_nothumbnail")
         db_session.commit()
@@ -864,8 +864,8 @@ class TestVideoThumbnail:
         assert response.status_code == 404
 
     def test_serves_jpeg_thumbnail_for_video(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         video = make_video(db_session, "vid_thumb")
         db_session.commit()
@@ -881,8 +881,8 @@ class TestVideoThumbnail:
         assert "image/jpeg" in response.headers["content-type"]
 
     def test_video_thumbnail_has_cache_control(self, authenticated_client, db_session, monkeypatch, tmp_path):
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         video = make_video(db_session, "vid_cache")
         db_session.commit()
@@ -898,8 +898,8 @@ class TestVideoThumbnail:
 
     def test_video_does_not_fall_back_to_original(self, authenticated_client, db_session, monkeypatch, tmp_path):
         """For videos, we should NOT fall back to the original video file as thumbnail."""
-        import app.main as main_module
-        monkeypatch.setattr(main_module, "PHOTOS_DIR", tmp_path)
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path)
 
         video = make_video(db_session, "vid_nofallback")
         db_session.commit()
