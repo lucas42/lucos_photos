@@ -166,6 +166,12 @@ Two separate event concepts — do not conflate them:
 - The API/worker separation must be preserved even as the system grows. The worker may later split into ingestion + automation workers, but should not merge with the API.
 - The architecture must accommodate adding object detection, a rule engine, and horizontal worker scaling without structural redesign.
 
+## Data Migration Policy
+
+When a new feature populates a column that previously had no value (i.e. existing rows could be `NULL`), an Alembic data migration must be included alongside the schema migration to backfill existing rows. This prevents a situation where new code works correctly for new data but silently leaves old data in a broken state.
+
+Example: if a new column `display_name` is added and populated for new inserts, a migration should also `UPDATE` existing rows to populate it from the canonical source.
+
 ## Known Issues / TODOs
 
 - **Redis data volume not explicitly declared** — the global CLAUDE.md requires all volumes to be declared explicitly in `docker-compose.yml` and registered in `lucos_configy/config/volumes.yaml`. Redis currently has no named volume mount, meaning its data volume is anonymous and won't be tracked by `lucos_backups`. This needs fixing before production data matters.

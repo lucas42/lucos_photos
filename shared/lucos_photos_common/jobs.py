@@ -938,3 +938,94 @@ def cluster_faces() -> None:
         raise
     finally:
         db.close()
+
+
+def sync_single_contact_name(contact_id: str, name: str) -> None:
+    """Update display_name for any person linked to the given contact_id.
+
+    Called by the Loganne webhook when a contactUpdated event is received.
+    Idempotent: no-op if no person is linked to this contact, or if the
+    stored name already matches.
+    """
+    db = SessionLocal()
+    try:
+        persons = db.query(Person).filter(Person.contact_id == contact_id).all()
+        updated = 0
+        for person in persons:
+            if person.display_name != name:
+                logger.info(
+                    "sync_single_contact_name: updating person %s display_name from %r to %r",
+                    person.id, person.display_name, name,
+                )
+                person.display_name = name
+                updated += 1
+        if updated:
+            db.commit()
+        logger.info(
+            "sync_single_contact_name: contact_id=%s updated %d person(s)", contact_id, updated
+        )
+    except Exception:
+        logger.exception("sync_single_contact_name: error for contact_id=%s", contact_id)
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def sweep_contact_display_names() -> None:
+    """Check all persons linked to contacts and sync display_name with lucos_contacts.
+
+    Fetches the canonical name from lucos_contacts for every person with a non-null
+    contact_id. Updates display_name where there is a mismatch.
+
+    Acts as a safety net to correct any drift — the Loganne webhook provides
+    near-real-time sync; this sweep catches anything the webhook missed.
+    """
+    import httpx
+
+    contacts_url = os.environ.get("LUCOS_CONTACTS_URL", "")
+    contacts_key = os.environ.get("KEY_LUCOS_CONTACTS", "")
+    if not contacts_url or not contacts_key:
+        logger.warning("sweep_contact_display_names: LUCOS_CONTACTS_URL or KEY_LUCOS_CONTACTS not set, skipping")
+        return
+
+    db = SessionLocal()
+    try:
+        persons = db.query(Person).filter(Person.contact_id.isnot(None)).all()
+        logger.info("sweep_contact_display_names: checking %d person(s) with a contact_id", len(persons))
+
+        updated = 0
+        for person in persons:
+            try:
+                response = httpx.get(
+                    f"{contacts_url}/people/{person.contact_id}",
+                    headers={"Accept": "application/json", "Authorization": f"key {contacts_key}"},
+                    timeout=5.0,
+                )
+                response.raise_for_status()
+                canonical_name = response.json().get("name") or None
+            except Exception as e:
+                logger.warning(
+                    "sweep_contact_display_names: failed to fetch name for contact %s: %s",
+                    person.contact_id, e,
+                )
+                continue
+
+            if canonical_name and person.display_name != canonical_name:
+                logger.info(
+                    "sweep_contact_display_names: updating person %s display_name from %r to %r",
+                    person.id, person.display_name, canonical_name,
+                )
+                person.display_name = canonical_name
+                updated += 1
+
+        if updated:
+            db.commit()
+
+        logger.info("sweep_contact_display_names: updated %d person(s)", updated)
+    except Exception:
+        logger.exception("sweep_contact_display_names: error during sweep")
+        db.rollback()
+        raise
+    finally:
+        db.close()
