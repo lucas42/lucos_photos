@@ -110,7 +110,7 @@ async def create_person(
         raise
     db.refresh(person)
 
-    await emit_loganne_event("personCreated", f"Person {person.id} ({person.display_name}) created in lucos_photos")
+    await emit_loganne_event("personCreated", f"{person.display_name or person.id} created in lucos_photos")
 
     return person_to_dict(person)
 
@@ -224,7 +224,7 @@ async def link_person_contact(
         db.commit()
         db.refresh(person)
 
-    await emit_loganne_event("personContactLinked", f"Person {person_uuid} linked to contact {contact_id} in lucos_photos")
+    await emit_loganne_event("personContactLinked", f"{person.display_name or str(person_uuid)} linked to contact {contact_id} in lucos_photos")
 
     return person_to_dict(person)
 
@@ -247,7 +247,7 @@ async def unlink_person_contact(
     person.contact_id = None
     db.commit()
 
-    await emit_loganne_event("personContactUnlinked", f"Person {person_uuid} unlinked from contact in lucos_photos")
+    await emit_loganne_event("personContactUnlinked", f"{person.display_name or str(person_uuid)} unlinked from contact in lucos_photos")
 
 
 @router.post("/people/merge")
@@ -343,7 +343,8 @@ async def merge_people(
     # Enqueue profile picture regeneration for the winner
     _enqueue_profile_picture(str(winner.id))
 
-    await emit_loganne_event("peopleMerged", f"Merged {len(losers)} person(s) into person {winner.id} in lucos_photos")
+    loser_names = ", ".join(p.display_name or str(p.id) for p in losers)
+    await emit_loganne_event("peopleMerged", f"Merged {loser_names} into {winner.display_name or str(winner.id)} in lucos_photos")
 
     return {"mergedPersonId": str(winner.id)}
 
