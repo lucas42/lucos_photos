@@ -71,6 +71,29 @@
     </nav>
     {% endif %}
 </div>
+
+<div class="lightbox" id="merge-prompt-lightbox" role="dialog" aria-modal="true" aria-labelledby="merge-prompt-title">
+    <div class="merge-prompt">
+        <h2 id="merge-prompt-title">Merge people?</h2>
+        <p>This contact is already linked to another person. Would you like to merge them?</p>
+        <div class="merge-prompt-people">
+            <div class="merge-prompt-person" id="merge-prompt-current">
+                <div class="person-profile-picture-placeholder"></div>
+                <span class="merge-prompt-person-name"></span>
+            </div>
+            <div class="merge-prompt-arrow">→</div>
+            <div class="merge-prompt-person" id="merge-prompt-existing">
+                <div class="person-profile-picture-placeholder"></div>
+                <span class="merge-prompt-person-name"></span>
+            </div>
+        </div>
+        <div class="merge-prompt-actions">
+            <button class="merge-prompt-cancel" id="merge-prompt-cancel">Cancel</button>
+            <button class="merge-prompt-confirm" id="merge-prompt-confirm">Merge</button>
+        </div>
+        <p class="merge-prompt-error" id="merge-prompt-error" hidden></p>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -149,6 +172,121 @@
         }
     });
 
+    // --- Merge prompt lightbox ---
+    const lightbox = document.getElementById('merge-prompt-lightbox');
+    const promptCancel = document.getElementById('merge-prompt-cancel');
+    const promptConfirm = document.getElementById('merge-prompt-confirm');
+    const promptError = document.getElementById('merge-prompt-error');
+
+    // State tracked for the pending merge
+    let pendingMergePersonId = null;
+    let pendingMergeExistingPersonId = null;
+
+    function closeMergePrompt() {
+        lightbox.classList.remove('open');
+        pendingMergePersonId = null;
+        pendingMergeExistingPersonId = null;
+        promptConfirm.disabled = false;
+        promptError.hidden = true;
+    }
+
+    promptCancel.addEventListener('click', closeMergePrompt);
+
+    lightbox.addEventListener('click', (e) => {
+        if (e.target === lightbox) closeMergePrompt();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && lightbox.classList.contains('open')) closeMergePrompt();
+    });
+
+    promptConfirm.addEventListener('click', async () => {
+        if (!pendingMergePersonId || !pendingMergeExistingPersonId) return;
+
+        promptConfirm.disabled = true;
+        promptError.hidden = true;
+
+        try {
+            const response = await fetch('/people/merge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ personIds: [pendingMergePersonId, pendingMergeExistingPersonId] }),
+            });
+
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                const msg = (data.detail && data.detail.message) || data.detail || `API responded with ${response.status}`;
+                throw new Error(msg);
+            }
+
+            const data = await response.json();
+            window.location.href = `/people/${data.mergedPersonId}`;
+        } catch (err) {
+            console.error('Failed to merge people:', err);
+            promptError.textContent = err.message || 'Failed to merge. Please try again.';
+            promptError.hidden = false;
+            promptConfirm.disabled = false;
+        }
+    });
+
+    function renderPersonInPrompt(container, personData) {
+        const name = personData.name || `Person ${personData.id.slice(0, 8)}…`;
+        const img = container.querySelector('img');
+        const placeholder = container.querySelector('.person-profile-picture-placeholder');
+        const nameEl = container.querySelector('.merge-prompt-person-name');
+
+        nameEl.textContent = name;
+
+        if (personData.profilePictureUrl) {
+            if (img) {
+                img.src = personData.profilePictureUrl;
+                img.alt = name;
+            } else {
+                const newImg = document.createElement('img');
+                newImg.src = personData.profilePictureUrl;
+                newImg.alt = name;
+                if (placeholder) placeholder.replaceWith(newImg);
+                else container.prepend(newImg);
+            }
+        } else {
+            if (img) {
+                const newPlaceholder = document.createElement('div');
+                newPlaceholder.className = 'person-profile-picture-placeholder';
+                img.replaceWith(newPlaceholder);
+            }
+        }
+    }
+
+    async function showMergePrompt(currentPersonId, existingPersonId) {
+        pendingMergePersonId = currentPersonId;
+        pendingMergeExistingPersonId = existingPersonId;
+        promptConfirm.disabled = false;
+        promptError.hidden = true;
+
+        // Reset both sides to placeholder while loading
+        const currentContainer = document.getElementById('merge-prompt-current');
+        const existingContainer = document.getElementById('merge-prompt-existing');
+        currentContainer.querySelector('.merge-prompt-person-name').textContent = '…';
+        existingContainer.querySelector('.merge-prompt-person-name').textContent = '…';
+
+        lightbox.classList.add('open');
+
+        // Fetch both persons in parallel
+        const [currentRes, existingRes] = await Promise.all([
+            fetch(`/people/${currentPersonId}`, { headers: { 'Accept': 'application/json' } }),
+            fetch(`/people/${existingPersonId}`, { headers: { 'Accept': 'application/json' } }),
+        ]);
+
+        if (currentRes.ok) {
+            const data = await currentRes.json();
+            renderPersonInPrompt(currentContainer, data);
+        }
+        if (existingRes.ok) {
+            const data = await existingRes.json();
+            renderPersonInPrompt(existingContainer, data);
+        }
+    }
+
     async function handleContactChange(personId, select, statusEl, card) {
         const selectedValue = select.value;
         if (!selectedValue) return;
@@ -168,8 +306,14 @@
                 body: JSON.stringify({ contactId }),
             });
             if (response.status === 409) {
-                statusEl.textContent = 'This contact is already linked to another person.';
-                statusEl.className = 'contact-status error-status';
+                const data = await response.json();
+                const existingPersonId = data.detail && data.detail.existingPersonId;
+                if (existingPersonId) {
+                    await showMergePrompt(personId, existingPersonId);
+                } else {
+                    statusEl.textContent = 'This contact is already linked to another person.';
+                    statusEl.className = 'contact-status error-status';
+                }
                 return;
             }
             if (!response.ok) {
