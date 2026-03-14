@@ -490,3 +490,123 @@ class TestListPeopleIncludesProfilePictureUrl:
         data = response.json()["people"]
         assert data[0]["profilePictureUrl"] is not None
         assert f"/people/{person.id}/profile-picture" in data[0]["profilePictureUrl"]
+
+
+class TestMergePeople:
+    def test_merge_two_people(self, authenticated_client, db_session):
+        """Merging two people combines their faces and deletes the loser."""
+        with patch("app.routers.people._enqueue_profile_picture"), \
+             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+            person_a = make_person(db_session, "Alice")
+            person_b = make_person(db_session, "Bob")
+            db_session.commit()
+
+            response = authenticated_client.post("/people/merge", json={"personIds": [str(person_a.id), str(person_b.id)]})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "mergedPersonId" in data
+        # One of the persons should survive
+        assert data["mergedPersonId"] in [str(person_a.id), str(person_b.id)]
+        # The other should be deleted
+        surviving_id = uuid.UUID(data["mergedPersonId"])
+        deleted_id = person_b.id if surviving_id == person_a.id else person_a.id
+        assert db_session.query(Person).filter(Person.id == deleted_id).first() is None
+
+    def test_merge_keeps_person_with_contact(self, authenticated_client, db_session):
+        """When one person has a contact link, they should be the winner."""
+        with patch("app.routers.people._enqueue_profile_picture"), \
+             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+            person_a = make_person(db_session, "Alice", contact_id="42")
+            person_b = make_person(db_session, "Bob")
+            db_session.commit()
+
+            response = authenticated_client.post("/people/merge", json={"personIds": [str(person_b.id), str(person_a.id)]})
+
+        assert response.status_code == 200
+        assert response.json()["mergedPersonId"] == str(person_a.id)
+        assert db_session.query(Person).filter(Person.id == person_b.id).first() is None
+
+    def test_merge_reassigns_faces(self, authenticated_client, db_session):
+        """All faces from the loser should be reassigned to the winner."""
+        with patch("app.routers.people._enqueue_profile_picture"), \
+             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+            person_a = make_person(db_session, "Alice")
+            person_b = make_person(db_session, "Bob")
+            photo = make_photo(db_session, "b" * 64)
+            face = Face(photo_id=photo.id, person_id=person_b.id, person_confirmed=False,
+                        bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2)
+            db_session.add(face)
+            db_session.commit()
+
+            response = authenticated_client.post("/people/merge", json={"personIds": [str(person_a.id), str(person_b.id)]})
+
+        assert response.status_code == 200
+        winner_id = uuid.UUID(response.json()["mergedPersonId"])
+        db_session.expire_all()
+        reassigned = db_session.query(Face).filter(Face.id == face.id).first()
+        assert reassigned.person_id == winner_id
+
+    def test_merge_conflict_both_have_contacts(self, authenticated_client, db_session):
+        """Merging two contact-linked people should return 409."""
+        person_a = make_person(db_session, "Alice", contact_id="42")
+        person_b = make_person(db_session, "Bob", contact_id="99")
+        db_session.commit()
+
+        response = authenticated_client.post("/people/merge", json={"personIds": [str(person_a.id), str(person_b.id)]})
+
+        assert response.status_code == 409
+        # Both persons should still exist
+        assert db_session.query(Person).filter(Person.id == person_a.id).first() is not None
+        assert db_session.query(Person).filter(Person.id == person_b.id).first() is not None
+
+    def test_merge_person_not_found(self, authenticated_client, db_session):
+        """A non-existent person ID should return 404."""
+        person_a = make_person(db_session, "Alice")
+        db_session.commit()
+        fake_id = str(uuid.uuid4())
+
+        response = authenticated_client.post("/people/merge", json={"personIds": [str(person_a.id), fake_id]})
+
+        assert response.status_code == 404
+
+    def test_merge_requires_at_least_two(self, authenticated_client, db_session):
+        """Fewer than 2 IDs should return 422."""
+        person_a = make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.post("/people/merge", json={"personIds": [str(person_a.id)]})
+        assert response.status_code == 422
+
+    def test_merge_invalid_uuid(self, authenticated_client, db_session):
+        """Invalid UUID in the list should return 422."""
+        person_a = make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.post("/people/merge", json={"personIds": [str(person_a.id), "not-a-uuid"]})
+        assert response.status_code == 422
+
+    def test_merge_requires_authentication(self, client, db_session):
+        """Merge endpoint should require authentication."""
+        response = client.post("/people/merge", json={"personIds": ["a" * 32, "b" * 32]})
+        assert response.status_code == 401
+
+    def test_merge_three_people(self, authenticated_client, db_session):
+        """Merging three people should delete two and keep one."""
+        with patch("app.routers.people._enqueue_profile_picture"), \
+             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+            person_a = make_person(db_session, "Alice")
+            person_b = make_person(db_session, "Bob")
+            person_c = make_person(db_session, "Carol")
+            db_session.commit()
+
+            response = authenticated_client.post("/people/merge", json={
+                "personIds": [str(person_a.id), str(person_b.id), str(person_c.id)]
+            })
+
+        assert response.status_code == 200
+        winner_id = uuid.UUID(response.json()["mergedPersonId"])
+        # Only the winner survives
+        remaining = db_session.query(Person).all()
+        assert len(remaining) == 1
+        assert remaining[0].id == winner_id

@@ -17,6 +17,7 @@ from app.auth import verify_session
 from app.database import get_db
 from app.serializers import DERIVATIVES_DIR, person_profile_picture_url, person_to_dict, photo_to_dict
 from app.services import emit_loganne_event, fetch_contact_name
+from lucos_photos_common.jobs import sync_photo_person
 from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 router = APIRouter()
@@ -242,3 +243,115 @@ async def unlink_person_contact(
     db.commit()
 
     await emit_loganne_event("personContactUnlinked", f"Person {person_uuid} unlinked from contact in lucos_photos")
+
+
+@router.post("/people/merge")
+async def merge_people(
+    body: dict,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Merge two or more people into one.
+
+    Accepts a JSON body with a ``personIds`` list. The person with a contact
+    link (if any) is kept as the winner; all others are deleted after their
+    faces are reassigned to the winner.
+
+    Returns ``{"mergedPersonId": "<uuid>"}`` on success.
+    Responds with 409 if more than one of the persons is linked to a contact.
+    """
+    person_id_strs = body.get("personIds", [])
+    if not isinstance(person_id_strs, list) or len(person_id_strs) < 2:
+        raise HTTPException(status_code=422, detail="personIds must be a list of at least 2 person IDs")
+
+    # Parse and validate UUIDs
+    person_uuids = []
+    for pid in person_id_strs:
+        try:
+            person_uuids.append(uuid.UUID(str(pid)))
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=422, detail=f"Invalid person ID: {pid!r}")
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique_uuids = []
+    for u in person_uuids:
+        if u not in seen:
+            seen.add(u)
+            unique_uuids.append(u)
+    person_uuids = unique_uuids
+
+    if len(person_uuids) < 2:
+        raise HTTPException(status_code=422, detail="personIds must contain at least 2 distinct person IDs")
+
+    # Load all persons
+    persons = db.query(Person).filter(Person.id.in_(person_uuids)).all()
+    if len(persons) != len(person_uuids):
+        found_ids = {p.id for p in persons}
+        missing = [str(u) for u in person_uuids if u not in found_ids]
+        raise HTTPException(status_code=404, detail=f"Person(s) not found: {', '.join(missing)}")
+
+    # Check contact constraint: at most one may be linked to a contact
+    linked = [p for p in persons if p.contact_id is not None]
+    if len(linked) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot merge: more than one of the selected people is linked to a contact",
+        )
+
+    # Pick the winner: prefer the one with a contact link, otherwise use the first in the request order
+    person_map = {p.id: p for p in persons}
+    if linked:
+        winner = linked[0]
+    else:
+        winner = person_map[person_uuids[0]]
+
+    losers = [p for p in persons if p.id != winner.id]
+
+    # Collect photo_ids affected by the losers (for photo_person sync after merge)
+    loser_ids = {p.id for p in losers}
+    affected_photo_ids = {
+        f.photo_id
+        for f in db.query(Face).filter(Face.person_id.in_(loser_ids)).all()
+    }
+
+    # Reassign all faces from losers to winner
+    db.query(Face).filter(Face.person_id.in_(loser_ids)).update(
+        {Face.person_id: winner.id},
+        synchronize_session="fetch",
+    )
+
+    # Delete photo_person rows for the loser persons (sync_photo_person will rebuild correctly)
+    db.query(PhotoPerson).filter(PhotoPerson.person_id.in_(loser_ids)).delete(synchronize_session="fetch")
+
+    # Delete the loser persons
+    for loser in losers:
+        db.delete(loser)
+
+    db.commit()
+
+    # Rebuild photo_person for all affected photos
+    for photo_id in affected_photo_ids:
+        sync_photo_person(db, photo_id)
+    db.commit()
+
+    # Enqueue profile picture regeneration for the winner
+    _enqueue_profile_picture(str(winner.id))
+
+    await emit_loganne_event("peopleMerged", f"Merged {len(losers)} person(s) into person {winner.id} in lucos_photos")
+
+    return {"mergedPersonId": str(winner.id)}
+
+
+def _enqueue_profile_picture(person_id: str) -> None:
+    """Enqueue generate_profile_picture for a person. Non-fatal on Redis errors."""
+    try:
+        from app.redis_client import get_redis
+        from rq import Queue
+        from rq.job import Retry
+        from lucos_photos_common.jobs import generate_profile_picture
+        redis_conn = get_redis()
+        queue = Queue("photos", connection=redis_conn)
+        queue.enqueue(generate_profile_picture, person_id, retry=Retry(max=3, interval=[10, 30, 60]))
+    except Exception as exc:
+        print(f"Warning: failed to enqueue generate_profile_picture for {person_id}: {exc}", flush=True)
