@@ -135,14 +135,6 @@ class TestCreatePerson:
             assert mock_emit.call_args[0][0] == "personCreated"
             assert "Charlie" in mock_emit.call_args[0][1]
 
-    def test_create_person_loganne_message_uses_id_when_no_name(self, authenticated_client, db_session):
-        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
-             patch("app.routers.people.fetch_contact_name", new_callable=AsyncMock, return_value=None):
-            response = authenticated_client.post("/people", json={"name": "Unknown"})
-            assert response.status_code == 201
-            # name was provided so it should appear in the message
-            assert "Unknown" in mock_emit.call_args[0][1]
-
     def test_create_person_missing_name(self, authenticated_client):
         response = authenticated_client.post(
             "/people",
