@@ -286,6 +286,23 @@ class TestLinkPersonContact:
             assert response.status_code == 200
             assert response.json()["name"] == "Original Name"
 
+    def test_link_contact_logs_warning_when_fetch_fails(self, authenticated_client, db_session):
+        """If fetch_contact_name returns None, a warning is logged so the failure is visible."""
+        person = make_person(db_session, "Original Name")
+        db_session.commit()
+
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.people.fetch_contact_name", new_callable=AsyncMock, return_value=None), \
+             patch("app.routers.people.logging") as mock_logging:
+            response = authenticated_client.put(
+                f"/people/{person.id}/contact",
+                json={"contactId": "42"},
+            )
+            assert response.status_code == 200
+            mock_logging.warning.assert_called_once()
+            warning_msg = mock_logging.warning.call_args[0][0]
+            assert "failed to fetch name" in warning_msg
+
     def test_requires_authentication(self, client, db_session):
         person = make_person(db_session, "Alice")
         db_session.commit()

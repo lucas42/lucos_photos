@@ -1,5 +1,6 @@
 """Routes for person management: list, create, get, profile picture, contact link/unlink."""
 
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -223,6 +224,12 @@ async def link_person_contact(
         person.display_name = contact_name
         db.commit()
         db.refresh(person)
+    else:
+        logging.warning(
+            "link_person_contact: failed to fetch name for contact %s (person %s); "
+            "display_name will be corrected by the next contact name sweep",
+            contact_id, person_uuid,
+        )
 
     await emit_loganne_event("personContactLinked", f"{person.display_name or str(person_uuid)} linked to contact {contact_id} in lucos_photos")
 
