@@ -1720,3 +1720,69 @@ class TestGenerateProfilePicture:
         assert profile_path.exists()
         with Image.open(profile_path) as result:
             assert result.width == result.height, "Profile picture must be square"
+
+    def test_profile_picture_capped_at_600px(self, db_session, tmp_path):
+        """Profile picture should be scaled down to 600x600 when the crop is larger."""
+        person = self._make_person(db_session)
+        person_id = person.id
+        # Large image with a big face — crop will exceed 600px
+        photo = self._make_photo(db_session, "g" * 64, width=2000, height=2000)
+        # face at 50% of 2000px = 1000px; crop = 1000 / sqrt(0.6) ≈ 1291px → must be scaled down
+        self._make_face(db_session, photo, person,
+                        bbox_x=0.25, bbox_y=0.25, bbox_width=0.5, bbox_height=0.5,
+                        det_score=0.9)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        img = Image.new("RGB", (2000, 2000), color=(200, 100, 50))
+        img.save(originals_dir / f"{'g' * 64}.jpg", format="JPEG")
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne"):
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))
+
+        profile_path = derivatives_dir / f"{person_id}_profile.jpg"
+        assert profile_path.exists()
+        with Image.open(profile_path) as result:
+            assert result.width == 600, f"Expected width 600, got {result.width}"
+            assert result.height == 600, f"Expected height 600, got {result.height}"
+
+    def test_profile_picture_not_scaled_up_if_small(self, db_session, tmp_path):
+        """Profile picture should not be scaled up when the crop is smaller than 600px."""
+        person = self._make_person(db_session)
+        person_id = person.id
+        # Small image with a small face — crop will be well under 600px
+        photo = self._make_photo(db_session, "h" * 64, width=200, height=200)
+        # face at 20% of 200px = 40px; crop = 40 / sqrt(0.6) ≈ 52px — well under 600
+        self._make_face(db_session, photo, person,
+                        bbox_x=0.2, bbox_y=0.2, bbox_width=0.2, bbox_height=0.2,
+                        det_score=0.9)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        img = Image.new("RGB", (200, 200), color=(50, 100, 150))
+        img.save(originals_dir / f"{'h' * 64}.jpg", format="JPEG")
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne"):
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))
+
+        profile_path = derivatives_dir / f"{person_id}_profile.jpg"
+        assert profile_path.exists()
+        with Image.open(profile_path) as result:
+            assert result.width < 600, f"Expected width under 600, got {result.width}"
+            assert result.width == result.height, "Must still be square"

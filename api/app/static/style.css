@@ -609,3 +609,49 @@ a:hover {
 	opacity: 0.7;
 	font-size: 1.1rem;
 }
+
+/* ------------------------------------------------------------------ */
+/* Profile pictures                                                     */
+/* ------------------------------------------------------------------ */
+
+.person-profile-picture {
+	width: 100px;
+	height: 100px;
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.person-profile-picture-placeholder {
+	width: 100px;
+	height: 100px;
+	border-radius: 50%;
+	background: var(--card-bg);
+	border: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.person-profile-picture-large {
+	width: 300px;
+	height: 300px;
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.person-profile-picture-placeholder.person-profile-picture-large {
+	width: 300px;
+	height: 300px;
+}
+
+.person-card-link {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	text-decoration: none;
+	color: inherit;
+}
+
+.person-detail-header {
+	display: flex;
+	align-items: center;
+	gap: 1.5rem;
+	margin-bottom: 2rem;
+}

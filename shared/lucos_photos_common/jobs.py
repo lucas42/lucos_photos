@@ -755,9 +755,9 @@ def generate_profile_picture(person_id: str) -> None:
         face_w_px = best_face.bbox_width * img_w
         face_h_px = best_face.bbox_height * img_h
 
-        # Crop: square, face occupies ~80% of area → side = face_side / sqrt(0.8)
+        # Crop: square, face occupies ~60% of area → side = face_side / sqrt(0.6)
         face_side = max(face_w_px, face_h_px)
-        crop_side = face_side / math.sqrt(0.8)
+        crop_side = face_side / math.sqrt(0.6)
 
         # Centre on the bounding box centre
         cx = face_x_px + face_w_px / 2.0
@@ -797,8 +797,11 @@ def generate_profile_picture(person_id: str) -> None:
         left_px = round(left)
         top_px = round(top)
 
+        MAX_PROFILE_SIZE = 600
         with PILImage.open(original_path) as img:
             cropped = img.crop((left_px, top_px, left_px + crop_side_px, top_px + crop_side_px))
+            if cropped.width > MAX_PROFILE_SIZE or cropped.height > MAX_PROFILE_SIZE:
+                cropped = cropped.resize((MAX_PROFILE_SIZE, MAX_PROFILE_SIZE), PILImage.LANCZOS)
             cropped.save(profile_path, format="JPEG", quality=90)
 
         logger.info("generate_profile_picture: saved profile picture for person %s at %s", person_id, profile_path)
