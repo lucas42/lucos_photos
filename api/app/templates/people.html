@@ -163,7 +163,10 @@
             }
 
             const data = await response.json();
-            window.location.href = `/people/${data.mergedPersonId}`;
+            const loserIds = personIds.filter(id => id !== data.mergedPersonId);
+            await applyMergeToPage(data.mergedPersonId, loserIds);
+            mergeBtn.disabled = false;
+            updateMergeToolbar();
         } catch (err) {
             console.error('Failed to merge people:', err);
             mergeError.textContent = 'Failed to merge people. Please try again.';
@@ -220,7 +223,9 @@
             }
 
             const data = await response.json();
-            window.location.href = `/people/${data.mergedPersonId}`;
+            const loserIds = [pendingMergePersonId, pendingMergeExistingPersonId].filter(id => id !== data.mergedPersonId);
+            closeMergePrompt();
+            await applyMergeToPage(data.mergedPersonId, loserIds);
         } catch (err) {
             console.error('Failed to merge people:', err);
             promptError.textContent = err.message || 'Failed to merge. Please try again.';
@@ -228,6 +233,58 @@
             promptConfirm.disabled = false;
         }
     });
+
+    /**
+     * Remove loser cards from the DOM and refresh the winner card's name and
+     * profile picture using a fresh fetch of the winner's data.
+     */
+    async function applyMergeToPage(winnerId, loserIds) {
+        // Remove loser cards
+        loserIds.forEach(id => {
+            const card = document.querySelector(`.person-card[data-person-id="${id}"]`);
+            if (card) card.remove();
+        });
+
+        // Refresh winner card
+        const winnerCard = document.querySelector(`.person-card[data-person-id="${winnerId}"]`);
+        if (!winnerCard) return;
+
+        try {
+            const res = await fetch(`/people/${winnerId}`, { headers: { 'Accept': 'application/json' } });
+            if (!res.ok) return;
+            const person = await res.json();
+            const name = person.name || `Person ${person.id.slice(0, 8)}…`;
+
+            // Update name
+            const nameEl = winnerCard.querySelector('.person-name');
+            if (nameEl) nameEl.textContent = name;
+
+            // Update link href
+            const link = winnerCard.querySelector('.person-card-link');
+            if (link) link.href = `/people/${winnerId}`;
+
+            // Update profile picture
+            const cardHeader = winnerCard.querySelector('.person-card-header');
+            const existingImg = cardHeader.querySelector('.person-profile-picture');
+            const existingPlaceholder = cardHeader.querySelector('.person-profile-picture-placeholder');
+
+            if (person.profilePictureUrl) {
+                if (existingImg) {
+                    existingImg.src = person.profilePictureUrl;
+                    existingImg.alt = name;
+                } else {
+                    const img = document.createElement('img');
+                    img.className = 'person-profile-picture';
+                    img.src = person.profilePictureUrl;
+                    img.alt = name;
+                    if (existingPlaceholder) existingPlaceholder.replaceWith(img);
+                    else link.prepend(img);
+                }
+            }
+        } catch (err) {
+            console.error('Failed to refresh winner card:', err);
+        }
+    }
 
     function renderPersonInPrompt(container, personData) {
         const name = personData.name || `Person ${personData.id.slice(0, 8)}…`;
