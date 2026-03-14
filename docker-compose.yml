@@ -48,6 +48,8 @@ services:
       - ENVIRONMENT
       - POSTGRES_PASSWORD
       - LOGANNE_ENDPOINT
+      - LUCOS_CONTACTS_URL
+      - KEY_LUCOS_CONTACTS
       - POSTGRES_USER=photos
       - REDIS_URL=redis://redis:6379
     depends_on:
