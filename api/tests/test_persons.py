@@ -133,6 +133,7 @@ class TestCreatePerson:
 
             mock_emit.assert_called_once()
             assert mock_emit.call_args[0][0] == "personCreated"
+            assert "Charlie" in mock_emit.call_args[0][1]
 
     def test_create_person_missing_name(self, authenticated_client):
         response = authenticated_client.post(
@@ -206,6 +207,7 @@ class TestLinkPersonContact:
             assert data["contactId"] == "42"
             mock_emit.assert_called_once()
             assert mock_emit.call_args[0][0] == "personContactLinked"
+            assert "Alice" in mock_emit.call_args[0][1]
 
     def test_link_contact_overwrites_existing(self, authenticated_client, db_session):
         person = make_person(db_session, "Alice", contact_id="old-id")
@@ -301,6 +303,7 @@ class TestUnlinkPersonContact:
             assert response.status_code == 204
             mock_emit.assert_called_once()
             assert mock_emit.call_args[0][0] == "personContactUnlinked"
+            assert "Alice" in mock_emit.call_args[0][1]
 
         db_session.refresh(person)
         assert person.contact_id is None
@@ -514,6 +517,23 @@ class TestMergePeople:
         surviving_id = uuid.UUID(data["mergedPersonId"])
         deleted_id = person_b.id if surviving_id == person_a.id else person_a.id
         assert db_session.query(Person).filter(Person.id == deleted_id).first() is None
+
+    def test_merge_loganne_message_uses_names(self, authenticated_client, db_session):
+        """peopleMerged loganne message should use names, not IDs."""
+        with patch("app.routers.people._enqueue_profile_picture"), \
+             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+            person_a = make_person(db_session, "Alice")
+            person_b = make_person(db_session, "Bob")
+            db_session.commit()
+
+            authenticated_client.post("/people/merge", json={"personIds": [str(person_a.id), str(person_b.id)]})
+
+        assert mock_emit.call_args[0][0] == "peopleMerged"
+        message = mock_emit.call_args[0][1]
+        assert "Alice" in message or "Bob" in message
+        # The loser's name and winner's name should both appear
+        assert "Alice" in message
+        assert "Bob" in message
 
     def test_merge_keeps_person_with_contact(self, authenticated_client, db_session):
         """When one person has a contact link, they should be the winner."""
