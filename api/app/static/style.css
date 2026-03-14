@@ -718,3 +718,114 @@ a:hover {
 	cursor: pointer;
 	accent-color: var(--accent-color);
 }
+
+/* ------------------------------------------------------------------ */
+/* Merge prompt lightbox                                                */
+/* ------------------------------------------------------------------ */
+
+.merge-prompt {
+	background: var(--card-bg);
+	border-radius: 12px;
+	padding: 2rem;
+	max-width: 480px;
+	width: 90vw;
+	text-align: center;
+}
+
+.merge-prompt h2 {
+	margin: 0 0 0.5rem;
+	font-size: 1.2rem;
+}
+
+.merge-prompt p {
+	margin: 0 0 1.5rem;
+	opacity: 0.8;
+	font-size: 0.95rem;
+}
+
+.merge-prompt-people {
+	display: flex;
+	justify-content: center;
+	align-items: flex-end;
+	gap: 2rem;
+	margin-bottom: 1.5rem;
+}
+
+.merge-prompt-person {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.merge-prompt-person img,
+.merge-prompt-person .person-profile-picture-placeholder {
+	width: 100px;
+	height: 100px;
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.merge-prompt-person-name {
+	font-size: 0.9rem;
+	font-weight: 600;
+	max-width: 120px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.merge-prompt-arrow {
+	font-size: 1.5rem;
+	opacity: 0.5;
+	padding-bottom: 2rem;
+}
+
+.merge-prompt-actions {
+	display: flex;
+	justify-content: center;
+	gap: 1rem;
+}
+
+.merge-prompt-cancel {
+	background: none;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	color: var(--text-color);
+	border-radius: 6px;
+	padding: 0.5rem 1.25rem;
+	font-size: 0.95rem;
+	cursor: pointer;
+	transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.merge-prompt-cancel:hover {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: rgba(255, 255, 255, 0.4);
+}
+
+.merge-prompt-confirm {
+	background: var(--accent-color);
+	color: var(--bg-color);
+	border: none;
+	border-radius: 6px;
+	padding: 0.5rem 1.25rem;
+	font-size: 0.95rem;
+	font-weight: 600;
+	cursor: pointer;
+	transition: opacity 0.15s ease;
+}
+
+.merge-prompt-confirm:hover {
+	opacity: 0.85;
+}
+
+.merge-prompt-confirm:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.merge-prompt-error {
+	margin: 0.75rem 0 0;
+	font-size: 0.85rem;
+	color: #f87171;
+}

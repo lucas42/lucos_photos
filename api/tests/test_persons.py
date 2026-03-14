@@ -221,7 +221,7 @@ class TestLinkPersonContact:
             assert response.json()["contactId"] == "new-id"
 
     def test_link_contact_duplicate(self, authenticated_client, db_session):
-        make_person(db_session, "Bob", contact_id="shared-id")
+        bob = make_person(db_session, "Bob", contact_id="shared-id")
         alice = make_person(db_session, "Alice")
         db_session.commit()
 
@@ -231,7 +231,9 @@ class TestLinkPersonContact:
                 json={"contactId": "shared-id"},
             )
             assert response.status_code == 409
-            assert "already exists" in response.json()["detail"]
+            detail = response.json()["detail"]
+            assert "already exists" in detail["message"]
+            assert detail["existingPersonId"] == str(bob.id)
 
     def test_link_contact_missing_contact_id(self, authenticated_client, db_session):
         person = make_person(db_session, "Alice")

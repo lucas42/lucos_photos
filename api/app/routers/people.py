@@ -209,7 +209,12 @@ async def link_person_contact(
         is_unique_violation = (e.orig and hasattr(e.orig, 'pgcode') and e.orig.pgcode == '23505') or \
                               ("UNIQUE constraint failed" in str(e))
         if is_unique_violation:
-            raise HTTPException(status_code=409, detail="A person with this contactId already exists")
+            existing = db.query(Person).filter(Person.contact_id == str(contact_id)).first()
+            existing_person_id = str(existing.id) if existing else None
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "A person with this contactId already exists", "existingPersonId": existing_person_id},
+            )
         raise
     db.refresh(person)
 
