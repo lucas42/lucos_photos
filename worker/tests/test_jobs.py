@@ -21,6 +21,7 @@ from lucos_photos_common.jobs import (
     process_photo,
     process_video,
     reprocess_photo,
+    resweep_thumbnails,
 )
 from lucos_photos_common.models import Face, MediaItem, Person, Photo, PhotoPerson, ProcessingState, ProcessingStatus
 
@@ -75,6 +76,25 @@ def make_jpeg_with_exif(datetime_original: str | None = None) -> bytes:
     exif = img.getexif()
     if datetime_original is not None:
         exif[EXIF_TAG_DATETIME_ORIGINAL] = datetime_original
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", exif=exif.tobytes())
+    return buf.getvalue()
+
+
+# EXIF Orientation tag ID
+EXIF_TAG_ORIENTATION = 274
+
+
+def make_jpeg_with_orientation(width: int, height: int, orientation: int) -> bytes:
+    """Create a JPEG with the given pixel dimensions and EXIF Orientation tag.
+
+    The pixels are stored as width x height (raw storage dimensions), with the
+    Orientation tag indicating how the viewer should rotate/flip to display correctly.
+    For orientation 6 (rotate 90° CW), the display dimensions are height x width.
+    """
+    img = Image.new("RGB", (width, height), color=(100, 150, 200))
+    exif = img.getexif()
+    exif[EXIF_TAG_ORIENTATION] = orientation
     buf = io.BytesIO()
     img.save(buf, format="JPEG", exif=exif.tobytes())
     return buf.getvalue()
@@ -384,6 +404,59 @@ class TestProcessPhoto:
 
         expected_name = f"{pending_photo.sha256_hash}_thumb.jpg"
         assert (derivatives_dir / expected_name).exists()
+
+    def test_exif_orientation_corrects_dimensions(self, db_session, pending_photo, tmp_path):
+        """Width/height stored in DB should reflect display orientation, not raw pixel order.
+
+        Orientation 6 means the raw pixels are 200x400 (landscape) but the photo is
+        displayed as 400x200 (portrait, rotated 90° CW). The DB should store 400x200.
+        """
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+
+        # Raw pixels: 200 wide x 400 tall, but Orientation=6 rotates 90° CW → display 400x200
+        jpeg_bytes = make_jpeg_with_orientation(width=200, height=400, orientation=6)
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(jpeg_bytes)
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_photo(str(pending_photo.id))
+
+        db_session.refresh(pending_photo)
+        assert pending_photo.width == 400, "Width should reflect post-transpose display width"
+        assert pending_photo.height == 200, "Height should reflect post-transpose display height"
+
+    def test_exif_orientation_corrects_thumbnail(self, db_session, pending_photo, tmp_path):
+        """Thumbnails should have dimensions matching the display orientation, not raw pixels.
+
+        Orientation 6 means raw pixels are 200x400 but display is 400x200 (portrait rotated).
+        After exif_transpose the image is 400x200 — thumbnail width stays 400, height is 200.
+        """
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+
+        # Raw pixels: 200 wide x 400 tall, Orientation=6 → display 400x200
+        jpeg_bytes = make_jpeg_with_orientation(width=200, height=400, orientation=6)
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(jpeg_bytes)
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_photo(str(pending_photo.id))
+
+        thumb_path = derivatives_dir / f"{pending_photo.sha256_hash}_thumb.jpg"
+        assert thumb_path.exists()
+        with Image.open(thumb_path) as thumb:
+            # After transpose: 400w x 200h. THUMBNAIL_WIDTH=400, height = 200 * 400/400 = 200.
+            assert thumb.width == 400
+            assert thumb.height == 200
 
     def test_thumbnail_idempotent_when_already_exists(self, db_session, pending_photo, tmp_path):
         """If a thumbnail already exists, process_photo should not overwrite it."""
@@ -803,6 +876,69 @@ class TestReprocessPhoto:
 
         db_session.refresh(pending_photo)
         assert pending_photo.processing_status.error_message is None
+
+
+class TestResweepThumbnails:
+    def test_deletes_existing_thumbnails_and_resets_to_pending(self, db_session, tmp_path):
+        """resweep_thumbnails should delete thumbnail files and reset complete photos to pending."""
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+
+        # Create a complete photo with a thumbnail on disk
+        photo = Photo(sha256_hash="c" * 64, file_extension="jpg")
+        db_session.add(photo)
+        db_session.flush()
+        status = ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete)
+        db_session.add(status)
+        db_session.commit()
+        db_session.refresh(photo)
+
+        thumb = derivatives_dir / f"{photo.sha256_hash}_thumb.jpg"
+        thumb.write_bytes(b"old thumbnail")
+
+        with patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            resweep_thumbnails()
+
+        assert not thumb.exists(), "Thumbnail should have been deleted"
+        db_session.refresh(status)
+        assert status.state == ProcessingState.pending
+
+    def test_resets_only_complete_photos(self, db_session, tmp_path):
+        """resweep_thumbnails should not touch pending or failed photos."""
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+
+        pending = Photo(sha256_hash="d" * 64, file_extension="jpg")
+        db_session.add(pending)
+        db_session.flush()
+        pending_status = ProcessingStatus(photo_id=pending.id, state=ProcessingState.pending)
+        db_session.add(pending_status)
+        db_session.commit()
+
+        with patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            resweep_thumbnails()
+
+        db_session.refresh(pending_status)
+        assert pending_status.state == ProcessingState.pending, "Pending photo should remain pending"
+
+    def test_skips_photos_without_thumbnail_on_disk(self, db_session, tmp_path):
+        """resweep_thumbnails should still reset the state even if no thumbnail exists on disk."""
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+
+        photo = Photo(sha256_hash="e" * 64, file_extension="jpg")
+        db_session.add(photo)
+        db_session.flush()
+        status = ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete)
+        db_session.add(status)
+        db_session.commit()
+
+        # No thumbnail file created — resweep should not raise
+        with patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            resweep_thumbnails()
+
+        db_session.refresh(status)
+        assert status.state == ProcessingState.pending
 
 
 # ---------------------------------------------------------------------------
