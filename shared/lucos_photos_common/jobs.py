@@ -311,8 +311,9 @@ def process_photo(photo_id: str) -> None:
                     src.unlink()
 
             # Extract image metadata (dimensions and EXIF taken-at date)
-            from PIL import Image
-            with Image.open(dest) as img:
+            from PIL import Image, ImageOps
+            with Image.open(dest) as _raw_img:
+                img = ImageOps.exif_transpose(_raw_img)
                 photo.width = img.width
                 photo.height = img.height
 
@@ -341,7 +342,8 @@ def process_photo(photo_id: str) -> None:
             thumb_path = DERIVATIVES_DIR / f"{photo.sha256_hash}_thumb.jpg"
             DERIVATIVES_DIR.mkdir(parents=True, exist_ok=True)
             if not thumb_path.exists():
-                with Image.open(dest) as img:
+                with Image.open(dest) as _raw_img:
+                    img = ImageOps.exif_transpose(_raw_img)
                     thumb_height = round(img.height * THUMBNAIL_WIDTH / img.width)
                     thumb = img.resize((THUMBNAIL_WIDTH, thumb_height))
                     thumb.save(thumb_path, format="JPEG", quality=85)
@@ -613,6 +615,48 @@ def reprocess_photo(photo_id: str) -> None:
 
     queue.enqueue(job_fn, photo_id, retry=Retry(max=3, interval=[10, 30, 60]))
     logger.info("reprocess_photo: enqueued %s for photo %s", job_fn.__name__, photo_id)
+
+
+def resweep_thumbnails() -> None:
+    """Delete existing thumbnails for all complete photos and reset them to pending.
+
+    This triggers the worker to regenerate thumbnails for every processed photo.
+    Use after a fix that affects thumbnail generation (e.g. EXIF orientation correction)
+    so that stale thumbnails on disk are replaced with correctly-oriented ones.
+
+    The worker skips thumbnail generation when the file already exists, so simply
+    re-enqueueing would not help — the thumbnail file must be deleted first.
+    """
+    db = SessionLocal()
+    try:
+        complete_photos = (
+            db.query(MediaItem)
+            .join(MediaItem.processing_status)
+            .filter(ProcessingStatus.state == ProcessingState.complete)
+            .all()
+        )
+        logger.info("resweep_thumbnails: found %d complete photo(s)", len(complete_photos))
+
+        deleted = 0
+        reset = 0
+        for photo in complete_photos:
+            thumb_path = DERIVATIVES_DIR / f"{photo.sha256_hash}_thumb.jpg"
+            if thumb_path.exists():
+                thumb_path.unlink()
+                deleted += 1
+            photo.processing_status.state = ProcessingState.pending
+            photo.processing_status.error_message = None
+            reset += 1
+
+        db.commit()
+        logger.info("resweep_thumbnails: deleted %d thumbnail(s), reset %d photo(s) to pending", deleted, reset)
+
+    except Exception:
+        logger.exception("resweep_thumbnails: error during resweep")
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def _frontality_score(kps) -> float:
