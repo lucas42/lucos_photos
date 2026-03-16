@@ -95,6 +95,8 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
         image_path: Absolute path to the image file to analyse
     """
     import cv2
+    import numpy as np
+    from PIL import Image, ImageOps
 
     if photo.width is None or photo.height is None:
         logger.warning("detect_and_save_faces: photo %s has no dimensions, skipping", photo.id)
@@ -102,9 +104,9 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
 
     app = _get_face_analysis_app()
 
-    img_bgr = cv2.imread(str(image_path))
-    if img_bgr is None:
-        raise ValueError(f"cv2.imread returned None for {image_path} — file may be corrupt or unsupported")
+    with Image.open(image_path) as _raw_img:
+        img_rgb = ImageOps.exif_transpose(_raw_img).convert("RGB")
+    img_bgr = cv2.cvtColor(np.array(img_rgb), cv2.COLOR_RGB2BGR)
 
     detected_faces = app.get(img_bgr)
     logger.info("detect_and_save_faces: detected %d face(s) in photo %s", len(detected_faces), photo.id)
