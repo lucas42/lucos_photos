@@ -37,6 +37,26 @@
             <dt>Processing status</dt>
             <dd>{{ photo.processingStatus }}</dd>
             {% endif %}
+
+            {% if photo.people %}
+            <dt>People</dt>
+            <dd>
+                <ul class="photo-people-list">
+                    {% for person in photo.people %}
+                    <li class="photo-person">
+                        <a href="/people/{{ person.id }}" class="photo-person-link">
+                            {% if person.profilePictureUrl %}
+                            <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="{{ person.name or ('Person ' + person.id[:8] + '…') }}">
+                            {% else %}
+                            <div class="person-profile-picture-placeholder"></div>
+                            {% endif %}
+                            <span class="photo-person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</span>
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </dd>
+            {% endif %}
         </dl>
 
         <div class="photo-actions">

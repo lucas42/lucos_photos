@@ -20,9 +20,9 @@ from sqlalchemy.orm import Session
 from app.auth import verify_key, verify_session
 from app.database import get_db
 from app.redis_client import enqueue_process_media
-from app.serializers import face_to_dict_simple, photo_to_dict, photo_url
+from app.serializers import face_to_dict_simple, person_to_dict, photo_to_dict, photo_url
 from app.services import emit_loganne_event
-from lucos_photos_common.models import Face, MediaItem, PhotoPerson, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 router = APIRouter()
 
@@ -347,10 +347,14 @@ def get_photo(
     data = photo_to_dict(photo)
     data["processingStatus"] = processing_status.state.value if processing_status else None
     data["faces"] = [face_to_dict_simple(f) for f in faces]
-    data["people"] = [
-        str(pp.person_id)
-        for pp in db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo_uuid).all()
-    ]
+    people = (
+        db.query(Person)
+        .join(PhotoPerson, Person.id == PhotoPerson.person_id)
+        .filter(PhotoPerson.photo_id == photo_uuid)
+        .order_by(Person.display_name.asc().nullslast())
+        .all()
+    )
+    data["people"] = [person_to_dict(p) for p in people]
 
     # Content negotiation: use python-mimeparse to pick between HTML and JSON
     # following the HTTP standard (quality values, specificity rules, etc.).
