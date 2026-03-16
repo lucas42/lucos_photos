@@ -293,7 +293,10 @@ class TestGetPhoto:
         response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
         assert response.status_code == 200
         data = response.json()
-        assert str(person.id) in data["people"]
+        assert len(data["people"]) == 1
+        assert data["people"][0]["id"] == str(person.id)
+        assert "name" in data["people"][0]
+        assert "profilePictureUrl" in data["people"][0]
 
     def test_people_empty_when_no_tags(self, authenticated_client, db_session):
         photo = make_photo(db_session, "notags")
