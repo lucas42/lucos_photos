@@ -649,3 +649,111 @@ class TestMergePeople:
         remaining = db_session.query(Person).all()
         assert len(remaining) == 1
         assert remaining[0].id == winner_id
+
+
+class TestMarkBackgroundFace:
+    def test_mark_background(self, authenticated_client, db_session):
+        person = make_person(db_session, "Background Bob")
+        db_session.commit()
+
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+            response = authenticated_client.put(f"/people/{person.id}/background")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["isBackground"] is True
+        db_session.refresh(person)
+        assert person.is_background is True
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args[0][0] == "personMarkedBackground"
+
+    def test_mark_background_person_not_found(self, authenticated_client):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+            response = authenticated_client.put(f"/people/{uuid.uuid4()}/background")
+        assert response.status_code == 404
+
+    def test_mark_background_invalid_uuid(self, authenticated_client):
+        response = authenticated_client.put("/people/not-a-uuid/background")
+        assert response.status_code == 404
+
+    def test_mark_background_requires_authentication(self, client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+        response = client.put(f"/people/{person.id}/background")
+        assert response.status_code == 401
+
+    def test_unmark_background(self, authenticated_client, db_session):
+        person = Person(display_name="Bob", is_background=True)
+        db_session.add(person)
+        db_session.commit()
+
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+            response = authenticated_client.delete(f"/people/{person.id}/background")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["isBackground"] is False
+        db_session.refresh(person)
+        assert person.is_background is False
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args[0][0] == "personUnmarkedBackground"
+
+    def test_unmark_background_person_not_found(self, authenticated_client):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+            response = authenticated_client.delete(f"/people/{uuid.uuid4()}/background")
+        assert response.status_code == 404
+
+    def test_unmark_background_requires_authentication(self, client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+        response = client.delete(f"/people/{person.id}/background")
+        assert response.status_code == 401
+
+    def test_background_people_hidden_from_list(self, authenticated_client, db_session):
+        make_person(db_session, "Visible")
+        bg_person = Person(display_name="Background Bob", is_background=True)
+        db_session.add(bg_person)
+        db_session.commit()
+
+        response = authenticated_client.get("/people")
+        assert response.status_code == 200
+        body = response.json()
+        names = [p["name"] for p in body["people"]]
+        assert "Visible" in names
+        assert "Background Bob" not in names
+
+    def test_background_people_excluded_from_total(self, authenticated_client, db_session):
+        make_person(db_session, "Visible")
+        bg_person = Person(display_name="Background Bob", is_background=True)
+        db_session.add(bg_person)
+        db_session.commit()
+
+        response = authenticated_client.get("/people")
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+
+    def test_background_person_still_has_detail_page(self, authenticated_client, db_session):
+        person = Person(display_name="Background Bob", is_background=True)
+        db_session.add(person)
+        db_session.commit()
+
+        response = authenticated_client.get(f"/people/{person.id}")
+        assert response.status_code == 200
+        assert response.json()["isBackground"] is True
+
+    def test_is_background_false_by_default(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.get(f"/people/{person.id}")
+        assert response.status_code == 200
+        assert response.json()["isBackground"] is False
+
+    def test_serializer_includes_is_background(self, authenticated_client, db_session):
+        make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.get("/people")
+        assert response.status_code == 200
+        person_data = response.json()["people"][0]
+        assert "isBackground" in person_data

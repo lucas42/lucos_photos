@@ -43,6 +43,12 @@
         {% if person.contactId %}
         <button class="unlink-btn" id="unlink-btn">Unlink contact</button>
         {% endif %}
+
+        {% if not person.contactId %}
+        <button class="background-btn" id="background-btn">
+            {% if person.isBackground %}Unmark as background face{% else %}Mark as background face{% endif %}
+        </button>
+        {% endif %}
     </div>
 
     <section class="person-photos">
@@ -96,12 +102,16 @@
     const select = document.getElementById('contact-search');
     const statusEl = document.getElementById('contact-status');
     const unlinkBtn = document.getElementById('unlink-btn');
+    const backgroundBtn = document.getElementById('background-btn');
 
     if (select) {
         select.addEventListener('change', () => handleContactChange(select, statusEl));
     }
     if (unlinkBtn) {
         unlinkBtn.addEventListener('click', () => handleUnlink(statusEl, unlinkBtn, select));
+    }
+    if (backgroundBtn) {
+        backgroundBtn.addEventListener('click', () => handleToggleBackground(backgroundBtn));
     }
 
     // --- Merge prompt lightbox ---
@@ -279,6 +289,24 @@
             console.error('Failed to unlink contact:', err);
             statusEl.textContent = 'Failed to unlink contact.';
             statusEl.className = 'contact-status error-status';
+        }
+    }
+
+    async function handleToggleBackground(btn) {
+        const isBackground = btn.textContent.trim() === 'Unmark as background face';
+        const method = isBackground ? 'DELETE' : 'PUT';
+        try {
+            const response = await fetch(`/people/${personId}/background`, { method });
+            if (!response.ok) {
+                throw new Error(`API responded with ${response.status}`);
+            }
+            if (isBackground) {
+                btn.textContent = 'Mark as background face';
+            } else {
+                btn.textContent = 'Unmark as background face';
+            }
+        } catch (err) {
+            console.error('Failed to toggle background status:', err);
         }
     }
 </script>

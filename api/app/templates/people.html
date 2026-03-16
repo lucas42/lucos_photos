@@ -51,6 +51,10 @@
                     {% if person.contactId %}
                     <button class="unlink-btn">Unlink contact</button>
                     {% endif %}
+
+                    {% if not person.contactId %}
+                    <button class="background-btn">Mark as background face</button>
+                    {% endif %}
                 </div>
             </div>
             {% endfor %}
@@ -105,12 +109,16 @@
         const select = card.querySelector('select');
         const statusEl = card.querySelector('.contact-status');
         const unlinkBtn = card.querySelector('.unlink-btn');
+        const backgroundBtn = card.querySelector('.background-btn');
 
         if (select) {
             select.addEventListener('change', () => handleContactChange(personId, select, statusEl, card));
         }
         if (unlinkBtn) {
             unlinkBtn.addEventListener('click', () => handleUnlink(personId, statusEl, unlinkBtn, select));
+        }
+        if (backgroundBtn) {
+            backgroundBtn.addEventListener('click', () => handleMarkBackground(personId, card));
         }
     });
 
@@ -412,6 +420,21 @@
             console.error('Failed to unlink contact:', err);
             statusEl.textContent = 'Failed to unlink contact.';
             statusEl.className = 'contact-status error-status';
+        }
+    }
+
+    async function handleMarkBackground(personId, card) {
+        try {
+            const response = await fetch(`/people/${personId}/background`, {
+                method: 'PUT',
+            });
+            if (!response.ok) {
+                throw new Error(`API responded with ${response.status}`);
+            }
+            // Remove the card from the page — background people are hidden from this list
+            card.remove();
+        } catch (err) {
+            console.error('Failed to mark as background face:', err);
         }
     }
 </script>
