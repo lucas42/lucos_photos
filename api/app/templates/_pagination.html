@@ -1,0 +1,30 @@
+{# Pagination bar include.
+   Expects a `pagination` dict in context with keys:
+     show       – boolean, whether to display the bar at all
+     summary    – string, e.g. "Showing 201–300 of 375"
+     prev_url   – URL for the previous page link, or None
+     prev_label – label for the previous link, e.g. "<- Page 2"
+     next_url   – URL for the next page link, or None
+     next_label – label for the next link, e.g. "Page 4 ->"
+#}
+<nav class="pagination-bar{% if not pagination.show %} pagination-bar--hidden{% endif %}"
+     id="pagination-bar"
+     aria-label="Page navigation">
+    <div class="pagination-bar__prev">
+        {% if pagination.prev_url %}
+        <a class="pagination-link" href="{{ pagination.prev_url }}" id="pagination-prev">{{ pagination.prev_label }}</a>
+        {% else %}
+        <span id="pagination-prev"></span>
+        {% endif %}
+    </div>
+    <div class="pagination-bar__summary" id="pagination-summary">
+        {{ pagination.summary if pagination.summary else '' }}
+    </div>
+    <div class="pagination-bar__next">
+        {% if pagination.next_url %}
+        <a class="pagination-link" href="{{ pagination.next_url }}" id="pagination-next">{{ pagination.next_label }}</a>
+        {% else %}
+        <span id="pagination-next"></span>
+        {% endif %}
+    </div>
+</nav>

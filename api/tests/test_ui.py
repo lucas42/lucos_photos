@@ -50,13 +50,13 @@ class TestPaginationHtml:
         """The index page must include a pagination nav element."""
         response = authenticated_client.get("/")
         assert response.status_code == 200
-        assert 'id="pagination"' in response.text
+        assert 'id="pagination-bar"' in response.text
 
     def test_index_html_pagination_has_aria_label(self, authenticated_client):
         """The pagination nav must be accessible with an aria-label."""
         response = authenticated_client.get("/")
         assert response.status_code == 200
-        assert 'aria-label="Photo pagination"' in response.text
+        assert 'aria-label="Page navigation"' in response.text
 
     def test_index_html_references_page_size(self, authenticated_client):
         """The JS must define a PAGE_SIZE constant used to control how many photos per page."""
