@@ -23,6 +23,20 @@ from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, Pro
 
 PHOTO_PROCESSED_CHANNEL = "photos:processed"
 
+logger = logging.getLogger(__name__)
+
+# Module-level Redis connection, shared across all job invocations in this process.
+_redis: Redis | None = None
+
+
+def _get_redis() -> Redis:
+    """Return the module-level Redis connection, creating it on first call."""
+    global _redis
+    if _redis is None:
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        _redis = Redis.from_url(redis_url)
+    return _redis
+
 
 def _publish_photo_processed(photo_id: str) -> None:
     """Publish a photo-processed notification to the Redis pub/sub channel.
@@ -30,15 +44,11 @@ def _publish_photo_processed(photo_id: str) -> None:
     Non-fatal: Redis unavailability is logged but not raised.
     """
     try:
-        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-        redis_conn = Redis.from_url(redis_url)
         message = json.dumps({"type": "photoProcessed", "photoId": photo_id})
-        redis_conn.publish(PHOTO_PROCESSED_CHANNEL, message)
+        _get_redis().publish(PHOTO_PROCESSED_CHANNEL, message)
         logger.info("_publish_photo_processed: published event for photo %s", photo_id)
     except Exception:
         logger.exception("_publish_photo_processed: failed to publish event for photo %s", photo_id)
-
-logger = logging.getLogger(__name__)
 
 UPLOADS_DIR = Path("/data/uploads")
 ORIGINALS_DIR = Path("/data/photos/originals")
