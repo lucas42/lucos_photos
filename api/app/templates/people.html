@@ -59,17 +59,16 @@
         {% endif %}
     </div>
 
-    {% if total > limit %}
-    <nav class="pagination" aria-label="People pagination">
-        <span class="pagination-summary">Showing {{ offset + 1 }}–{{ [offset + limit, total] | min }} of {{ total }}</span>
-        {% if prev_offset is not none %}
-        <a class="pagination-prev" href="/people?offset={{ prev_offset }}&limit={{ limit }}">Previous</a>
-        {% endif %}
-        {% if next_offset is not none %}
-        <a class="pagination-next" href="/people?offset={{ next_offset }}&limit={{ limit }}">Next</a>
-        {% endif %}
-    </nav>
-    {% endif %}
+    {% set current_page = (offset // limit) + 1 %}
+    {% set pagination = {
+        "show": total > limit,
+        "summary": "Showing " ~ (offset + 1) ~ "–" ~ ([offset + limit, total] | min) ~ " of " ~ total,
+        "prev_url": ("/people?offset=" ~ prev_offset ~ "&limit=" ~ limit) if prev_offset is not none else none,
+        "prev_label": "<- Page " ~ (current_page - 1),
+        "next_url": ("/people?offset=" ~ next_offset ~ "&limit=" ~ limit) if next_offset is not none else none,
+        "next_label": "Page " ~ (current_page + 1) ~ " ->"
+    } %}
+    {% include "_pagination.html" %}
 </div>
 
 <div class="lightbox" id="merge-prompt-lightbox" role="dialog" aria-modal="true" aria-labelledby="merge-prompt-title">

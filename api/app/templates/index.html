@@ -7,9 +7,8 @@
     <div id="photo-grid" class="photo-grid">
         <!-- Populated by JS -->
     </div>
-    <nav class="pagination" id="pagination" aria-label="Photo pagination">
-        <!-- Populated by JS -->
-    </nav>
+    {% set pagination = {"show": false, "summary": "", "prev_url": none, "prev_label": "", "next_url": none, "next_label": ""} %}
+    {% include "_pagination.html" %}
 </div>
 {% endblock %}
 
@@ -24,7 +23,10 @@
 
 <script>
     const grid = document.getElementById('photo-grid');
-    const pagination = document.getElementById('pagination');
+    const paginationBar = document.getElementById('pagination-bar');
+    const paginationPrev = document.getElementById('pagination-prev');
+    const paginationSummary = document.getElementById('pagination-summary');
+    const paginationNext = document.getElementById('pagination-next');
     const lightbox = document.getElementById('lightbox');
     const lightboxInner = document.getElementById('lightbox-inner');
     const lightboxClose = document.getElementById('lightbox-close');
@@ -48,25 +50,43 @@
     }
 
     function renderPagination(page, offset, fetchedCount, total) {
-        pagination.innerHTML = '';
-
         const hasPrevious = offset > 0;
         const hasNext = offset + fetchedCount < total;
+        const show = hasPrevious || hasNext;
 
+        if (show) {
+            paginationBar.classList.remove('pagination-bar--hidden');
+        } else {
+            paginationBar.classList.add('pagination-bar--hidden');
+        }
+
+        // Previous slot
+        paginationPrev.innerHTML = '';
         if (hasPrevious) {
             const a = document.createElement('a');
             a.href = pageUrl(page - 1);
-            a.textContent = 'Previous';
-            a.className = 'pagination-link pagination-prev';
-            pagination.appendChild(a);
+            a.textContent = `<- Page ${page - 1}`;
+            a.className = 'pagination-link';
+            paginationPrev.appendChild(a);
         }
 
+        // Summary
+        if (show) {
+            const start = offset + 1;
+            const end = Math.min(offset + fetchedCount, total);
+            paginationSummary.textContent = `Showing ${start}–${end} of ${total}`;
+        } else {
+            paginationSummary.textContent = '';
+        }
+
+        // Next slot
+        paginationNext.innerHTML = '';
         if (hasNext) {
             const a = document.createElement('a');
             a.href = pageUrl(page + 1);
-            a.textContent = 'Next';
-            a.className = 'pagination-link pagination-next';
-            pagination.appendChild(a);
+            a.textContent = `Page ${page + 1} ->`;
+            a.className = 'pagination-link';
+            paginationNext.appendChild(a);
         }
     }
 
