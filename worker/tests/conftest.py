@@ -7,6 +7,7 @@ import pytest
 # The loganne library calls sys.exit() at import time if these aren't set.
 os.environ.setdefault("LOGANNE_ENDPOINT", "http://loganne.test/events")
 os.environ.setdefault("SYSTEM", "lucos_photos")
+os.environ.setdefault("APP_ORIGIN", "https://photos.example.com")
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool

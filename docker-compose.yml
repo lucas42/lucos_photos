@@ -46,6 +46,7 @@ services:
     environment:
       - SYSTEM
       - ENVIRONMENT
+      - APP_ORIGIN
       - POSTGRES_PASSWORD
       - LOGANNE_ENDPOINT
       - LUCOS_CONTACTS_URL

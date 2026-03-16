@@ -837,6 +837,8 @@ class TestProcessPhotoLoganne:
 
         mock_update.assert_called_once()
         assert mock_update.call_args[0][0] == "photoProcessed"
+        url = mock_update.call_args.kwargs.get("url", "")
+        assert url.startswith("http"), f"Loganne url should be an absolute URL, got: {url!r}"
 
     def test_does_not_emit_loganne_when_already_complete(self, db_session, pending_photo, tmp_path):
         """process_photo should not call updateLoganne when exiting early (already complete)."""
