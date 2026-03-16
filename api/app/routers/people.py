@@ -42,19 +42,20 @@ def list_people(
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    total = db.query(func.count(Person.id)).scalar()
+    base_filter = Person.is_background == False  # noqa: E712
+    total = db.query(func.count(Person.id)).filter(base_filter).scalar()
 
     if includePhotoCounts:
         # Join with PhotoPerson to count photos
         query = db.query(
             Person,
             func.count(PhotoPerson.photo_id).label("photo_count")
-        ).outerjoin(PhotoPerson).group_by(Person.id).order_by(*PEOPLE_SORT_ORDER)
+        ).filter(base_filter).outerjoin(PhotoPerson).group_by(Person.id).order_by(*PEOPLE_SORT_ORDER)
 
         people_with_counts = query.offset(offset).limit(limit).all()
         people_data = [person_to_dict(p, count) for p, count in people_with_counts]
     else:
-        people = db.query(Person).order_by(*PEOPLE_SORT_ORDER).offset(offset).limit(limit).all()
+        people = db.query(Person).filter(base_filter).order_by(*PEOPLE_SORT_ORDER).offset(offset).limit(limit).all()
         people_data = [person_to_dict(p) for p in people]
 
     accept_header = request.headers.get("accept", "*/*")
@@ -354,6 +355,56 @@ async def merge_people(
     await emit_loganne_event("peopleMerged", f"Merged {loser_names} into {winner.display_name or str(winner.id)} in lucos_photos")
 
     return {"mergedPersonId": str(winner.id)}
+
+
+@router.put("/people/{person_id}/background", status_code=status.HTTP_200_OK)
+async def mark_person_background(
+    person_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Mark a person as a background face (hides them from the people list)."""
+    try:
+        person_uuid = uuid.UUID(person_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person = db.query(Person).filter(Person.id == person_uuid).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person.is_background = True
+    db.commit()
+    db.refresh(person)
+
+    await emit_loganne_event("personMarkedBackground", f"{person.display_name or str(person_uuid)} marked as background face in lucos_photos")
+
+    return person_to_dict(person)
+
+
+@router.delete("/people/{person_id}/background", status_code=status.HTTP_200_OK)
+async def unmark_person_background(
+    person_id: str,
+    _: Annotated[None, Depends(verify_session)],
+    db: Session = Depends(get_db),
+):
+    """Unmark a person as a background face (shows them in the people list again)."""
+    try:
+        person_uuid = uuid.UUID(person_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person = db.query(Person).filter(Person.id == person_uuid).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person.is_background = False
+    db.commit()
+    db.refresh(person)
+
+    await emit_loganne_event("personUnmarkedBackground", f"{person.display_name or str(person_uuid)} unmarked as background face in lucos_photos")
+
+    return person_to_dict(person)
 
 
 def _enqueue_profile_picture(person_id: str) -> None:

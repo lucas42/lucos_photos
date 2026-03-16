@@ -76,6 +76,8 @@ class Person(Base):
     # Profile picture: FK to the source media item and whether it was auto-generated
     profile_photo_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("media_item.id"), nullable=True)
     profile_auto_generated: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    # Background face: person was detected in a crowd and user does not want to identify them
+    is_background: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     faces: Mapped[list["Face"]] = relationship(back_populates="person")
     photo_people: Mapped[list["PhotoPerson"]] = relationship(back_populates="person")
