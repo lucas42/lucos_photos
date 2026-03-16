@@ -524,19 +524,23 @@ class TestDetectAndSaveFaces:
         return face
 
     def _mock_insightface(self, mock_app_instance, mock_cv2=None):
-        """Return a context manager patching _get_face_analysis_app and cv2.
+        """Return a context manager patching _get_face_analysis_app, cv2, and Image.open.
 
         Patches _get_face_analysis_app to return mock_app_instance so the singleton
         is bypassed entirely — each test gets its own app mock with independent
         return values. cv2 is patched in sys.modules so the bare ``import cv2``
         inside detect_and_save_faces resolves without OpenCV being installed.
+        Image.open is patched so tests don't need real image files on disk.
         """
         if mock_cv2 is None:
             mock_cv2 = MagicMock()
-            mock_cv2.imread.return_value = MagicMock()
+        mock_pil_img = MagicMock()
+        mock_pil_img.__enter__ = MagicMock(return_value=mock_pil_img)
+        mock_pil_img.__exit__ = MagicMock(return_value=False)
         return (
             patch("lucos_photos_common.jobs._get_face_analysis_app", return_value=mock_app_instance),
             patch.dict("sys.modules", {"cv2": mock_cv2}),
+            patch("PIL.Image.open", return_value=mock_pil_img),
             mock_cv2,
         )
 
@@ -551,9 +555,9 @@ class TestDetectAndSaveFaces:
 
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face1, face2]
-        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
 
-        with patch_app, patch_cv2:
+        with patch_app, patch_cv2, patch_pil:
             detect_and_save_faces(db_session, photo, img_path)
 
         faces = db_session.query(Face).filter(Face.photo_id == photo.id).all()
@@ -571,9 +575,9 @@ class TestDetectAndSaveFaces:
 
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face]
-        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
 
-        with patch_app, patch_cv2:
+        with patch_app, patch_cv2, patch_pil:
             detect_and_save_faces(db_session, photo, img_path)
 
         saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
@@ -594,9 +598,9 @@ class TestDetectAndSaveFaces:
 
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face]
-        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
 
-        with patch_app, patch_cv2:
+        with patch_app, patch_cv2, patch_pil:
             detect_and_save_faces(db_session, photo, img_path)
 
         saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
@@ -614,9 +618,9 @@ class TestDetectAndSaveFaces:
 
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face]
-        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
 
-        with patch_app, patch_cv2:
+        with patch_app, patch_cv2, patch_pil:
             detect_and_save_faces(db_session, photo, img_path)
 
         saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
@@ -630,9 +634,9 @@ class TestDetectAndSaveFaces:
 
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = []
-        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
 
-        with patch_app, patch_cv2:
+        with patch_app, patch_cv2, patch_pil:
             detect_and_save_faces(db_session, photo, img_path)
 
         count = db_session.query(Face).filter(Face.photo_id == photo.id).count()
@@ -648,9 +652,9 @@ class TestDetectAndSaveFaces:
 
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face]
-        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
 
-        with patch_app, patch_cv2:
+        with patch_app, patch_cv2, patch_pil:
             detect_and_save_faces(db_session, photo, img_path)
 
         saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
@@ -677,9 +681,9 @@ class TestDetectAndSaveFaces:
 
         mock_app_instance = MagicMock()
         mock_app_instance.get.return_value = [face]
-        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance)
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
 
-        with patch_app, patch_cv2:
+        with patch_app, patch_cv2, patch_pil:
             detect_and_save_faces(db_session, photo, img_path)
 
         faces = db_session.query(Face).filter(Face.photo_id == photo.id).all()
@@ -687,20 +691,21 @@ class TestDetectAndSaveFaces:
         assert len(faces) == 1
         assert abs(faces[0].bbox_x - 0.0) < 1e-6
 
-    def test_raises_if_cv2_cannot_read_image(self, db_session, photo_with_dimensions, tmp_path):
-        """If cv2.imread returns None, detect_and_save_faces should raise a ValueError."""
+    def test_raises_if_image_cannot_be_opened(self, db_session, photo_with_dimensions, tmp_path):
+        """If the image file cannot be opened, detect_and_save_faces should propagate the error."""
         photo = photo_with_dimensions
         img_path = tmp_path / "test.jpg"
         img_path.write_bytes(b"not a real image")
 
-        mock_cv2 = MagicMock()
-        mock_cv2.imread.return_value = None  # Simulate unreadable file
-
         mock_app_instance = MagicMock()
-        patch_app, patch_cv2, _ = self._mock_insightface(mock_app_instance, mock_cv2=mock_cv2)
+        mock_cv2 = MagicMock()
 
-        with patch_app, patch_cv2:
-            with pytest.raises(ValueError, match="cv2.imread returned None"):
+        with (
+            patch("lucos_photos_common.jobs._get_face_analysis_app", return_value=mock_app_instance),
+            patch.dict("sys.modules", {"cv2": mock_cv2}),
+            patch("PIL.Image.open", side_effect=IOError("cannot identify image file")),
+        ):
+            with pytest.raises(IOError, match="cannot identify image file"):
                 detect_and_save_faces(db_session, photo, img_path)
 
     def test_skips_detection_when_photo_has_no_dimensions(self, db_session, tmp_path):
@@ -713,15 +718,50 @@ class TestDetectAndSaveFaces:
         img_path.write_bytes(b"fake")
 
         mock_app_instance = MagicMock()
-        patch_app, patch_cv2, mock_cv2 = self._mock_insightface(mock_app_instance)
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
 
-        with patch_app, patch_cv2:
+        with patch_app, patch_cv2, patch_pil as mock_image_open:
             detect_and_save_faces(db_session, photo, img_path)
 
-        # cv2.imread should never have been called (we return early before loading the image)
-        mock_cv2.imread.assert_not_called()
+        # Image.open should never have been called (we return early before loading the image)
+        mock_image_open.assert_not_called()
         count = db_session.query(Face).filter(Face.photo_id == photo.id).count()
         assert count == 0
+
+    def test_exif_orientation_applied_before_face_detection(self, db_session, tmp_path):
+        """exif_transpose must be applied before passing the image to InsightFace.
+
+        For a photo stored rotated 90° CW (orientation 6), the raw pixel dimensions
+        are width x height, but exif_transpose produces a height x width image.
+        The bounding box normalisation uses photo.width/photo.height (the display
+        dimensions, already correct after the #186 fix). This test verifies that
+        ImageOps.exif_transpose is called on the opened image.
+        """
+        # Display dimensions after transposing orientation 6: stored 200x400 → displayed 400x200
+        photo = Photo(sha256_hash="e" * 64, file_extension="jpg", width=400, height=200)
+        db_session.add(photo)
+        db_session.flush()
+        status = ProcessingStatus(photo_id=photo.id, state=ProcessingState.processing)
+        db_session.add(status)
+        db_session.commit()
+        db_session.refresh(photo)
+
+        img_path = tmp_path / "rotated.jpg"
+        img_path.write_bytes(make_jpeg_with_orientation(200, 400, orientation=6))
+
+        face = self._make_mock_face([0.0, 0.0, 100.0, 100.0], embedding=[0.5] * 512)
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = [face]
+        mock_cv2 = MagicMock()
+
+        with (
+            patch("lucos_photos_common.jobs._get_face_analysis_app", return_value=mock_app_instance),
+            patch.dict("sys.modules", {"cv2": mock_cv2}),
+            patch("PIL.ImageOps.exif_transpose", wraps=lambda img: img) as mock_transpose,
+        ):
+            detect_and_save_faces(db_session, photo, img_path)
+
+        mock_transpose.assert_called_once()
 
     def test_process_photo_calls_face_detection(self, db_session, pending_photo, tmp_path):
         """process_photo should invoke detect_and_save_faces after metadata extraction."""
