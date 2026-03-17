@@ -781,6 +781,133 @@ class TestDetectAndSaveFaces:
 
         mock_detect.assert_called_once()
 
+    def test_reprocess_preserves_confirmed_face_assignment(self, db_session, photo_with_dimensions, tmp_path):
+        """On reprocess, a confirmed face-person link should be re-applied to the matching new face."""
+        photo = photo_with_dimensions
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        from lucos_photos_common.models import Person
+        person = Person(display_name="Alice")
+        db_session.add(person)
+        db_session.flush()
+
+        # Pre-existing confirmed face with a known embedding
+        confirmed_embedding = [0.5] * 512
+        existing_face = Face(
+            photo_id=photo.id,
+            person_id=person.id,
+            person_confirmed=True,
+            bbox_x=0.1, bbox_y=0.1, bbox_width=0.3, bbox_height=0.4,
+            embedding=confirmed_embedding,
+        )
+        db_session.add(existing_face)
+        db_session.commit()
+
+        # Re-detection returns a face with a very similar embedding
+        similar_embedding = [0.5 + 0.001 * i for i in range(512)]
+        new_face = self._make_mock_face([100.0, 100.0, 400.0, 500.0], embedding=similar_embedding)
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = [new_face]
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
+
+        with patch_app, patch_cv2, patch_pil:
+            detect_and_save_faces(db_session, photo, img_path)
+
+        faces = db_session.query(Face).filter(Face.photo_id == photo.id).all()
+        assert len(faces) == 1
+        saved = faces[0]
+        assert saved.person_id == person.id
+        assert saved.person_confirmed is True
+
+    def test_reprocess_drops_confirmed_assignment_when_face_not_redetected(self, db_session, photo_with_dimensions, tmp_path):
+        """If a confirmed face is not re-detected on reprocess, its assignment is correctly dropped."""
+        photo = photo_with_dimensions
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        from lucos_photos_common.models import Person
+        person = Person(display_name="Bob")
+        db_session.add(person)
+        db_session.flush()
+
+        confirmed_embedding = [0.5] * 512
+        existing_face = Face(
+            photo_id=photo.id,
+            person_id=person.id,
+            person_confirmed=True,
+            bbox_x=0.1, bbox_y=0.1, bbox_width=0.3, bbox_height=0.4,
+            embedding=confirmed_embedding,
+        )
+        db_session.add(existing_face)
+        db_session.commit()
+
+        # Re-detection finds no faces at all
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = []
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
+
+        with patch_app, patch_cv2, patch_pil:
+            detect_and_save_faces(db_session, photo, img_path)
+
+        faces = db_session.query(Face).filter(Face.photo_id == photo.id).all()
+        assert len(faces) == 0
+
+    def test_confirmed_assignment_takes_priority_over_auto_assignment(self, db_session, photo_with_dimensions, tmp_path):
+        """Confirmed re-link takes priority: auto-assignment should not override it."""
+        photo = photo_with_dimensions
+        img_path = tmp_path / "test.jpg"
+        img_path.write_bytes(b"fake")
+
+        from lucos_photos_common.models import Person
+        confirmed_person = Person(display_name="Confirmed Person")
+        auto_person = Person(display_name="Auto Person")
+        db_session.add_all([confirmed_person, auto_person])
+        db_session.flush()
+
+        # Another photo with auto_person already assigned — would win auto-assignment
+        other_photo = Photo(sha256_hash="c" * 64, file_extension="jpg", width=100, height=100)
+        db_session.add(other_photo)
+        db_session.flush()
+
+        similar_embedding = [0.5] * 512
+        other_face = Face(
+            photo_id=other_photo.id,
+            person_id=auto_person.id,
+            person_confirmed=False,
+            bbox_x=0.0, bbox_y=0.0, bbox_width=0.5, bbox_height=0.5,
+            embedding=similar_embedding,
+        )
+        db_session.add(other_face)
+
+        # Pre-existing confirmed face on the photo being reprocessed
+        confirmed_embedding = [0.5] * 512
+        existing_face = Face(
+            photo_id=photo.id,
+            person_id=confirmed_person.id,
+            person_confirmed=True,
+            bbox_x=0.1, bbox_y=0.1, bbox_width=0.3, bbox_height=0.4,
+            embedding=confirmed_embedding,
+        )
+        db_session.add(existing_face)
+        db_session.commit()
+
+        # Re-detection returns one face with an embedding very close to both persons
+        new_face = self._make_mock_face([100.0, 100.0, 400.0, 500.0], embedding=similar_embedding)
+        mock_app_instance = MagicMock()
+        mock_app_instance.get.return_value = [new_face]
+        patch_app, patch_cv2, patch_pil, _ = self._mock_insightface(mock_app_instance)
+
+        with patch_app, patch_cv2, patch_pil:
+            detect_and_save_faces(db_session, photo, img_path)
+
+        faces = db_session.query(Face).filter(Face.photo_id == photo.id).all()
+        assert len(faces) == 1
+        saved = faces[0]
+        # Must be the confirmed person, not the auto-assigned one
+        assert saved.person_id == confirmed_person.id
+        assert saved.person_confirmed is True
+
 
 class TestUpdateLoganne:
     """Tests that the jobs module calls the loganne library correctly."""
