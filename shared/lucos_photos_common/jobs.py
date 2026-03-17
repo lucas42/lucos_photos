@@ -121,6 +121,22 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
     detected_faces = app.get(img_bgr)
     logger.info("detect_and_save_faces: detected %d face(s) in photo %s", len(detected_faces), photo.id)
 
+    # Snapshot confirmed face assignments before deletion so they can be re-applied
+    # after re-detection using embedding similarity (robust to coordinate transforms).
+    confirmed_snapshot = [
+        (f.person_id, f.embedding)
+        for f in db.query(Face).filter(
+            Face.photo_id == photo.id,
+            Face.person_confirmed.is_(True),
+            Face.embedding.isnot(None),
+        ).all()
+    ]
+    if confirmed_snapshot:
+        logger.info(
+            "detect_and_save_faces: snapshotted %d confirmed face assignment(s) for photo %s",
+            len(confirmed_snapshot), photo.id,
+        )
+
     # Idempotency: delete any existing face records for this photo before reinserting
     existing_faces = db.query(Face).filter(Face.photo_id == photo.id).all()
     if existing_faces:
@@ -144,48 +160,77 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
 
         embedding_vector = None
         person_id = None
+        person_confirmed = False
 
         if detected.embedding is not None:
             embedding_list = detected.embedding.tolist()
             embedding_vector = embedding_list
+            emb_array = np.array(embedding_list, dtype=np.float32)
 
-            # Search for the nearest existing face embedding using pgvector cosine distance.
-            # Only look at faces with an embedding and a confirmed or ML-assigned person.
-            # Short-circuit: skip the pgvector ORDER BY entirely if there are no candidates.
-            # This avoids the pgvector operator on SQLite (used in tests) when the table is empty.
-            from sqlalchemy import text
-            candidate_filter = [
-                Face.embedding.isnot(None),
-                Face.person_id.isnot(None),
-                Face.photo_id != photo.id,
-            ]
-            has_candidates = db.query(Face).filter(*candidate_filter).limit(1).first() is not None
-            nearest = (
-                db.query(Face)
-                .filter(*candidate_filter)
-                .order_by(Face.embedding.cosine_distance(embedding_list))
-                .limit(1)
-                .first()
-            ) if has_candidates else None
-            if nearest is not None:
-                # Compute the actual distance to check against threshold
-                dist_row = db.execute(
-                    text("SELECT (:emb)::vector <=> embedding FROM face WHERE id = :fid"),
-                    {"emb": str(embedding_list), "fid": str(nearest.id)},
-                ).fetchone()
-                if dist_row is not None and dist_row[0] is not None:
-                    distance = float(dist_row[0])
-                    if distance < FACE_SIMILARITY_THRESHOLD:
-                        person_id = nearest.person_id
-                        logger.info(
-                            "detect_and_save_faces: auto-assigned person %s to face (distance=%.3f)",
-                            person_id, distance,
-                        )
+            # Step 1: try to re-apply a confirmed assignment from the snapshot.
+            # Confirmed assignments take strict priority over ML auto-assignment.
+            if confirmed_snapshot:
+                best_confirmed_distance = float("inf")
+                best_confirmed_person_id = None
+                for snap_person_id, snap_embedding in confirmed_snapshot:
+                    snap_array = np.array(snap_embedding, dtype=np.float32)
+                    norm_a = np.linalg.norm(emb_array)
+                    norm_b = np.linalg.norm(snap_array)
+                    if norm_a > 0 and norm_b > 0:
+                        cosine_sim = float(np.dot(emb_array, snap_array) / (norm_a * norm_b))
+                        distance = 1.0 - cosine_sim
                     else:
-                        logger.info(
-                            "detect_and_save_faces: nearest face distance %.3f exceeds threshold, no person assigned",
-                            distance,
-                        )
+                        distance = float("inf")
+                    if distance < best_confirmed_distance:
+                        best_confirmed_distance = distance
+                        best_confirmed_person_id = snap_person_id
+                if best_confirmed_distance < FACE_SIMILARITY_THRESHOLD:
+                    person_id = best_confirmed_person_id
+                    person_confirmed = True
+                    logger.info(
+                        "detect_and_save_faces: re-applied confirmed person %s to face (distance=%.3f)",
+                        person_id, best_confirmed_distance,
+                    )
+
+            # Step 2: if not re-linked from snapshot, fall back to pgvector auto-assignment.
+            if person_id is None:
+                # Search for the nearest existing face embedding using pgvector cosine distance.
+                # Only look at faces with an embedding and a confirmed or ML-assigned person.
+                # Short-circuit: skip the pgvector ORDER BY entirely if there are no candidates.
+                # This avoids the pgvector operator on SQLite (used in tests) when the table is empty.
+                from sqlalchemy import text
+                candidate_filter = [
+                    Face.embedding.isnot(None),
+                    Face.person_id.isnot(None),
+                    Face.photo_id != photo.id,
+                ]
+                has_candidates = db.query(Face).filter(*candidate_filter).limit(1).first() is not None
+                nearest = (
+                    db.query(Face)
+                    .filter(*candidate_filter)
+                    .order_by(Face.embedding.cosine_distance(embedding_list))
+                    .limit(1)
+                    .first()
+                ) if has_candidates else None
+                if nearest is not None:
+                    # Compute the actual distance to check against threshold
+                    dist_row = db.execute(
+                        text("SELECT (:emb)::vector <=> embedding FROM face WHERE id = :fid"),
+                        {"emb": str(embedding_list), "fid": str(nearest.id)},
+                    ).fetchone()
+                    if dist_row is not None and dist_row[0] is not None:
+                        distance = float(dist_row[0])
+                        if distance < FACE_SIMILARITY_THRESHOLD:
+                            person_id = nearest.person_id
+                            logger.info(
+                                "detect_and_save_faces: auto-assigned person %s to face (distance=%.3f)",
+                                person_id, distance,
+                            )
+                        else:
+                            logger.info(
+                                "detect_and_save_faces: nearest face distance %.3f exceeds threshold, no person assigned",
+                                distance,
+                            )
 
         det_score = float(detected.det_score) if detected.det_score is not None else None
         kps = detected.kps.tolist() if detected.kps is not None else None
@@ -193,7 +238,7 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
         face_record = Face(
             photo_id=photo.id,
             person_id=person_id,
-            person_confirmed=False,
+            person_confirmed=person_confirmed,
             bbox_x=norm_x,
             bbox_y=norm_y,
             bbox_width=norm_w,
