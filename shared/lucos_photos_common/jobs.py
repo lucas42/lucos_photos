@@ -1087,7 +1087,7 @@ def sweep_contact_display_names() -> None:
     """
     import httpx
 
-    contacts_url = os.environ.get("LUCOS_CONTACTS_URL", "")
+    contacts_url = os.environ.get("LUCOS_CONTACTS_URL", "").rstrip("/")
     contacts_key = os.environ.get("KEY_LUCOS_CONTACTS", "")
     if not contacts_url or not contacts_key:
         logger.warning("sweep_contact_display_names: LUCOS_CONTACTS_URL or KEY_LUCOS_CONTACTS not set, skipping")
