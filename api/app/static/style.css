@@ -60,9 +60,32 @@ a {
 	transition: opacity 0.15s ease;
 }
 
+h2 a {
+	font-size: inherit;
+}
+
 a:hover {
 	opacity: 1;
 	color: var(--accent-color);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Homepage                                                           */
+/* ------------------------------------------------------------------ */
+
+.homepage-all-link-row a {
+	float: right;
+}
+
+.homepage-section-heading {
+	clear: both;
+	font-size: 30px;
+	margin: 1em 0;
+}
+
+.homepage-section .photo-grid {
+	grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
 }
 
 /* ------------------------------------------------------------------ */
