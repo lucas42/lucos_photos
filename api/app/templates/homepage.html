@@ -39,11 +39,11 @@
         <div class="people-grid">
             {% if top_people %}
                 {% for person in top_people %}
-                <a href="/people/{{ person.id }}" class="person-thumbnail-link" title="{{ person.name or ('Person ' + person.id[:8] + '…') }}">
+                <a href="/people/{{ person.id }}" class="photo-person-link" title="{{ person.name or ('Person ' + person.id[:8] + '…') }}">
                     {% if person.profilePictureUrl %}
-                    <img class="person-thumbnail" src="{{ person.profilePictureUrl }}" alt="{{ person.name or ('Person ' + person.id[:8] + '…') }}" loading="lazy">
+                    <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="{{ person.name or ('Person ' + person.id[:8] + '…') }}" loading="lazy">
                     {% else %}
-                    <div class="person-thumbnail person-thumbnail-placeholder"></div>
+                    <div class="person-profile-picture person-profile-picture-placeholder"></div>
                     {% endif %}
                 </a>
                 {% endfor %}
