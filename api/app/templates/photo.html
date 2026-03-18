@@ -74,7 +74,7 @@
         }
         const response = await fetch('/photos/{{ photo.id }}', { method: 'DELETE' });
         if (response.ok) {
-            window.location.href = '/';
+            window.location.href = '/photos';
         } else {
             alert('Failed to delete photo. Please try again.');
         }

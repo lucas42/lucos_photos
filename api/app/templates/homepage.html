@@ -1,0 +1,65 @@
+{% extends "_base.html" %}
+
+{% block meta %}<meta name="description" content="A simple and elegant photo management service.">{% endblock %}
+
+{% block content %}
+<div class="container">
+
+    <section class="homepage-section">
+        <h2 class="homepage-section-heading">
+            <a href="/photos">{{ photo_total }} Photos</a>
+        </h2>
+
+        <div class="photo-grid">
+            {% if recent_photos %}
+                {% for photo in recent_photos %}
+                <a href="/photos/{{ photo.id }}" class="media-card-link">
+                    <div class="media-card">
+                        <img src="{{ photo.thumbnailUrl }}" alt="Photo {{ photo.id }}" loading="lazy">
+                    </div>
+                </a>
+                {% endfor %}
+            {% else %}
+                <div class="empty-state">
+                    <p>No photos yet.</p>
+                </div>
+            {% endif %}
+        </div>
+
+        {% set pagination = {"show": false, "summary": "", "prev_url": none, "prev_label": "", "next_url": none, "next_label": ""} %}
+        {% include "_pagination.html" %}
+        <div class="homepage-all-link-row">
+            <a href="/photos" class="pagination-link">All Photos</a>
+        </div>
+    </section>
+
+    <section class="homepage-section">
+        <h2 class="homepage-section-heading">
+            <a href="/people">{{ people_total }} People</a>
+        </h2>
+
+        <div class="people-grid">
+            {% if top_people %}
+                {% for person in top_people %}
+                <a href="/people/{{ person.id }}" class="person-thumbnail-link" title="{{ person.name or ('Person ' + person.id[:8] + '…') }}">
+                    {% if person.profilePictureUrl %}
+                    <img class="person-thumbnail" src="{{ person.profilePictureUrl }}" alt="{{ person.name or ('Person ' + person.id[:8] + '…') }}" loading="lazy">
+                    {% else %}
+                    <div class="person-thumbnail person-thumbnail-placeholder"></div>
+                    {% endif %}
+                </a>
+                {% endfor %}
+            {% else %}
+                <p class="empty-state-text">No people detected yet.</p>
+            {% endif %}
+        </div>
+
+        {% set pagination = {"show": false, "summary": "", "prev_url": none, "prev_label": "", "next_url": none, "next_label": ""} %}
+        {% include "_pagination.html" %}
+        <div class="homepage-all-link-row">
+            <a href="/people" class="pagination-link">All People</a>
+        </div>
+    </section>
+
+</div>
+{% endblock %}
