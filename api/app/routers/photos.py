@@ -296,6 +296,7 @@ async def upload_photo(
 
 @router.get("/photos")
 def list_photos(
+    request: Request,
     _: Annotated[None, Depends(verify_session)],
     limit: int = 100,
     offset: int = 0,
@@ -317,12 +318,29 @@ def list_photos(
     photos = processed_filter.order_by(*order_cols).offset(offset).limit(limit).all()
     total = processed_filter.count()
 
-    return {
+    accept_header = request.headers.get("accept", "*/*")
+    best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
+    if best_match == "text/html":
+        prev_offset = max(0, offset - limit) if offset > 0 else None
+        next_offset = offset + limit if offset + limit < total else None
+        current_page_num = (offset // limit) + 1
+        return templates.TemplateResponse(request, "photos.html", {
+            "photos": [photo_to_dict(p) for p in photos],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "prev_offset": prev_offset,
+            "next_offset": next_offset,
+            "current_page_num": current_page_num,
+            "current_page": "photos",
+        }, headers={"Vary": "Accept"})
+
+    return JSONResponse(content={
         "photos": [photo_to_dict(p) for p in photos],
         "total": total,
         "limit": limit,
         "offset": offset,
-    }
+    }, headers={"Vary": "Accept"})
 
 
 @router.get("/photos/{photo_id}")

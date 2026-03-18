@@ -8,13 +8,15 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import text
+from sqlalchemy import func, text
+from sqlalchemy.orm import Session
 
 from app.auth import _validate_token_with_auth_service, safe_path, verify_session, verify_session_or_key  # noqa: F401 - re-exported for tests
 from app.database import get_db, SessionLocal  # noqa: F401 - re-exported for tests; SessionLocal used by check_db/get_metrics
 from app.redis_client import _broadcast, _redis_subscriber_task, _ws_clients, get_redis  # noqa: F401 - _broadcast and _ws_clients re-exported for tests
 from app.routers import app_release, faces, people, photos, telemetry, webhooks
-from lucos_photos_common.models import MediaItem, ProcessingState, ProcessingStatus
+from app.serializers import person_to_dict, photo_to_dict
+from lucos_photos_common.models import MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 
 @asynccontextmanager
@@ -98,8 +100,37 @@ def healthcheck():
 
 
 @app.get("/", include_in_schema=False)
-async def root(request: Request, _: Annotated[None, Depends(verify_session)]):
-    return templates.TemplateResponse(request, "index.html", {"current_page": "photos"})
+def root(request: Request, _: Annotated[None, Depends(verify_session)], db: Session = Depends(get_db)):
+    # Photos: count and 10 most recently added (by uploaded_at)
+    photo_order_cols = [MediaItem.taken_at.desc().nullslast(), MediaItem.uploaded_at.desc()]
+    processed_photos_query = (
+        db.query(MediaItem)
+        .join(ProcessingStatus, MediaItem.id == ProcessingStatus.photo_id)
+        .filter(ProcessingStatus.state == ProcessingState.complete)
+    )
+    photo_total = processed_photos_query.count()
+    recent_photos = processed_photos_query.order_by(*photo_order_cols).limit(10).all()
+
+    # People: count and top 10 by number of photos tagged in
+    base_person_filter = Person.is_background == False  # noqa: E712
+    people_total = db.query(func.count(Person.id)).filter(base_person_filter).scalar()
+    top_people_with_counts = (
+        db.query(Person, func.count(PhotoPerson.photo_id).label("photo_count"))
+        .filter(base_person_filter)
+        .outerjoin(PhotoPerson)
+        .group_by(Person.id)
+        .order_by(func.count(PhotoPerson.photo_id).desc())
+        .limit(10)
+        .all()
+    )
+
+    return templates.TemplateResponse(request, "homepage.html", {
+        "current_page": "home",
+        "photo_total": photo_total,
+        "recent_photos": [photo_to_dict(p) for p in recent_photos],
+        "people_total": people_total,
+        "top_people": [person_to_dict(p, count) for p, count in top_people_with_counts],
+    })
 
 
 CHECK_TIMEOUT = 0.5  # seconds — must be well under monitoring system's 1s hard limit

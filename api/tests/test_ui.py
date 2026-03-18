@@ -33,11 +33,11 @@ def test_root_includes_nav(authenticated_client):
     assert 'href="/app"' in response.text
 
 
-def test_root_marks_photos_as_current(authenticated_client):
-    """The Photos nav link should be marked as current-page on the index."""
+def test_root_marks_home_as_current(authenticated_client):
+    """The Home nav link should be marked as current-page on the homepage."""
     response = authenticated_client.get("/")
     assert response.status_code == 200
-    # current-page class should appear on or near the Photos link
+    # current-page class should appear on the Home nav link
     assert "current-page" in response.text
 
 
@@ -46,38 +46,17 @@ def test_root_marks_photos_as_current(authenticated_client):
 # ---------------------------------------------------------------------------
 
 class TestPaginationHtml:
-    def test_index_html_includes_pagination_nav(self, authenticated_client):
-        """The index page must include a pagination nav element."""
-        response = authenticated_client.get("/")
+    def test_photos_page_includes_pagination_nav(self, authenticated_client):
+        """The /photos page must include a pagination nav element."""
+        response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
         assert response.status_code == 200
         assert 'id="pagination-bar"' in response.text
 
-    def test_index_html_pagination_has_aria_label(self, authenticated_client):
+    def test_photos_page_pagination_has_aria_label(self, authenticated_client):
         """The pagination nav must be accessible with an aria-label."""
-        response = authenticated_client.get("/")
+        response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
         assert response.status_code == 200
         assert 'aria-label="Page navigation"' in response.text
-
-    def test_index_html_references_page_size(self, authenticated_client):
-        """The JS must define a PAGE_SIZE constant used to control how many photos per page."""
-        response = authenticated_client.get("/")
-        assert response.status_code == 200
-        assert 'PAGE_SIZE' in response.text
-
-    def test_index_html_reads_page_query_param(self, authenticated_client):
-        """The JS must read the 'page' query parameter to support URL-based pagination."""
-        response = authenticated_client.get("/")
-        assert response.status_code == 200
-        assert "getCurrentPage" in response.text
-        assert "'page'" in response.text
-
-    def test_index_html_renders_pagination_links(self, authenticated_client):
-        """The JS must include renderPagination logic for previous/next links."""
-        response = authenticated_client.get("/")
-        assert response.status_code == 200
-        assert "renderPagination" in response.text
-        assert "Previous" in response.text
-        assert "Next" in response.text
 
 
 # ---------------------------------------------------------------------------
@@ -281,5 +260,165 @@ class TestPeoplePageHtml:
     def test_people_json_has_vary_accept(self, authenticated_client):
         """JSON response must include Vary: Accept so caches don't serve it as HTML."""
         response = authenticated_client.get("/people", headers={"Accept": "application/json"})
+        assert response.status_code == 200
+        assert response.headers.get("vary") == "Accept"
+
+
+# ---------------------------------------------------------------------------
+# Homepage tests
+# ---------------------------------------------------------------------------
+
+class TestHomepage:
+    def test_homepage_returns_html(self, authenticated_client):
+        """GET / returns server-rendered HTML."""
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+        assert "lucos-navbar" in response.text
+
+    def test_homepage_shows_photo_count(self, authenticated_client, db_session):
+        """Homepage renders photo count as a section heading."""
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState
+        photo = MediaItem(sha256_hash="a" * 64, file_extension="jpg", media_type="photo")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        db_session.commit()
+
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        assert "1 Photos" in response.text
+
+    def test_homepage_shows_people_count(self, authenticated_client, db_session):
+        """Homepage renders people count as a section heading."""
+        from lucos_photos_common.models import Person
+        person = Person(display_name="Test Person")
+        db_session.add(person)
+        db_session.commit()
+
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        assert "1 People" in response.text
+
+    def test_homepage_photos_link_to_photos_page(self, authenticated_client):
+        """Photos section heading and 'All Photos' link point to /photos."""
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        assert 'href="/photos"' in response.text
+
+    def test_homepage_people_link_to_people_page(self, authenticated_client):
+        """People section heading and 'All People' link point to /people."""
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        assert 'href="/people"' in response.text
+
+    def test_homepage_shows_recent_photo_thumbnails(self, authenticated_client, db_session):
+        """Homepage shows thumbnail links for processed photos."""
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState
+        photo = MediaItem(sha256_hash="b" * 64, file_extension="jpg", media_type="photo")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        db_session.commit()
+
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        assert str(photo.id) in response.text
+
+    def test_homepage_shows_person_profile_pictures(self, authenticated_client, db_session):
+        """Homepage shows person links for top people."""
+        from lucos_photos_common.models import Person
+        person = Person(display_name="Alice")
+        db_session.add(person)
+        db_session.commit()
+
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        assert str(person.id) in response.text
+
+    def test_homepage_has_all_photos_link(self, authenticated_client):
+        """Homepage includes an 'All Photos' link styled as a pagination link."""
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        assert "All Photos" in response.text
+        assert "All People" in response.text
+
+    def test_homepage_nav_has_home_photos_people(self, authenticated_client):
+        """Nav includes Home, Photos, and People links."""
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        assert 'href="/"' in response.text
+        assert 'href="/photos"' in response.text
+        assert 'href="/people"' in response.text
+
+    def test_homepage_excludes_unprocessed_photos(self, authenticated_client, db_session):
+        """Photos with pending processing status must not appear on the homepage."""
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState
+        photo = MediaItem(sha256_hash="c" * 64, file_extension="jpg", media_type="photo")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))
+        db_session.commit()
+
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        # Photo count should be 0 since only pending photos exist
+        assert "0 Photos" in response.text
+
+
+# ---------------------------------------------------------------------------
+# /photos HTML page tests
+# ---------------------------------------------------------------------------
+
+class TestPhotosPageHtml:
+    def test_photos_page_requires_auth(self, client):
+        """Unauthenticated requests to GET /photos (HTML) must redirect to auth."""
+        response = client.get("/photos", headers={"Accept": "text/html"}, follow_redirects=False)
+        assert response.status_code == 302
+        assert "auth.l42.eu" in response.headers["location"]
+
+    def test_photos_page_returns_html(self, authenticated_client):
+        """GET /photos with Accept: text/html returns the photos list page."""
+        response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+        assert "lucos-navbar" in response.text
+
+    def test_photos_page_shows_photo_count(self, authenticated_client, db_session):
+        """GET /photos HTML page shows total count in heading."""
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState
+        photo = MediaItem(sha256_hash="d" * 64, file_extension="jpg", media_type="photo")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        db_session.commit()
+
+        response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert "1 Photos" in response.text
+
+    def test_photos_page_marks_photos_as_current(self, authenticated_client):
+        """The Photos nav link should be marked as current-page on /photos."""
+        response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert "current-page" in response.text
+
+    def test_photos_json_still_works(self, authenticated_client):
+        """GET /photos with Accept: application/json returns JSON."""
+        response = authenticated_client.get("/photos", headers={"Accept": "application/json"})
+        assert response.status_code == 200
+        body = response.json()
+        assert "photos" in body
+        assert "total" in body
+
+    def test_photos_html_has_vary_accept(self, authenticated_client):
+        """HTML response from /photos must include Vary: Accept."""
+        response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert response.headers.get("vary") == "Accept"
+
+    def test_photos_json_has_vary_accept(self, authenticated_client):
+        """JSON response from /photos must include Vary: Accept."""
+        response = authenticated_client.get("/photos", headers={"Accept": "application/json"})
         assert response.status_code == 200
         assert response.headers.get("vary") == "Accept"

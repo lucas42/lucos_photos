@@ -1,0 +1,38 @@
+{% extends "_base.html" %}
+
+{% block title %}Photos — Photos{% endblock %}
+
+{% block meta %}<meta name="description" content="All photos in the collection.">{% endblock %}
+
+{% block content %}
+<div class="container" id="app">
+    <h1 class="page-title">{{ total }} Photos</h1>
+
+    <div id="photo-grid" class="photo-grid">
+        {% if photos %}
+            {% for photo in photos %}
+            <a href="/photos/{{ photo.id }}" class="media-card-link">
+                <div class="media-card">
+                    <img src="{{ photo.thumbnailUrl }}" alt="Photo {{ photo.id }}" loading="lazy">
+                </div>
+            </a>
+            {% endfor %}
+        {% else %}
+            <div class="empty-state">
+                <p>No photos here yet.</p>
+            </div>
+        {% endif %}
+    </div>
+
+    {% set current_page_display = current_page_num %}
+    {% set pagination = {
+        "show": total > limit,
+        "summary": "Showing " ~ (offset + 1) ~ "–" ~ ([offset + limit, total] | min) ~ " of " ~ total,
+        "prev_url": ("/photos?offset=" ~ prev_offset ~ "&limit=" ~ limit) if prev_offset is not none else none,
+        "prev_label": "<- Page " ~ (current_page_num - 1),
+        "next_url": ("/photos?offset=" ~ next_offset ~ "&limit=" ~ limit) if next_offset is not none else none,
+        "next_label": "Page " ~ (current_page_num + 1) ~ " ->"
+    } %}
+    {% include "_pagination.html" %}
+</div>
+{% endblock %}
