@@ -3,12 +3,8 @@
 import pytest
 import httpx
 from unittest.mock import AsyncMock, patch, MagicMock
-from pathlib import Path
 
-import app.main as main_module
 import app.routers.app_release as app_release_module
-
-REAL_STATIC_DIR = Path(main_module.__file__).parent / "static"
 
 
 @pytest.fixture(autouse=True)
@@ -427,44 +423,44 @@ class TestAppPage:
         assert response.status_code == 302
         assert "auth.l42.eu" in response.headers["location"]
 
-    def test_authenticated_request_returns_200(self, authenticated_client, monkeypatch):
-        monkeypatch.setattr(main_module, "STATIC_DIR", REAL_STATIC_DIR)
+    def test_authenticated_request_returns_200(self, authenticated_client):
         response = authenticated_client.get("/app")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
-    def test_page_includes_lucos_navbar(self, authenticated_client, monkeypatch):
-        monkeypatch.setattr(main_module, "STATIC_DIR", REAL_STATIC_DIR)
+    def test_page_includes_lucos_navbar(self, authenticated_client):
         response = authenticated_client.get("/app")
         assert response.status_code == 200
         assert "lucos-navbar" in response.text
 
-    def test_page_includes_download_link_element(self, authenticated_client, monkeypatch):
-        monkeypatch.setattr(main_module, "STATIC_DIR", REAL_STATIC_DIR)
+    def test_page_includes_download_link_element(self, authenticated_client):
         response = authenticated_client.get("/app")
         assert response.status_code == 200
         assert "download-button" in response.text
 
-    def test_page_calls_api_app_latest(self, authenticated_client, monkeypatch):
-        monkeypatch.setattr(main_module, "STATIC_DIR", REAL_STATIC_DIR)
+    def test_page_calls_api_app_latest(self, authenticated_client):
         response = authenticated_client.get("/app")
         assert response.status_code == 200
         assert "/api/app/latest" in response.text
 
-    def test_page_includes_installation_instructions(self, authenticated_client, monkeypatch):
-        monkeypatch.setattr(main_module, "STATIC_DIR", REAL_STATIC_DIR)
+    def test_page_includes_installation_instructions(self, authenticated_client):
         response = authenticated_client.get("/app")
         assert response.status_code == 200
         assert "unknown sources" in response.text
         assert "Install the APK" in response.text
         assert "Grant media access" in response.text
 
+    def test_app_nav_link_has_current_page_class(self, authenticated_client):
+        response = authenticated_client.get("/app")
+        assert response.status_code == 200
+        assert 'href="/app"' in response.text
+        assert 'class="current-page"' in response.text
+
 
 class TestHomepageAppLink:
     """Verify the homepage links to the app downloads page."""
 
-    def test_homepage_links_to_app_page(self, authenticated_client, monkeypatch):
-        monkeypatch.setattr(main_module, "STATIC_DIR", REAL_STATIC_DIR)
+    def test_homepage_links_to_app_page(self, authenticated_client):
         response = authenticated_client.get("/")
         assert response.status_code == 200
         assert 'href="/app"' in response.text

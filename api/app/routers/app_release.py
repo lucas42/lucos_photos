@@ -5,14 +5,15 @@ from pathlib import Path
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.templating import Jinja2Templates
 
 from app.auth import verify_session, verify_session_or_key
 
 router = APIRouter()
 
-STATIC_DIR = Path(__file__).parent.parent / "static"
+TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 GITHUB_RELEASES_API_URL = "https://api.github.com/repos/lucas42/lucos_photos_android/releases/latest"
 GITHUB_RELEASES_LIST_URL = "https://api.github.com/repos/lucas42/lucos_photos_android/releases?per_page=10"
@@ -141,5 +142,5 @@ async def get_app_latest(_: Annotated[None, Depends(verify_session_or_key)]):
 
 
 @router.get("/app", include_in_schema=False)
-async def app_page(_: Annotated[None, Depends(verify_session)]):
-    return FileResponse(STATIC_DIR / "app.html")
+async def app_page(request: Request, _: Annotated[None, Depends(verify_session)]):
+    return templates.TemplateResponse(request, "app.html", {"current_page": "app"})
