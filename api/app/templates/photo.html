@@ -24,7 +24,7 @@
                class="photo-detail-media"></video>
         {% else %}
         <img src="{{ photo.originalUrl }}"
-             alt="Photo {{ photo.id }}"
+             alt="{{ 'Video' if photo.mediaType == 'video' else 'Photo' }}{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}"
              class="photo-detail-media" />
         {% endif %}
 

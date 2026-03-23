@@ -58,7 +58,7 @@
             {% for photo in person.photos %}
             <a href="/photos/{{ photo.id }}" class="media-card-link">
                 <div class="media-card">
-                    <img src="{{ photo.thumbnailUrl }}" alt="Photo {{ photo.id }}" loading="lazy">
+                    <img src="{{ photo.thumbnailUrl }}" alt="Photo{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}" loading="lazy">
                 </div>
             </a>
             {% endfor %}
@@ -137,6 +137,19 @@
 
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && lightbox.classList.contains('open')) closeMergePrompt();
+
+        // Focus trapping for merge prompt
+        if (e.key === 'Tab' && lightbox.classList.contains('open')) {
+            var focusable = lightbox.querySelectorAll('button');
+            if (focusable.length === 0) return;
+            var first = focusable[0];
+            var last = focusable[focusable.length - 1];
+            if (e.shiftKey) {
+                if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+            } else {
+                if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+            }
+        }
     });
 
     promptConfirm.addEventListener('click', async () => {
@@ -207,6 +220,7 @@
         existingContainer.querySelector('.merge-prompt-person-name').textContent = '…';
 
         lightbox.classList.add('open');
+        promptCancel.focus();
 
         const [currentRes, existingRes] = await Promise.all([
             fetch(`/people/${currentPersonId}`, { headers: { 'Accept': 'application/json' } }),

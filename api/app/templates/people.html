@@ -208,6 +208,19 @@
 
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && lightbox.classList.contains('open')) closeMergePrompt();
+
+        // Focus trapping for merge prompt
+        if (e.key === 'Tab' && lightbox.classList.contains('open')) {
+            var focusable = lightbox.querySelectorAll('button');
+            if (focusable.length === 0) return;
+            var first = focusable[0];
+            var last = focusable[focusable.length - 1];
+            if (e.shiftKey) {
+                if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+            } else {
+                if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+            }
+        }
     });
 
     promptConfirm.addEventListener('click', async () => {
@@ -334,6 +347,7 @@
         existingContainer.querySelector('.merge-prompt-person-name').textContent = '…';
 
         lightbox.classList.add('open');
+        promptCancel.focus();
 
         // Fetch both persons in parallel
         const [currentRes, existingRes] = await Promise.all([

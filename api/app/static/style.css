@@ -664,7 +664,7 @@ a:hover {
 /* ------------------------------------------------------------------ */
 
 .media-card-link {
-	display: contents; /* preserves grid layout — link wraps card without extra box */
+	display: block;
 	text-decoration: none;
 	color: inherit;
 }
@@ -1255,4 +1255,56 @@ a:hover {
 	body {
 		padding-bottom: 56px;
 	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Skip-to-content link                                                */
+/* ------------------------------------------------------------------ */
+
+.skip-link {
+	position: absolute;
+	top: -100%;
+	left: 1rem;
+	z-index: 10000;
+	padding: 0.75rem 1.5rem;
+	background: var(--accent-color);
+	color: var(--bg-color);
+	border-radius: 0 0 8px 8px;
+	font-weight: 600;
+	font-size: 0.9rem;
+	opacity: 1;
+	transition: top 0.15s ease;
+}
+
+.skip-link:focus {
+	top: 0;
+	color: var(--bg-color);
+	opacity: 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Focus indicators                                                    */
+/* ------------------------------------------------------------------ */
+
+:focus-visible {
+	outline: 2px solid var(--accent-color);
+	outline-offset: 2px;
+}
+
+a:focus-visible {
+	opacity: 1;
+}
+
+.media-card-link:focus-visible .media-card {
+	box-shadow: 0 0 0 3px var(--accent-color);
+}
+
+.media-card-link:focus-visible {
+	outline: none;
+}
+
+.lightbox-close:focus-visible,
+.lightbox-nav:focus-visible {
+	outline: 2px solid var(--accent-color);
+	outline-offset: 2px;
 }

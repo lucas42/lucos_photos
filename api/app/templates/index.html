@@ -107,12 +107,13 @@
         } else {
             const img = document.createElement('img');
             img.src = mediaItem.originalUrl;
-            img.alt = `Photo ${mediaItem.id}`;
+            img.alt = 'Photo';
             lightboxInner.appendChild(img);
         }
 
         lightbox.classList.add('open');
         document.body.style.overflow = 'hidden';
+        lightboxClose.focus();
     }
 
     function closeLightbox() {
@@ -185,7 +186,7 @@
         card.className = 'media-card';
 
         const img = document.createElement('img');
-        img.alt = isVideo ? `Video ${item.id}` : `Photo ${item.id}`;
+        img.alt = isVideo ? 'Video' : 'Photo';
         img.loading = 'lazy';
 
         if (isVideo) {

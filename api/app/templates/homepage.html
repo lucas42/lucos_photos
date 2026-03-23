@@ -15,7 +15,7 @@
                 {% for photo in recent_photos %}
                 <a href="/photos/{{ photo.id }}" class="media-card-link">
                     <div class="media-card">
-                        <img src="{{ photo.thumbnailUrl }}" alt="Photo {{ photo.id }}" loading="lazy">
+                        <img src="{{ photo.thumbnailUrl }}" alt="Photo{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}" loading="lazy">
                     </div>
                 </a>
                 {% endfor %}

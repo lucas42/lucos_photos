@@ -53,7 +53,7 @@
                data-media-type="{{ photo.mediaType }}"
                data-photo-id="{{ photo.id }}">
                 <div class="media-card">
-                    <img src="{{ photo.thumbnailUrl }}" alt="{{ 'Video' if photo.mediaType == 'video' else 'Photo' }} {{ photo.id }}" loading="lazy">
+                    <img src="{{ photo.thumbnailUrl }}" alt="{{ 'Video' if photo.mediaType == 'video' else 'Photo' }}{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}" loading="lazy">
                     {% if photo.mediaType == 'video' %}
                     <div class="play-overlay">
                         <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">

@@ -21,6 +21,7 @@
     let lightbox, lightboxInner, lightboxClose, lightboxPrev, lightboxNext;
     let mediaItems = [];
     let currentIndex = -1;
+    let triggerElement = null;
 
     function showMedia(index) {
         if (index < 0 || index >= mediaItems.length) return;
@@ -49,9 +50,11 @@
     }
 
     function openLightbox(index) {
+        triggerElement = document.activeElement;
         showMedia(index);
         lightbox.classList.add('open');
         document.body.style.overflow = 'hidden';
+        lightboxClose.focus();
     }
 
     function closeLightbox() {
@@ -61,6 +64,11 @@
         if (video) video.pause();
         lightboxInner.innerHTML = '';
         currentIndex = -1;
+        // Restore focus to the element that opened the lightbox
+        if (triggerElement) {
+            triggerElement.focus();
+            triggerElement = null;
+        }
     }
 
     function prevMedia() {
@@ -128,12 +136,31 @@
             nextMedia();
         });
 
-        // Keyboard
+        // Keyboard navigation and focus trapping
         document.addEventListener('keydown', function (e) {
             if (!lightbox.classList.contains('open')) return;
             if (e.key === 'Escape') closeLightbox();
             if (e.key === 'ArrowLeft') prevMedia();
             if (e.key === 'ArrowRight') nextMedia();
+
+            // Focus trapping — keep Tab within the lightbox
+            if (e.key === 'Tab') {
+                var focusable = lightbox.querySelectorAll('button:not([style*="display: none"]), video');
+                if (focusable.length === 0) return;
+                var first = focusable[0];
+                var last = focusable[focusable.length - 1];
+                if (e.shiftKey) {
+                    if (document.activeElement === first) {
+                        e.preventDefault();
+                        last.focus();
+                    }
+                } else {
+                    if (document.activeElement === last) {
+                        e.preventDefault();
+                        first.focus();
+                    }
+                }
+            }
         });
     }
 
