@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlencode
 
 import mimeparse
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, status
@@ -426,22 +427,25 @@ def list_photos(
         query = query.filter(MediaItem.taken_at < parsed_to_end)
 
     # Filter by media type (photo or video)
-    if media_type and media_type in ("photo", "video"):
+    if media_type:
+        if media_type not in ("photo", "video"):
+            raise HTTPException(status_code=422, detail="Invalid media_type, expected 'photo' or 'video'")
         query = query.filter(MediaItem.media_type == media_type)
 
     photos = query.order_by(*order_cols).offset(offset).limit(limit).all()
     total = query.count()
 
-    # Build filter params string for pagination URLs
-    filter_params = ""
+    # Build URL-encoded filter params string for pagination URLs
+    active_filters = {}
     if person_id:
-        filter_params += f"&person_id={person_id}"
+        active_filters["person_id"] = person_id
     if date_from:
-        filter_params += f"&date_from={date_from}"
+        active_filters["date_from"] = date_from
     if date_to:
-        filter_params += f"&date_to={date_to}"
+        active_filters["date_to"] = date_to
     if media_type:
-        filter_params += f"&media_type={media_type}"
+        active_filters["media_type"] = media_type
+    filter_params = ("&" + urlencode(active_filters)) if active_filters else ""
 
     accept_header = request.headers.get("accept", "*/*")
     best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)

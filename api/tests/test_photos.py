@@ -264,14 +264,9 @@ class TestListPhotosFiltering:
         assert data["total"] == 1
         assert data["photos"][0]["id"] == str(video.id)
 
-    def test_filter_by_media_type_ignores_invalid_value(self, authenticated_client, db_session):
-        p = make_photo(db_session, "any")
-        make_processing_status(db_session, p, ProcessingState.complete)
-        db_session.commit()
-
+    def test_filter_by_media_type_rejects_invalid_value(self, authenticated_client):
         response = authenticated_client.get("/photos?media_type=gif")
-        assert response.status_code == 200
-        assert response.json()["total"] == 1
+        assert response.status_code == 422
 
     def test_filter_by_date_from(self, authenticated_client, db_session):
         from datetime import datetime, timezone
