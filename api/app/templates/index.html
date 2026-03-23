@@ -30,6 +30,7 @@
     const lightbox = document.getElementById('lightbox');
     const lightboxInner = document.getElementById('lightbox-inner');
     const lightboxClose = document.getElementById('lightbox-close');
+    let triggerElement = null;
 
     const PAGE_SIZE = 200;
 
@@ -95,6 +96,7 @@
     // ------------------------------------------------------------------
 
     function openLightbox(mediaItem) {
+        triggerElement = document.activeElement;
         lightboxInner.innerHTML = '';
 
         if (mediaItem.mediaType === 'video') {
@@ -107,12 +109,13 @@
         } else {
             const img = document.createElement('img');
             img.src = mediaItem.originalUrl;
-            img.alt = `Photo ${mediaItem.id}`;
+            img.alt = 'Photo';
             lightboxInner.appendChild(img);
         }
 
         lightbox.classList.add('open');
         document.body.style.overflow = 'hidden';
+        lightboxClose.focus();
     }
 
     function closeLightbox() {
@@ -122,6 +125,7 @@
         const video = lightboxInner.querySelector('video');
         if (video) video.pause();
         lightboxInner.innerHTML = '';
+        if (triggerElement) { triggerElement.focus(); triggerElement = null; }
     }
 
     lightboxClose.addEventListener('click', closeLightbox);
@@ -131,6 +135,19 @@
     });
 
     document.addEventListener('keydown', (e) => {
+        // Focus trapping
+        if (e.key === 'Tab' && lightbox.classList.contains('open')) {
+            const focusable = lightbox.querySelectorAll('button');
+            if (focusable.length > 0) {
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (e.shiftKey) {
+                    if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+                } else {
+                    if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+                }
+            }
+        }
         if (e.key === 'Escape' && lightbox.classList.contains('open')) {
             closeLightbox();
         }
@@ -185,7 +202,7 @@
         card.className = 'media-card';
 
         const img = document.createElement('img');
-        img.alt = isVideo ? `Video ${item.id}` : `Photo ${item.id}`;
+        img.alt = isVideo ? 'Video' : 'Photo';
         img.loading = 'lazy';
 
         if (isVideo) {

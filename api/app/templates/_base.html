@@ -11,6 +11,7 @@
 </head>
 
 <body>
+    <a href="#main-content" class="skip-link">Skip to content</a>
     <lucos-navbar font="'Pinyon', cursive" title-padding="4px">Photos</lucos-navbar>
     <nav class="site-nav" aria-label="Site navigation">
         <a href="/" {% if current_page == 'home' %}class="current-page"{% endif %}>Home</a>
@@ -24,7 +25,7 @@
         <div class="glow-ball glow-ball-2"></div>
     </div>
 
-    <main>
+    <main id="main-content">
         {% block content %}{% endblock %}
     </main>
 
