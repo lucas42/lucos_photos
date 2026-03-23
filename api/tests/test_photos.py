@@ -205,6 +205,187 @@ class TestListPhotos:
 
 
 # ---------------------------------------------------------------------------
+# GET /photos — filtering
+# ---------------------------------------------------------------------------
+
+class TestListPhotosFiltering:
+    def test_filter_by_person(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice")
+        p1 = make_photo(db_session, "tagged")
+        make_processing_status(db_session, p1, ProcessingState.complete)
+        pp = PhotoPerson(photo_id=p1.id, person_id=person.id)
+        db_session.add(pp)
+
+        p2 = make_photo(db_session, "untagged")
+        make_processing_status(db_session, p2, ProcessingState.complete)
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos?person_id={person.id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["photos"][0]["id"] == str(p1.id)
+
+    def test_filter_by_person_invalid_uuid(self, authenticated_client):
+        response = authenticated_client.get("/photos?person_id=not-a-uuid")
+        assert response.status_code == 422
+
+    def test_filter_by_media_type_photo(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "img")
+        photo.media_type = "photo"
+        make_processing_status(db_session, photo, ProcessingState.complete)
+
+        video = make_photo(db_session, "vid")
+        video.media_type = "video"
+        video.file_extension = "mp4"
+        make_processing_status(db_session, video, ProcessingState.complete)
+        db_session.commit()
+
+        response = authenticated_client.get("/photos?media_type=photo")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["photos"][0]["id"] == str(photo.id)
+
+    def test_filter_by_media_type_video(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "img2")
+        photo.media_type = "photo"
+        make_processing_status(db_session, photo, ProcessingState.complete)
+
+        video = make_photo(db_session, "vid2")
+        video.media_type = "video"
+        video.file_extension = "mp4"
+        make_processing_status(db_session, video, ProcessingState.complete)
+        db_session.commit()
+
+        response = authenticated_client.get("/photos?media_type=video")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["photos"][0]["id"] == str(video.id)
+
+    def test_filter_by_media_type_ignores_invalid_value(self, authenticated_client, db_session):
+        p = make_photo(db_session, "any")
+        make_processing_status(db_session, p, ProcessingState.complete)
+        db_session.commit()
+
+        response = authenticated_client.get("/photos?media_type=gif")
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+
+    def test_filter_by_date_from(self, authenticated_client, db_session):
+        from datetime import datetime, timezone
+        old = make_photo(db_session, "old")
+        old.taken_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        make_processing_status(db_session, old, ProcessingState.complete)
+
+        new = make_photo(db_session, "new")
+        new.taken_at = datetime(2024, 6, 15, tzinfo=timezone.utc)
+        make_processing_status(db_session, new, ProcessingState.complete)
+        db_session.commit()
+
+        response = authenticated_client.get("/photos?date_from=2023-01-01")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["photos"][0]["id"] == str(new.id)
+
+    def test_filter_by_date_to(self, authenticated_client, db_session):
+        from datetime import datetime, timezone
+        old = make_photo(db_session, "old2")
+        old.taken_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        make_processing_status(db_session, old, ProcessingState.complete)
+
+        new = make_photo(db_session, "new2")
+        new.taken_at = datetime(2024, 6, 15, tzinfo=timezone.utc)
+        make_processing_status(db_session, new, ProcessingState.complete)
+        db_session.commit()
+
+        response = authenticated_client.get("/photos?date_to=2022-12-31")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["photos"][0]["id"] == str(old.id)
+
+    def test_filter_by_date_range(self, authenticated_client, db_session):
+        from datetime import datetime, timezone
+        old = make_photo(db_session, "old3")
+        old.taken_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        make_processing_status(db_session, old, ProcessingState.complete)
+
+        mid = make_photo(db_session, "mid3")
+        mid.taken_at = datetime(2022, 6, 15, tzinfo=timezone.utc)
+        make_processing_status(db_session, mid, ProcessingState.complete)
+
+        new = make_photo(db_session, "new3")
+        new.taken_at = datetime(2024, 6, 15, tzinfo=timezone.utc)
+        make_processing_status(db_session, new, ProcessingState.complete)
+        db_session.commit()
+
+        response = authenticated_client.get("/photos?date_from=2021-01-01&date_to=2023-12-31")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["photos"][0]["id"] == str(mid.id)
+
+    def test_filter_by_date_invalid_format(self, authenticated_client):
+        response = authenticated_client.get("/photos?date_from=not-a-date")
+        assert response.status_code == 422
+
+    def test_combined_filters(self, authenticated_client, db_session):
+        from datetime import datetime, timezone
+        person = make_person(db_session, "Bob")
+
+        # Photo matching both filters
+        match = make_photo(db_session, "match")
+        match.taken_at = datetime(2023, 3, 1, tzinfo=timezone.utc)
+        match.media_type = "photo"
+        make_processing_status(db_session, match, ProcessingState.complete)
+        db_session.add(PhotoPerson(photo_id=match.id, person_id=person.id))
+
+        # Photo: right person, wrong date
+        wrong_date = make_photo(db_session, "wrongdate")
+        wrong_date.taken_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        wrong_date.media_type = "photo"
+        make_processing_status(db_session, wrong_date, ProcessingState.complete)
+        db_session.add(PhotoPerson(photo_id=wrong_date.id, person_id=person.id))
+
+        # Photo: right date, wrong person
+        other = make_photo(db_session, "other")
+        other.taken_at = datetime(2023, 3, 1, tzinfo=timezone.utc)
+        other.media_type = "photo"
+        make_processing_status(db_session, other, ProcessingState.complete)
+
+        db_session.commit()
+
+        response = authenticated_client.get(
+            f"/photos?person_id={person.id}&date_from=2022-01-01&date_to=2024-01-01"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["photos"][0]["id"] == str(match.id)
+
+    def test_pagination_with_filters(self, authenticated_client, db_session):
+        from datetime import datetime, timezone
+        for i in range(5):
+            p = make_photo(db_session, f"recent{i}")
+            p.taken_at = datetime(2023, 1, i + 1, tzinfo=timezone.utc)
+            make_processing_status(db_session, p, ProcessingState.complete)
+
+        old = make_photo(db_session, "old_one")
+        old.taken_at = datetime(2019, 1, 1, tzinfo=timezone.utc)
+        make_processing_status(db_session, old, ProcessingState.complete)
+        db_session.commit()
+
+        response = authenticated_client.get("/photos?date_from=2022-01-01&limit=3")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 5
+        assert len(data["photos"]) == 3
+
+
+# ---------------------------------------------------------------------------
 # GET /photos/{id}
 # ---------------------------------------------------------------------------
 

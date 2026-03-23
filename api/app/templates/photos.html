@@ -8,6 +8,43 @@
 <div class="container" id="app">
     <h1 class="page-title">{{ total }} Photos</h1>
 
+    <details class="filter-bar" {% if person_id or date_from or date_to or media_type %}open{% endif %}>
+        <summary class="filter-toggle">Filters{% if person_id or date_from or date_to or media_type %} (active){% endif %}</summary>
+        <form class="filter-form" method="get" action="/photos">
+            <div class="filter-fields">
+                <label class="filter-field">
+                    <span class="filter-label">Person</span>
+                    <select name="person_id" class="filter-input">
+                        <option value="">All people</option>
+                        {% for p in people %}
+                        <option value="{{ p.id }}" {% if person_id == p.id %}selected{% endif %}>{{ p.name or 'Unknown' }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="filter-field">
+                    <span class="filter-label">From</span>
+                    <input type="date" name="date_from" value="{{ date_from }}" class="filter-input">
+                </label>
+                <label class="filter-field">
+                    <span class="filter-label">To</span>
+                    <input type="date" name="date_to" value="{{ date_to }}" class="filter-input">
+                </label>
+                <label class="filter-field">
+                    <span class="filter-label">Type</span>
+                    <select name="media_type" class="filter-input">
+                        <option value="">All</option>
+                        <option value="photo" {% if media_type == 'photo' %}selected{% endif %}>Photos</option>
+                        <option value="video" {% if media_type == 'video' %}selected{% endif %}>Videos</option>
+                    </select>
+                </label>
+            </div>
+            <div class="filter-actions">
+                <button type="submit" class="btn filter-apply">Apply</button>
+                <a href="/photos" class="btn filter-clear">Clear</a>
+            </div>
+        </form>
+    </details>
+
     <div id="photo-grid" class="photo-grid">
         {% if photos %}
             {% for photo in photos %}
@@ -38,9 +75,9 @@
     {% set pagination = {
         "show": total > limit,
         "summary": "Showing " ~ (offset + 1) ~ "–" ~ ([offset + limit, total] | min) ~ " of " ~ total,
-        "prev_url": ("/photos?offset=" ~ prev_offset ~ "&limit=" ~ limit) if prev_offset is not none else none,
+        "prev_url": ("/photos?offset=" ~ prev_offset ~ "&limit=" ~ limit ~ filter_params) if prev_offset is not none else none,
         "prev_label": "<- Page " ~ (current_page_num - 1),
-        "next_url": ("/photos?offset=" ~ next_offset ~ "&limit=" ~ limit) if next_offset is not none else none,
+        "next_url": ("/photos?offset=" ~ next_offset ~ "&limit=" ~ limit ~ filter_params) if next_offset is not none else none,
         "next_label": "Page " ~ (current_page_num + 1) ~ " ->"
     } %}
     {% include "_pagination.html" %}

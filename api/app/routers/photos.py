@@ -6,7 +6,7 @@ import re
 import shutil
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -380,6 +380,10 @@ def list_photos(
     _: Annotated[None, Depends(verify_session)],
     limit: int = 100,
     offset: int = 0,
+    person_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    media_type: str | None = None,
     db: Session = Depends(get_db),
 ):
     # Order by taken_at (most recent first), falling back to uploaded_at for photos
@@ -389,14 +393,55 @@ def list_photos(
     # Only include media items that have been fully processed (thumbnail generated,
     # face detection complete). Items with pending/processing/failed status — or no
     # status row at all — are hidden until the worker finishes with them.
-    processed_filter = (
+    query = (
         db.query(MediaItem)
         .join(ProcessingStatus, MediaItem.id == ProcessingStatus.photo_id)
         .filter(ProcessingStatus.state == ProcessingState.complete)
     )
 
-    photos = processed_filter.order_by(*order_cols).offset(offset).limit(limit).all()
-    total = processed_filter.count()
+    # Filter by person: find photos tagged with this person via PhotoPerson
+    if person_id:
+        try:
+            person_uuid = uuid.UUID(person_id)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid person_id")
+        query = query.join(PhotoPerson, MediaItem.id == PhotoPerson.photo_id).filter(
+            PhotoPerson.person_id == person_uuid
+        )
+
+    # Filter by date range (on taken_at, ISO date strings YYYY-MM-DD)
+    if date_from:
+        try:
+            parsed_from = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid date_from format, expected YYYY-MM-DD")
+        query = query.filter(MediaItem.taken_at >= parsed_from)
+
+    if date_to:
+        try:
+            parsed_to = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            parsed_to_end = parsed_to + timedelta(days=1)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid date_to format, expected YYYY-MM-DD")
+        query = query.filter(MediaItem.taken_at < parsed_to_end)
+
+    # Filter by media type (photo or video)
+    if media_type and media_type in ("photo", "video"):
+        query = query.filter(MediaItem.media_type == media_type)
+
+    photos = query.order_by(*order_cols).offset(offset).limit(limit).all()
+    total = query.count()
+
+    # Build filter params string for pagination URLs
+    filter_params = ""
+    if person_id:
+        filter_params += f"&person_id={person_id}"
+    if date_from:
+        filter_params += f"&date_from={date_from}"
+    if date_to:
+        filter_params += f"&date_to={date_to}"
+    if media_type:
+        filter_params += f"&media_type={media_type}"
 
     accept_header = request.headers.get("accept", "*/*")
     best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
@@ -404,6 +449,16 @@ def list_photos(
         prev_offset = max(0, offset - limit) if offset > 0 else None
         next_offset = offset + limit if offset + limit < total else None
         current_page_num = (offset // limit) + 1
+
+        # Fetch people list for the filter dropdown
+        base_person_filter = Person.is_background == False  # noqa: E712
+        people = (
+            db.query(Person)
+            .filter(base_person_filter)
+            .order_by(Person.display_name.asc().nullslast())
+            .all()
+        )
+
         return templates.TemplateResponse(request, "photos.html", {
             "photos": [photo_to_dict(p) for p in photos],
             "total": total,
@@ -413,6 +468,12 @@ def list_photos(
             "next_offset": next_offset,
             "current_page_num": current_page_num,
             "current_page": "photos",
+            "filter_params": filter_params,
+            "person_id": person_id or "",
+            "date_from": date_from or "",
+            "date_to": date_to or "",
+            "media_type": media_type or "",
+            "people": [{"id": str(p.id), "name": p.display_name} for p in people],
         }, headers={"Vary": "Accept"})
 
     return JSONResponse(content={
