@@ -192,15 +192,13 @@ class TestPhotoNavigation:
         return photo
 
     def test_single_photo_has_no_nav_links(self, authenticated_client, db_session):
-        """A single photo should have disabled prev and next."""
+        """A single photo should have null prev and next IDs."""
         photo = self._make_processed_photo(db_session, "a")
-        response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "text/html"})
+        response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "application/json"})
         assert response.status_code == 200
-        assert "photo-nav" in response.text
-        assert "photo-nav-disabled" in response.text
-        # No active links
-        assert f'href="/photos/' not in response.text.split("photo-nav")[1].split("photo-detail")[0] or \
-               response.text.count("photo-nav-disabled") == 2
+        data = response.json()
+        assert data["prevPhotoId"] is None
+        assert data["nextPhotoId"] is None
 
     def test_nav_links_with_taken_at_ordering(self, authenticated_client, db_session):
         """Photos ordered by taken_at DESC should have correct prev/next links."""

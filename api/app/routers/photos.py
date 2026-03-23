@@ -96,16 +96,12 @@ def _get_adjacent_photo_ids(photo: MediaItem, db: Session) -> tuple[str | None, 
     # Use a case expression to handle NULLS LAST portably (works in both Postgres and SQLite).
     # has_taken_at = 0 when taken_at is NOT NULL (sorts first), 1 when NULL (sorts last).
     has_taken_at = case((MediaItem.taken_at.isnot(None), 0), else_=1)
-    current_has_taken_at = 0 if photo.taken_at is not None else 1
 
     # "Previous" photo (newer — sorts before current in DESC order).
-    # In DESC order, "before" means: either has a higher sort key, or same sort key but
-    # different tiebreak. We need photos where:
+    # Photos that sort BEFORE current in the DESC ordering (i.e., are "newer"):
     #   (has_taken_at < current) OR
     #   (has_taken_at == current AND taken_at > current.taken_at) OR
-    #   (has_taken_at == current AND taken_at == current.taken_at AND uploaded_at > current.uploaded_at) OR
-    #   (has_taken_at == current AND taken_at == current.taken_at AND uploaded_at == current.uploaded_at AND id > current.id)
-    # Simplified: photos that sort BEFORE current in the DESC ordering (i.e., are "newer").
+    #   (has_taken_at == current AND taken_at == current.taken_at AND uploaded_at > current.uploaded_at)
     prev_filters = []
     if photo.taken_at is not None:
         # Current photo has taken_at: previous is anything with a later taken_at,
