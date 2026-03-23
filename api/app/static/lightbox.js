@@ -40,7 +40,7 @@
         } else {
             const img = document.createElement('img');
             img.src = item.originalUrl;
-            img.alt = 'Photo ' + (item.id || (index + 1));
+            img.alt = (item.mediaType === 'video' ? 'Video' : 'Photo');
             lightboxInner.appendChild(img);
         }
 
@@ -145,7 +145,7 @@
 
             // Focus trapping — keep Tab within the lightbox
             if (e.key === 'Tab') {
-                var focusable = lightbox.querySelectorAll('button:not([style*="display: none"]), video');
+                var focusable = lightbox.querySelectorAll('button:not([style*="display: none"])');
                 if (focusable.length === 0) return;
                 var first = focusable[0];
                 var last = focusable[focusable.length - 1];
