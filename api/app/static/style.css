@@ -900,3 +900,103 @@ a:hover {
 	font-size: 0.85rem;
 	color: #f87171;
 }
+
+/* ------------------------------------------------------------------ */
+/* People grid (homepage)                                              */
+/* ------------------------------------------------------------------ */
+
+.people-grid {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 1rem;
+}
+
+.people-grid .photo-person-link {
+	display: block;
+}
+
+/* ------------------------------------------------------------------ */
+/* Buttons                                                             */
+/* ------------------------------------------------------------------ */
+
+.btn {
+	display: inline-block;
+	padding: 0.5rem 1.25rem;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	border-radius: 8px;
+	background: var(--card-bg);
+	color: var(--text-color);
+	font-size: 0.9rem;
+	font-weight: 500;
+	cursor: pointer;
+	transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn:hover {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: rgba(255, 255, 255, 0.4);
+}
+
+.btn-danger {
+	border-color: #f87171;
+	color: #f87171;
+}
+
+.btn-danger:hover {
+	background: rgba(248, 113, 113, 0.15);
+	border-color: #f87171;
+	color: #fca5a5;
+}
+
+/* ------------------------------------------------------------------ */
+/* Photo detail: people list                                           */
+/* ------------------------------------------------------------------ */
+
+.photo-people-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+}
+
+.photo-person {
+	display: inline-flex;
+}
+
+.photo-person-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	text-decoration: none;
+	color: var(--text-color);
+	opacity: 1;
+	font-size: 0.9rem;
+}
+
+.photo-person-link:hover {
+	color: var(--accent-color);
+}
+
+.photo-person-link .person-profile-picture {
+	width: 32px;
+	height: 32px;
+}
+
+.photo-person-link .person-profile-picture-placeholder {
+	width: 32px;
+	height: 32px;
+}
+
+.photo-person-name {
+	white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ */
+/* Photo detail: actions                                               */
+/* ------------------------------------------------------------------ */
+
+.photo-actions {
+	margin-top: 1rem;
+}
