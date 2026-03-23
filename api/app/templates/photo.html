@@ -5,6 +5,19 @@
 {% block content %}
 <div class="container" id="app">
     <div id="photo-view" class="photo-view">
+        <nav class="photo-nav" aria-label="Photo navigation">
+            {% if photo.prevPhotoId %}
+            <a href="/photos/{{ photo.prevPhotoId }}" class="photo-nav-link photo-nav-prev" aria-label="Previous photo">&larr; Prev</a>
+            {% else %}
+            <span class="photo-nav-link photo-nav-disabled" aria-disabled="true">&larr; Prev</span>
+            {% endif %}
+            {% if photo.nextPhotoId %}
+            <a href="/photos/{{ photo.nextPhotoId }}" class="photo-nav-link photo-nav-next" aria-label="Next photo">Next &rarr;</a>
+            {% else %}
+            <span class="photo-nav-link photo-nav-disabled" aria-disabled="true">Next &rarr;</span>
+            {% endif %}
+        </nav>
+
         {% if photo.mediaType == 'video' %}
         <video src="{{ photo.originalUrl }}"
                controls preload="metadata"
@@ -78,6 +91,20 @@
         } else {
             alert('Failed to delete photo. Please try again.');
         }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        {% if photo.prevPhotoId %}
+        if (e.key === 'ArrowLeft') {
+            window.location.href = '/photos/{{ photo.prevPhotoId }}';
+        }
+        {% endif %}
+        {% if photo.nextPhotoId %}
+        if (e.key === 'ArrowRight') {
+            window.location.href = '/photos/{{ photo.nextPhotoId }}';
+        }
+        {% endif %}
     });
 </script>
 {% endblock %}

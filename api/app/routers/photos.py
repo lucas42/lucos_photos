@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFi
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse, Response
 from fastapi.templating import Jinja2Templates
 from PIL import Image
+from sqlalchemy import case, or_, and_
 from sqlalchemy.orm import Session
 
 from app.auth import verify_key, verify_session
@@ -74,6 +75,85 @@ def _get_photo_or_404(photo_id: str, db: Session) -> MediaItem:
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
     return photo
+
+
+def _get_adjacent_photo_ids(photo: MediaItem, db: Session) -> tuple[str | None, str | None]:
+    """Return (prev_id, next_id) for the given photo in the gallery ordering.
+
+    The gallery is ordered by taken_at DESC NULLS LAST, uploaded_at DESC.
+    "Previous" means the photo that appears earlier in this order (newer).
+    "Next" means the photo that appears later in this order (older).
+    Only fully processed photos are considered.
+    """
+    # Base query: only processed photos, excluding the current one
+    base = (
+        db.query(MediaItem.id)
+        .join(ProcessingStatus, MediaItem.id == ProcessingStatus.photo_id)
+        .filter(ProcessingStatus.state == ProcessingState.complete)
+        .filter(MediaItem.id != photo.id)
+    )
+
+    # Use a case expression to handle NULLS LAST portably (works in both Postgres and SQLite).
+    # has_taken_at = 0 when taken_at is NOT NULL (sorts first), 1 when NULL (sorts last).
+    has_taken_at = case((MediaItem.taken_at.isnot(None), 0), else_=1)
+
+    # "Previous" photo (newer — sorts before current in DESC order).
+    # Photos that sort BEFORE current in the DESC ordering (i.e., are "newer"):
+    #   (has_taken_at < current) OR
+    #   (has_taken_at == current AND taken_at > current.taken_at) OR
+    #   (has_taken_at == current AND taken_at == current.taken_at AND uploaded_at > current.uploaded_at)
+    prev_filters = []
+    if photo.taken_at is not None:
+        # Current photo has taken_at: previous is anything with a later taken_at,
+        # or same taken_at but later uploaded_at
+        prev_filters.append(
+            and_(has_taken_at == 0, MediaItem.taken_at > photo.taken_at)
+        )
+        prev_filters.append(
+            and_(has_taken_at == 0, MediaItem.taken_at == photo.taken_at, MediaItem.uploaded_at > photo.uploaded_at)
+        )
+    else:
+        # Current photo has NULL taken_at: previous could be any photo WITH taken_at,
+        # or a NULL taken_at photo with later uploaded_at
+        prev_filters.append(has_taken_at == 0)
+        prev_filters.append(
+            and_(has_taken_at == 1, MediaItem.uploaded_at > photo.uploaded_at)
+        )
+
+    prev_photo = (
+        base.filter(or_(*prev_filters))
+        .order_by(has_taken_at.desc(), MediaItem.taken_at.asc().nullslast(), MediaItem.uploaded_at.asc())
+        .limit(1)
+        .first()
+    )
+
+    # "Next" photo (older — sorts after current in DESC order).
+    next_filters = []
+    if photo.taken_at is not None:
+        next_filters.append(
+            and_(has_taken_at == 0, MediaItem.taken_at < photo.taken_at)
+        )
+        next_filters.append(
+            and_(has_taken_at == 0, MediaItem.taken_at == photo.taken_at, MediaItem.uploaded_at < photo.uploaded_at)
+        )
+        # Any photo with NULL taken_at sorts after
+        next_filters.append(has_taken_at == 1)
+    else:
+        # Current photo has NULL taken_at: next is a NULL taken_at photo with earlier uploaded_at
+        next_filters.append(
+            and_(has_taken_at == 1, MediaItem.uploaded_at < photo.uploaded_at)
+        )
+
+    next_photo = (
+        base.filter(or_(*next_filters))
+        .order_by(has_taken_at.asc(), MediaItem.taken_at.desc().nullslast(), MediaItem.uploaded_at.desc())
+        .limit(1)
+        .first()
+    )
+
+    prev_id = str(prev_photo[0]) if prev_photo else None
+    next_id = str(next_photo[0]) if next_photo else None
+    return prev_id, next_id
 
 
 def _serve_file_with_range_support(
@@ -373,6 +453,13 @@ def get_photo(
         .all()
     )
     data["people"] = [person_to_dict(p) for p in people]
+
+    # Query adjacent photos for prev/next navigation.
+    # Uses the same ordering as list_photos: taken_at DESC NULLS LAST, uploaded_at DESC.
+    # "Previous" = newer (earlier in DESC order), "Next" = older (later in DESC order).
+    prev_photo_id, next_photo_id = _get_adjacent_photo_ids(photo, db)
+    data["prevPhotoId"] = prev_photo_id
+    data["nextPhotoId"] = next_photo_id
 
     # Content negotiation: use python-mimeparse to pick between HTML and JSON
     # following the HTTP standard (quality values, specificity rules, etc.).

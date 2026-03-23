@@ -997,6 +997,40 @@ a:hover {
 /* Photo detail: actions                                               */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Photo detail: prev/next navigation                                  */
+/* ------------------------------------------------------------------ */
+
+.photo-nav {
+	display: flex;
+	justify-content: space-between;
+	width: 100%;
+	max-width: 480px;
+}
+
+.photo-nav-link {
+	display: inline-block;
+	padding: 0.5rem 1.25rem;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	border-radius: 8px;
+	background: var(--card-bg);
+	color: var(--text-color);
+	font-size: 0.9rem;
+	font-weight: 500;
+	text-decoration: none;
+	transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.photo-nav-link:hover:not(.photo-nav-disabled) {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: rgba(255, 255, 255, 0.4);
+}
+
+.photo-nav-disabled {
+	opacity: 0.3;
+	cursor: default;
+}
+
 .photo-actions {
 	margin-top: 1rem;
 }
