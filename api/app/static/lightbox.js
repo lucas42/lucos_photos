@@ -1,12 +1,11 @@
 /**
- * Shared lightbox module for lucos_photos.
+ * Lightbox module for the SSR photos page in lucos_photos.
  *
  * Usage:
  *   1. Include the lightbox HTML in your page (see lightbox markup below).
  *   2. Call initLightbox() after the DOM is ready.
- *   3. For SSR pages: add data-original-url and data-media-type attributes
- *      to each .media-card-link element — the lightbox auto-binds to them.
- *   4. For JS-driven pages: call openLightbox(index) directly.
+ *   3. Add data-original-url and data-media-type attributes to each
+ *      .media-card-link element — the lightbox auto-binds to them.
  *
  * Lightbox HTML (add inside your template):
  *   <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Media viewer">
