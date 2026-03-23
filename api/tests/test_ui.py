@@ -529,3 +529,48 @@ class TestPhotosPageHtml:
         response = authenticated_client.get("/photos", headers={"Accept": "application/json"})
         assert response.status_code == 200
         assert response.headers.get("vary") == "Accept"
+
+    def test_photos_page_includes_lightbox_markup(self, authenticated_client):
+        """The /photos page must include lightbox overlay HTML for the photo viewer."""
+        response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'id="lightbox"' in response.text
+        assert 'id="lightbox-close"' in response.text
+        assert 'id="lightbox-prev"' in response.text
+        assert 'id="lightbox-next"' in response.text
+
+    def test_photos_page_includes_lightbox_script(self, authenticated_client):
+        """The /photos page must include the shared lightbox.js script."""
+        response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'src="/lightbox.js"' in response.text
+        assert "initLightbox()" in response.text
+
+    def test_photos_page_cards_have_lightbox_data_attrs(self, authenticated_client, db_session):
+        """Photo cards must include data attributes for the lightbox to use."""
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState
+        photo = MediaItem(sha256_hash="lb" * 32, file_extension="jpg", media_type="photo")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        db_session.commit()
+
+        response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'data-original-url=' in response.text
+        assert 'data-media-type="photo"' in response.text
+        assert f'data-photo-id="{photo.id}"' in response.text
+
+    def test_photos_page_video_has_play_overlay(self, authenticated_client, db_session):
+        """Video items in the photo grid must show a play overlay icon."""
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState
+        video = MediaItem(sha256_hash="vd" * 32, file_extension="mp4", media_type="video")
+        db_session.add(video)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=video.id, state=ProcessingState.complete))
+        db_session.commit()
+
+        response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'data-media-type="video"' in response.text
+        assert 'class="play-overlay"' in response.text

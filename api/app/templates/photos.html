@@ -11,9 +11,19 @@
     <div id="photo-grid" class="photo-grid">
         {% if photos %}
             {% for photo in photos %}
-            <a href="/photos/{{ photo.id }}" class="media-card-link">
+            <a href="/photos/{{ photo.id }}" class="media-card-link"
+               data-original-url="{{ photo.originalUrl }}"
+               data-media-type="{{ photo.mediaType }}"
+               data-photo-id="{{ photo.id }}">
                 <div class="media-card">
-                    <img src="{{ photo.thumbnailUrl }}" alt="Photo {{ photo.id }}" loading="lazy">
+                    <img src="{{ photo.thumbnailUrl }}" alt="{{ 'Video' if photo.mediaType == 'video' else 'Photo' }} {{ photo.id }}" loading="lazy">
+                    {% if photo.mediaType == 'video' %}
+                    <div class="play-overlay">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                            <path d="M8 5v14l11-7z"/>
+                        </svg>
+                    </div>
+                    {% endif %}
                 </div>
             </a>
             {% endfor %}
@@ -35,4 +45,15 @@
     } %}
     {% include "_pagination.html" %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Media viewer">
+    <button class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
+    <button class="lightbox-nav lightbox-prev" id="lightbox-prev" aria-label="Previous">&lsaquo;</button>
+    <button class="lightbox-nav lightbox-next" id="lightbox-next" aria-label="Next">&rsaquo;</button>
+    <div class="lightbox-inner" id="lightbox-inner"></div>
+</div>
+<script src="/lightbox.js"></script>
+<script>initLightbox();</script>
 {% endblock %}
