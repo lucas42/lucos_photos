@@ -176,6 +176,115 @@ class TestPhotoDetailHtml:
 
 
 # ---------------------------------------------------------------------------
+# Photo detail: prev/next navigation
+# ---------------------------------------------------------------------------
+
+class TestPhotoNavigation:
+    def _make_processed_photo(self, db_session, sha_char, taken_at=None):
+        """Helper to create a processed photo with optional taken_at."""
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState
+        from datetime import datetime, timezone
+        photo = MediaItem(sha256_hash=sha_char * 64, file_extension="jpg", media_type="photo", taken_at=taken_at)
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        db_session.commit()
+        return photo
+
+    def test_single_photo_has_no_nav_links(self, authenticated_client, db_session):
+        """A single photo should have disabled prev and next."""
+        photo = self._make_processed_photo(db_session, "a")
+        response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert "photo-nav" in response.text
+        assert "photo-nav-disabled" in response.text
+        # No active links
+        assert f'href="/photos/' not in response.text.split("photo-nav")[1].split("photo-detail")[0] or \
+               response.text.count("photo-nav-disabled") == 2
+
+    def test_nav_links_with_taken_at_ordering(self, authenticated_client, db_session):
+        """Photos ordered by taken_at DESC should have correct prev/next links."""
+        from datetime import datetime, timezone
+        older = self._make_processed_photo(db_session, "a", taken_at=datetime(2024, 1, 1, tzinfo=timezone.utc))
+        middle = self._make_processed_photo(db_session, "b", taken_at=datetime(2024, 6, 1, tzinfo=timezone.utc))
+        newer = self._make_processed_photo(db_session, "c", taken_at=datetime(2024, 12, 1, tzinfo=timezone.utc))
+
+        # Middle photo should link to newer (prev) and older (next)
+        response = authenticated_client.get(f"/photos/{middle.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert str(newer.id) in response.text  # prev link
+        assert str(older.id) in response.text  # next link
+
+    def test_first_photo_has_no_prev(self, authenticated_client, db_session):
+        """The newest photo should have no prev link."""
+        from datetime import datetime, timezone
+        older = self._make_processed_photo(db_session, "a", taken_at=datetime(2024, 1, 1, tzinfo=timezone.utc))
+        newer = self._make_processed_photo(db_session, "b", taken_at=datetime(2024, 12, 1, tzinfo=timezone.utc))
+
+        response = authenticated_client.get(f"/photos/{newer.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        # Should have next (older) but prev should be disabled
+        assert str(older.id) in response.text
+        assert "photo-nav-disabled" in response.text
+
+    def test_last_photo_has_no_next(self, authenticated_client, db_session):
+        """The oldest photo should have no next link."""
+        from datetime import datetime, timezone
+        older = self._make_processed_photo(db_session, "a", taken_at=datetime(2024, 1, 1, tzinfo=timezone.utc))
+        newer = self._make_processed_photo(db_session, "b", taken_at=datetime(2024, 12, 1, tzinfo=timezone.utc))
+
+        response = authenticated_client.get(f"/photos/{older.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        # Should have prev (newer) but next should be disabled
+        assert str(newer.id) in response.text
+        assert "photo-nav-disabled" in response.text
+
+    def test_json_response_includes_nav_ids(self, authenticated_client, db_session):
+        """JSON response should include prevPhotoId and nextPhotoId."""
+        from datetime import datetime, timezone
+        older = self._make_processed_photo(db_session, "a", taken_at=datetime(2024, 1, 1, tzinfo=timezone.utc))
+        newer = self._make_processed_photo(db_session, "b", taken_at=datetime(2024, 12, 1, tzinfo=timezone.utc))
+
+        response = authenticated_client.get(f"/photos/{older.id}", headers={"Accept": "application/json"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["prevPhotoId"] == str(newer.id)
+        assert data["nextPhotoId"] is None
+
+    def test_unprocessed_photos_excluded_from_nav(self, authenticated_client, db_session):
+        """Unprocessed photos should not appear in prev/next navigation."""
+        from datetime import datetime, timezone
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState
+        older = self._make_processed_photo(db_session, "a", taken_at=datetime(2024, 1, 1, tzinfo=timezone.utc))
+        # Unprocessed photo in between
+        pending = MediaItem(sha256_hash="b" * 64, file_extension="jpg", media_type="photo",
+                           taken_at=datetime(2024, 6, 1, tzinfo=timezone.utc))
+        db_session.add(pending)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=pending.id, state=ProcessingState.pending))
+        db_session.commit()
+        newer = self._make_processed_photo(db_session, "c", taken_at=datetime(2024, 12, 1, tzinfo=timezone.utc))
+
+        # Older's prev should be newer (skipping pending)
+        response = authenticated_client.get(f"/photos/{older.id}", headers={"Accept": "application/json"})
+        data = response.json()
+        assert data["prevPhotoId"] == str(newer.id)
+        assert data["nextPhotoId"] is None
+
+    def test_nav_with_null_taken_at(self, authenticated_client, db_session):
+        """Photos with NULL taken_at should sort after photos with taken_at (NULLS LAST)."""
+        from datetime import datetime, timezone
+        with_date = self._make_processed_photo(db_session, "a", taken_at=datetime(2024, 6, 1, tzinfo=timezone.utc))
+        without_date = self._make_processed_photo(db_session, "b", taken_at=None)
+
+        # Photo with taken_at should be "prev" (earlier in DESC order) relative to NULL
+        response = authenticated_client.get(f"/photos/{without_date.id}", headers={"Accept": "application/json"})
+        data = response.json()
+        assert data["prevPhotoId"] == str(with_date.id)
+        assert data["nextPhotoId"] is None
+
+
+# ---------------------------------------------------------------------------
 # People page HTML tests
 # ---------------------------------------------------------------------------
 
