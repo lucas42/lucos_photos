@@ -40,7 +40,7 @@
         } else {
             const img = document.createElement('img');
             img.src = item.originalUrl;
-            img.alt = (item.mediaType === 'video' ? 'Video' : 'Photo');
+            img.alt = 'Photo';
             lightboxInner.appendChild(img);
         }
 
