@@ -1177,3 +1177,82 @@ a:hover {
 .photo-actions {
 	margin-top: 1rem;
 }
+
+/* ------------------------------------------------------------------ */
+/* Responsive: tablet (max-width: 768px)                               */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 768px) {
+	.photo-metadata {
+		grid-template-columns: 1fr;
+		max-width: 100%;
+	}
+
+	.photo-metadata dt {
+		margin-top: 0.5rem;
+	}
+
+	.photo-metadata dd {
+		margin-bottom: 0.25rem;
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Responsive: mobile (max-width: 640px)                               */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 640px) {
+	.person-profile-picture-large {
+		width: 150px;
+		height: 150px;
+	}
+
+	.person-profile-picture-placeholder.person-profile-picture-large {
+		width: 150px;
+		height: 150px;
+	}
+
+	.person-detail-header {
+		flex-direction: column;
+		text-align: center;
+	}
+
+	.merge-prompt-people {
+		flex-direction: column;
+		align-items: center;
+		gap: 1rem;
+	}
+
+	.merge-prompt-arrow {
+		transform: rotate(90deg);
+		padding-bottom: 0;
+	}
+
+	.merge-prompt {
+		padding: 1.5rem 1rem;
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Responsive: small mobile (max-width: 480px)                         */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 480px) {
+	.photo-grid {
+		grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+		gap: 0.75rem;
+	}
+
+	.homepage-section .photo-grid {
+		grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+	}
+
+	.pagination-bar {
+		padding: 0 0.75rem;
+		height: 56px;
+	}
+
+	body {
+		padding-bottom: 56px;
+	}
+}
