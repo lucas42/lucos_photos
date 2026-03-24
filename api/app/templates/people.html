@@ -128,13 +128,15 @@
         const toggleBtn = card.querySelector('.search-toggle-btn');
         if (!container) return;
 
+        // Hide immediately to prevent double-click during async import
+        toggleBtn.hidden = true;
+
         if (!searchComponentLoaded) {
             await import('/lucos_search_component.js');
             searchComponentLoaded = true;
         }
 
         initSearchComponent(container);
-        toggleBtn.hidden = true;
     }
 
     // Wire up contact link/unlink interactions for each person card.
@@ -160,7 +162,7 @@
             select.addEventListener('change', () => handleContactChange(personId, select, statusEl, card));
         }
         if (unlinkBtn) {
-            unlinkBtn.addEventListener('click', () => handleUnlink(personId, statusEl, unlinkBtn, select));
+            unlinkBtn.addEventListener('click', () => handleUnlink(personId, statusEl, unlinkBtn, card));
         }
         if (backgroundBtn) {
             backgroundBtn.addEventListener('click', () => handleMarkBackground(personId, card));
@@ -450,8 +452,8 @@
                 const unlinkBtn = document.createElement('button');
                 unlinkBtn.className = 'unlink-btn';
                 unlinkBtn.textContent = 'Unlink contact';
-                unlinkBtn.addEventListener('click', () => handleUnlink(personId, statusEl, unlinkBtn, select));
-                select.closest('.person-contact').appendChild(unlinkBtn);
+                unlinkBtn.addEventListener('click', () => handleUnlink(personId, statusEl, unlinkBtn, card));
+                card.querySelector('.person-contact').appendChild(unlinkBtn);
             }
         } catch (err) {
             console.error('Failed to link contact:', err);
@@ -460,7 +462,7 @@
         }
     }
 
-    async function handleUnlink(personId, statusEl, unlinkBtn, select) {
+    async function handleUnlink(personId, statusEl, unlinkBtn, card) {
         try {
             const response = await fetch(`/people/${personId}/contact`, {
                 method: 'DELETE',
@@ -471,10 +473,13 @@
             statusEl.textContent = 'Not linked to a contact';
             statusEl.className = 'contact-status';
             unlinkBtn.remove();
-            // Clear the search component selection
-            select.innerHTML = '';
-            // Trigger re-render of the search component
-            select.dispatchEvent(new Event('change'));
+            // Clear the search component selection (look up current select
+            // from DOM since lazy-load replaces the original element)
+            const currentSelect = card.querySelector('select');
+            if (currentSelect) {
+                currentSelect.innerHTML = '';
+                currentSelect.dispatchEvent(new Event('change'));
+            }
         } catch (err) {
             console.error('Failed to unlink contact:', err);
             statusEl.textContent = 'Failed to unlink contact.';
