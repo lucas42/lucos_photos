@@ -61,12 +61,10 @@ def list_people(
     accept_header = request.headers.get("accept", "*/*")
     best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
     if best_match == "text/html":
-        arachne_key = os.environ.get("KEY_LUCOS_ARACHNE", "")
         prev_offset = max(0, offset - limit) if offset > 0 else None
         next_offset = offset + limit if offset + limit < total else None
         return templates.TemplateResponse(request, "people.html", {
             "people": people_data,
-            "arachne_key": arachne_key,
             "current_page": "people",
             "offset": offset,
             "limit": limit,
