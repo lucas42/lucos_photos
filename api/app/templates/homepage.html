@@ -2,6 +2,20 @@
 
 {% block meta %}<meta name="description" content="A simple and elegant photo management service.">{% endblock %}
 
+{% block scripts %}
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Media viewer">
+    <button class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
+    <button class="lightbox-nav lightbox-prev" id="lightbox-prev" aria-label="Previous">&lsaquo;</button>
+    <button class="lightbox-nav lightbox-next" id="lightbox-next" aria-label="Next">&rsaquo;</button>
+    <div class="lightbox-content">
+        <div class="lightbox-inner" id="lightbox-inner"></div>
+        <div class="lightbox-metadata" id="lightbox-metadata"></div>
+    </div>
+</div>
+<script src="/lightbox.js"></script>
+<script>initLightbox();</script>
+{% endblock %}
+
 {% block content %}
 <div class="container">
 
@@ -13,7 +27,10 @@
         <div class="photo-grid">
             {% if recent_photos %}
                 {% for photo in recent_photos %}
-                <a href="/photos/{{ photo.id }}" class="media-card-link">
+                <a href="/photos/{{ photo.id }}" class="media-card-link"
+                   data-original-url="{{ photo.originalUrl }}"
+                   data-media-type="{{ photo.mediaType }}"
+                   data-photo-id="{{ photo.id }}">
                     <div class="media-card">
                         <img src="{{ photo.thumbnailUrl }}" alt="Photo{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}" loading="lazy">
                     </div>
