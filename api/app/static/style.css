@@ -799,6 +799,24 @@ a:hover {
 	border-color: rgba(255, 255, 255, 0.4);
 }
 
+.search-toggle-btn {
+	display: inline-block;
+	background: none;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	color: var(--text-color);
+	border-radius: 6px;
+	padding: 0.35rem 0.75rem;
+	font-size: 0.85rem;
+	cursor: pointer;
+	transition: background 0.15s ease, border-color 0.15s ease;
+	width: fit-content;
+}
+
+.search-toggle-btn:hover {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: rgba(255, 255, 255, 0.4);
+}
+
 .background-btn {
 	display: inline-block;
 	background: none;

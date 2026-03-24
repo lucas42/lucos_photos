@@ -36,8 +36,9 @@
                     <p class="contact-status">Not linked to a contact</p>
                     {% endif %}
 
-                    <label class="search-label">Link to contact:
-                        <span is="lucos-search" data-api-key="{{ arachne_key }}" data-types="Person">
+                    <div class="search-container" data-arachne-key="{{ arachne_key }}" hidden>
+                        <label class="search-label">
+                            {% if person.contactId %}Change contact:{% else %}Link to contact:{% endif %}
                             <select id="contact-search-{{ person.id }}">
                                 {% if person.contactId %}
                                 <option value="https://contacts.l42.eu/people/{{ person.contactId }}" selected>
@@ -45,8 +46,11 @@
                                 </option>
                                 {% endif %}
                             </select>
-                        </span>
-                    </label>
+                        </label>
+                    </div>
+                    <button class="search-toggle-btn">
+                        {% if person.contactId %}Change contact{% else %}Link to contact{% endif %}
+                    </button>
 
                     {% if person.contactId %}
                     <button class="unlink-btn">Unlink contact</button>
@@ -101,7 +105,37 @@
 
 {% block scripts %}
 <script type="module">
-    import '/lucos_search_component.js';
+    let searchComponentLoaded = false;
+
+    function initSearchComponent(container) {
+        const select = container.querySelector('select');
+        const label = container.querySelector('.search-label');
+        const arachneKey = container.dataset.arachneKey;
+        const labelText = label.firstChild.textContent.trim();
+
+        // The lucos-search custom element constructor calls
+        // querySelector('select') synchronously, so the select must be
+        // a child when the element is upgraded.  Setting innerHTML on a
+        // connected element causes the browser to parse and upgrade in
+        // one pass, with children already in place.
+        label.innerHTML = `${labelText} <span is="lucos-search" data-api-key="${arachneKey}" data-types="Person">${select.outerHTML}</span>`;
+
+        container.hidden = false;
+    }
+
+    async function showSearchComponent(card) {
+        const container = card.querySelector('.search-container');
+        const toggleBtn = card.querySelector('.search-toggle-btn');
+        if (!container) return;
+
+        if (!searchComponentLoaded) {
+            await import('/lucos_search_component.js');
+            searchComponentLoaded = true;
+        }
+
+        initSearchComponent(container);
+        toggleBtn.hidden = true;
+    }
 
     // Wire up contact link/unlink interactions for each person card.
     document.querySelectorAll('.person-card').forEach(card => {
@@ -110,7 +144,18 @@
         const statusEl = card.querySelector('.contact-status');
         const unlinkBtn = card.querySelector('.unlink-btn');
         const backgroundBtn = card.querySelector('.background-btn');
+        const toggleBtn = card.querySelector('.search-toggle-btn');
 
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', async () => {
+                await showSearchComponent(card);
+                // Re-bind change listener after search component is initialised
+                const freshSelect = card.querySelector('select');
+                if (freshSelect) {
+                    freshSelect.addEventListener('change', () => handleContactChange(personId, freshSelect, statusEl, card));
+                }
+            });
+        }
         if (select) {
             select.addEventListener('change', () => handleContactChange(personId, select, statusEl, card));
         }
