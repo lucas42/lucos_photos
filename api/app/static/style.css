@@ -1148,6 +1148,18 @@ a:hover {
 	white-space: nowrap;
 }
 
+.photo-person-background .photo-person-link,
+.lightbox-person-background {
+	opacity: 0.45;
+	filter: grayscale(50%);
+}
+
+.photo-person-background .photo-person-link:hover,
+.lightbox-person-background:hover {
+	opacity: 0.7;
+	filter: grayscale(0%);
+}
+
 /* ------------------------------------------------------------------ */
 /* Photo detail: actions                                               */
 /* ------------------------------------------------------------------ */
