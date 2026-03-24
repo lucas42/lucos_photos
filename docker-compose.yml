@@ -19,6 +19,7 @@ services:
       - LOGANNE_ENDPOINT
       - LUCOS_CONTACTS_URL
       - KEY_LUCOS_CONTACTS
+      - FACE_SIMILARITY_THRESHOLD
       - KEY_LUCOS_ARACHNE
       - CLIENT_KEYS
       - POSTGRES_USER=photos
@@ -51,6 +52,7 @@ services:
       - LOGANNE_ENDPOINT
       - LUCOS_CONTACTS_URL
       - KEY_LUCOS_CONTACTS
+      - FACE_SIMILARITY_THRESHOLD
       - POSTGRES_USER=photos
       - REDIS_URL=redis://redis:6379
     depends_on:
