@@ -1867,7 +1867,7 @@ class TestGenerateProfilePicture:
 
         mock_update.assert_called_once_with(
             "profilePhotoUpdated",
-            f"Profile photo updated for person {person_id} in lucos_photos",
+            f"Profile photo updated for {person_id} in lucos_photos",
             url=mock_update.call_args[1]["url"],
         )
         assert f"/people/{person_id}" in mock_update.call_args[1]["url"]
@@ -1899,7 +1899,40 @@ class TestGenerateProfilePicture:
 
         mock_update.assert_called_once_with(
             "profilePhotoUpdated",
-            f"Profile photo updated for person {person_id} in lucos_photos",
+            f"Profile photo updated for {person_id} in lucos_photos",
+            url=f"https://photos.example.com/people/{person_id}",
+        )
+
+
+    def test_loganne_event_uses_display_name(self, db_session, tmp_path):
+        """Should use person display_name in loganne event when available."""
+        person = self._make_person(db_session)
+        person.display_name = "Alice"
+        photo = self._make_photo(db_session, "d" * 64, width=200, height=200)
+        self._make_face(db_session, photo, person, bbox_x=0.2, bbox_y=0.2, bbox_width=0.6, bbox_height=0.6)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        img = Image.new("RGB", (200, 200), color=(50, 100, 150))
+        img.save(originals_dir / f'{"d" * 64}.jpg', format="JPEG")
+
+        person_id = person.id
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update, \
+             patch.dict("os.environ", {"APP_ORIGIN": "https://photos.example.com"}):
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))
+
+        mock_update.assert_called_once_with(
+            "profilePhotoUpdated",
+            "Profile photo updated for Alice in lucos_photos",
             url=f"https://photos.example.com/people/{person_id}",
         )
 
