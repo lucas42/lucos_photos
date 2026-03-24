@@ -1123,12 +1123,12 @@ a:hover {
 	color: var(--accent-color);
 }
 
-.photo-person-link .person-profile-picture {
+.photo-people-list .person-profile-picture {
 	width: 32px;
 	height: 32px;
 }
 
-.photo-person-link .person-profile-picture-placeholder {
+.photo-people-list .person-profile-picture-placeholder {
 	width: 32px;
 	height: 32px;
 }
