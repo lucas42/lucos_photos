@@ -1152,6 +1152,7 @@ a:hover {
 .lightbox-person-background {
 	opacity: 0.45;
 	filter: grayscale(50%);
+	transition: opacity 0.15s ease, filter 0.15s ease;
 }
 
 .photo-person-background .photo-person-link:hover,
