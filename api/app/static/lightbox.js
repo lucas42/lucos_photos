@@ -1,5 +1,5 @@
 /**
- * Lightbox module for the SSR photos page in lucos_photos.
+ * Lightbox module for lucos_photos.
  *
  * Usage:
  *   1. Include the lightbox HTML in your page (see lightbox markup below).
@@ -12,16 +12,140 @@
  *       <button class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
  *       <button class="lightbox-nav lightbox-prev" id="lightbox-prev" aria-label="Previous">&lsaquo;</button>
  *       <button class="lightbox-nav lightbox-next" id="lightbox-next" aria-label="Next">&rsaquo;</button>
- *       <div class="lightbox-inner" id="lightbox-inner"></div>
+ *       <div class="lightbox-content">
+ *           <div class="lightbox-inner" id="lightbox-inner"></div>
+ *           <div class="lightbox-metadata" id="lightbox-metadata"></div>
+ *       </div>
  *   </div>
  */
 (function () {
     'use strict';
 
-    let lightbox, lightboxInner, lightboxClose, lightboxPrev, lightboxNext;
+    let lightbox, lightboxInner, lightboxClose, lightboxPrev, lightboxNext, lightboxMetadata;
     let mediaItems = [];
     let currentIndex = -1;
     let triggerElement = null;
+    const metadataCache = {};
+    let currentFetchId = 0;
+
+    function formatDate(isoString) {
+        if (!isoString) return null;
+        try {
+            const d = new Date(isoString);
+            return d.toLocaleDateString(undefined, {
+                year: 'numeric', month: 'long', day: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            });
+        } catch (e) {
+            return isoString;
+        }
+    }
+
+    function addMetadataRow(dl, label, valueText) {
+        const dt = document.createElement('dt');
+        dt.textContent = label;
+        const dd = document.createElement('dd');
+        dd.textContent = valueText;
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+    }
+
+    function renderMetadata(data, container) {
+        container.innerHTML = '';
+
+        const dl = document.createElement('dl');
+        dl.className = 'lightbox-metadata-list';
+
+        if (data.takenAt) {
+            addMetadataRow(dl, 'Taken', formatDate(data.takenAt));
+        }
+
+        if (data.width && data.height) {
+            const dt = document.createElement('dt');
+            dt.textContent = 'Dimensions';
+            const dd = document.createElement('dd');
+            dd.textContent = data.width + ' \u00D7 ' + data.height;
+            dl.appendChild(dt);
+            dl.appendChild(dd);
+        }
+
+        if (data.fileExtension) {
+            addMetadataRow(dl, 'Format', data.fileExtension.toUpperCase());
+        }
+
+        if (data.people && data.people.length > 0) {
+            const dt = document.createElement('dt');
+            dt.textContent = 'People';
+            const dd = document.createElement('dd');
+            dd.className = 'lightbox-people';
+
+            data.people.forEach(function (person) {
+                const link = document.createElement('a');
+                link.href = '/people/' + encodeURIComponent(person.id);
+                link.className = 'lightbox-person-link';
+
+                if (person.profilePictureUrl) {
+                    const pic = document.createElement('img');
+                    pic.className = 'lightbox-person-pic';
+                    pic.src = person.profilePictureUrl;
+                    pic.alt = '';
+                    link.appendChild(pic);
+                }
+
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = person.name || 'Unknown';
+                link.appendChild(nameSpan);
+                dd.appendChild(link);
+            });
+
+            dl.appendChild(dt);
+            dl.appendChild(dd);
+        }
+
+        container.appendChild(dl);
+
+        const detailsLink = document.createElement('a');
+        detailsLink.href = '/photos/' + encodeURIComponent(data.id);
+        detailsLink.className = 'lightbox-details-link';
+        detailsLink.textContent = 'View full details';
+        container.appendChild(detailsLink);
+    }
+
+    function fetchAndShowMetadata(photoId) {
+        if (!lightboxMetadata || !photoId) {
+            if (lightboxMetadata) lightboxMetadata.innerHTML = '';
+            return;
+        }
+
+        if (metadataCache[photoId]) {
+            renderMetadata(metadataCache[photoId], lightboxMetadata);
+            return;
+        }
+
+        const loadingMsg = document.createElement('p');
+        loadingMsg.className = 'lightbox-metadata-loading';
+        loadingMsg.textContent = 'Loading details\u2026';
+        lightboxMetadata.innerHTML = '';
+        lightboxMetadata.appendChild(loadingMsg);
+
+        const fetchId = ++currentFetchId;
+        fetch('/photos/' + encodeURIComponent(photoId), { headers: { 'Accept': 'application/json' } })
+            .then(function (res) {
+                if (!res.ok) throw new Error('Failed to load');
+                return res.json();
+            })
+            .then(function (data) {
+                metadataCache[photoId] = data;
+                if (fetchId === currentFetchId) {
+                    renderMetadata(data, lightboxMetadata);
+                }
+            })
+            .catch(function () {
+                if (fetchId === currentFetchId) {
+                    lightboxMetadata.innerHTML = '';
+                }
+            });
+    }
 
     function showMedia(index) {
         if (index < 0 || index >= mediaItems.length) return;
@@ -47,6 +171,9 @@
         // Update nav button visibility
         lightboxPrev.style.display = index > 0 ? '' : 'none';
         lightboxNext.style.display = index < mediaItems.length - 1 ? '' : 'none';
+
+        // Fetch and display metadata
+        fetchAndShowMetadata(item.id);
     }
 
     function openLightbox(index) {
@@ -63,8 +190,8 @@
         const video = lightboxInner.querySelector('video');
         if (video) video.pause();
         lightboxInner.innerHTML = '';
+        if (lightboxMetadata) lightboxMetadata.innerHTML = '';
         currentIndex = -1;
-        // Restore focus to the element that opened the lightbox
         if (triggerElement) {
             triggerElement.focus();
             triggerElement = null;
@@ -82,7 +209,7 @@
     /**
      * Initialise the lightbox.
      *
-     * @param {Array} [items] – optional array of {originalUrl, mediaType, id}.
+     * @param {Array} [items] - optional array of {originalUrl, mediaType, id}.
      *   If omitted, items are collected from .media-card-link[data-original-url]
      *   elements in the DOM.
      */
@@ -92,6 +219,7 @@
         lightboxClose = document.getElementById('lightbox-close');
         lightboxPrev = document.getElementById('lightbox-prev');
         lightboxNext = document.getElementById('lightbox-next');
+        lightboxMetadata = document.getElementById('lightbox-metadata');
 
         if (!lightbox) return;
 
@@ -99,7 +227,6 @@
         if (items) {
             mediaItems = items;
         } else {
-            // Collect from DOM data attributes
             mediaItems = [];
             document.querySelectorAll('.media-card-link[data-original-url]').forEach(function (link) {
                 mediaItems.push({
@@ -145,10 +272,10 @@
 
             // Focus trapping — keep Tab within the lightbox
             if (e.key === 'Tab') {
-                var focusable = lightbox.querySelectorAll('button:not([style*="display: none"])');
+                const focusable = lightbox.querySelectorAll('button:not([style*="display: none"]), a[href]');
                 if (focusable.length === 0) return;
-                var first = focusable[0];
-                var last = focusable[focusable.length - 1];
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
                 if (e.shiftKey) {
                     if (document.activeElement === first) {
                         e.preventDefault();
