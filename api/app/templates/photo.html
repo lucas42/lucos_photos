@@ -56,7 +56,7 @@
             <dd>
                 <ul class="photo-people-list">
                     {% for person in photo.people %}
-                    <li class="photo-person">
+                    <li class="photo-person{% if person.isBackground %} photo-person-background{% endif %}">
                         <a href="/people/{{ person.id }}" class="photo-person-link">
                             {% if person.profilePictureUrl %}
                             <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="{{ person.name or ('Person ' + person.id[:8] + '…') }}">

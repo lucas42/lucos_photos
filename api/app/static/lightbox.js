@@ -82,7 +82,7 @@
             data.people.forEach(function (person) {
                 const link = document.createElement('a');
                 link.href = '/people/' + encodeURIComponent(person.id);
-                link.className = 'lightbox-person-link';
+                link.className = 'lightbox-person-link' + (person.isBackground ? ' lightbox-person-background' : '');
 
                 if (person.profilePictureUrl) {
                     const pic = document.createElement('img');
