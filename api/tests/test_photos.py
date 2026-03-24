@@ -1091,3 +1091,57 @@ class TestVideoThumbnail:
         # Should return 404 because there's no _thumb.jpg
         response = authenticated_client.get(f"/photo_files/thumbnail/{video.id}.mp4")
         assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /photos — TikTok filtering
+# ---------------------------------------------------------------------------
+
+class TestTikTokFiltering:
+    """Server-side safety net: reject uploads with TikTok-related filenames."""
+
+    @pytest.mark.parametrize("filename", [
+        "TikTok_video_12345.mp4",
+        "tiktok_download.mp4",
+        "video_TIKTOK.mp4",
+        "my_musically_clip.mp4",
+        "snaptik_download_2024.mp4",
+        "ssstik_video.mp4",
+        "tikmate_save.mp4",
+        "tik_tok_saved.mp4",
+    ])
+    def test_rejects_tiktok_filenames(self, client, filename):
+        from io import BytesIO
+        response = client.post(
+            "/photos",
+            files={"file": (filename, BytesIO(b"fake video data"), "video/mp4")},
+            headers=AUTH_HEADER,
+        )
+        assert response.status_code == 422
+        assert "TikTok" in response.json()["detail"]
+
+    @pytest.mark.parametrize("filename", [
+        "IMG_20240101_120000.jpg",
+        "photo.jpg",
+        "VID_20240101.mp4",
+        "holiday_video.mp4",
+        "screenshot_2024.png",
+        "",  # empty filename should be allowed
+    ])
+    def test_allows_non_tiktok_filenames(self, client, filename, monkeypatch):
+        """Non-TikTok filenames should pass the filter (may fail later for other reasons)."""
+        from io import BytesIO
+        from unittest.mock import patch
+        # Patch PIL.Image.open to avoid needing a real image for non-TikTok files
+        with patch("app.routers.photos.Image") as mock_image:
+            mock_image.open.return_value.__enter__ = lambda s: s
+            mock_image.open.return_value.__exit__ = lambda s, *a: None
+            mock_image.open.return_value.verify = lambda: None
+            response = client.post(
+                "/photos",
+                files={"file": (filename, BytesIO(b"\xff\xd8\xff\xe0fake"), "image/jpeg")},
+                headers=AUTH_HEADER,
+            )
+        # Should not be 422 with TikTok message — it may be 201 or fail for other reasons
+        if response.status_code == 422:
+            assert "TikTok" not in response.json().get("detail", "")
