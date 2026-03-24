@@ -266,6 +266,7 @@ async def upload_photo(
     # Server-side safety net: reject files with TikTok-related filenames.
     # The Android app filters these client-side, but some patterns slip through.
     if _TIKTOK_FILENAME_PATTERNS.search(filename):
+        print(f"upload_photo: rejected TikTok filename {filename!r}", flush=True)
         raise HTTPException(status_code=422, detail="TikTok videos are not accepted")
 
     is_video = content_type in VIDEO_MIME_TYPES
