@@ -59,7 +59,8 @@ THUMBNAIL_WIDTH = 400
 # Cosine distance threshold for auto-assigning a person_id from a similar face.
 # InsightFace ArcFace embeddings: cosine distance 0.0 = identical, 2.0 = opposite.
 # Empirically, same-person matches are typically < 0.4; strangers are > 0.6.
-FACE_SIMILARITY_THRESHOLD = 0.4
+# Threshold raised from 0.4 to 0.5 to reduce manual merges — configurable via env var.
+FACE_SIMILARITY_THRESHOLD = float(os.environ.get("FACE_SIMILARITY_THRESHOLD", 0.5))
 
 # Module-level singleton for the InsightFace model.
 # Initialised lazily on first call to _get_face_analysis_app() so that importing
@@ -986,7 +987,7 @@ def cluster_faces() -> None:
 
         # Normalise embeddings to unit vectors so cosine distance = 1 - dot product.
         # sklearn's cosine metric in DBSCAN computes 1 - cosine_similarity.
-        # epsilon=0.4 matches FACE_SIMILARITY_THRESHOLD used elsewhere.
+        # epsilon matches FACE_SIMILARITY_THRESHOLD used elsewhere.
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         # Avoid division by zero for zero vectors
         norms = np.where(norms == 0, 1.0, norms)
