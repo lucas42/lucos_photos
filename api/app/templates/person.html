@@ -14,6 +14,23 @@
         <h1 class="page-title">{{ person.name or ('Person ' + person.id[:8] + '…') }}</h1>
     </div>
 
+    <section class="person-photos">
+        <h2>Photos ({{ person.photos | length }})</h2>
+        {% if person.photos %}
+        <div class="photo-grid">
+            {% for photo in person.photos %}
+            <a href="/photos/{{ photo.id }}" class="media-card-link">
+                <div class="media-card">
+                    <img src="{{ photo.thumbnailUrl }}" alt="Photo{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}" loading="lazy">
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="empty-state-text">No photos yet.</p>
+        {% endif %}
+    </section>
+
     <div class="person-contact" id="person-contact">
         {% if person.contactId %}
         <p class="contact-status linked" id="contact-status">
@@ -50,23 +67,6 @@
         </button>
         {% endif %}
     </div>
-
-    <section class="person-photos">
-        <h2>Photos ({{ person.photos | length }})</h2>
-        {% if person.photos %}
-        <div class="photo-grid">
-            {% for photo in person.photos %}
-            <a href="/photos/{{ photo.id }}" class="media-card-link">
-                <div class="media-card">
-                    <img src="{{ photo.thumbnailUrl }}" alt="Photo{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}" loading="lazy">
-                </div>
-            </a>
-            {% endfor %}
-        </div>
-        {% else %}
-        <p class="empty-state-text">No photos yet.</p>
-        {% endif %}
-    </section>
 
 </div>
 

@@ -294,7 +294,7 @@ class TestPeoplePageHtml:
         assert "auth.l42.eu" in response.headers["location"]
 
     def test_people_page_returns_html(self, authenticated_client, db_session):
-        """GET /people with Accept: text/html returns the people page with the search component."""
+        """GET /people with Accept: text/html returns the people list page."""
         from lucos_photos_common.models import Person
         person = Person(display_name="Test Person")
         db_session.add(person)
@@ -304,8 +304,6 @@ class TestPeoplePageHtml:
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
         assert "lucos-navbar" in response.text
-        # lucos-search is rendered per person card (only appears when people exist)
-        assert "lucos-search" in response.text
 
     def test_people_page_renders_people_server_side(self, authenticated_client, db_session):
         """Person names must be rendered in the HTML, not left to client-side JS."""
@@ -324,25 +322,16 @@ class TestPeoplePageHtml:
         assert response.status_code == 200
         assert "No people detected yet" in response.text
 
-    def test_people_page_injects_arachne_key(self, authenticated_client, db_session, monkeypatch):
-        """The arachne key from KEY_LUCOS_ARACHNE env var is injected into person cards."""
+    def test_people_page_cards_link_to_person(self, authenticated_client, db_session):
+        """Person cards on the people list page link to the individual person page."""
         from lucos_photos_common.models import Person
         person = Person(display_name="Test Person")
         db_session.add(person)
         db_session.commit()
 
-        monkeypatch.setenv("KEY_LUCOS_ARACHNE", "test-arachne-key-abc123")
         response = authenticated_client.get("/people", headers={"Accept": "text/html"})
         assert response.status_code == 200
-        assert "test-arachne-key-abc123" in response.text
-        assert "__ARACHNE_KEY__" not in response.text
-
-    def test_people_page_handles_missing_arachne_key(self, authenticated_client, monkeypatch):
-        """If KEY_LUCOS_ARACHNE is not set, no placeholder leaks into the HTML."""
-        monkeypatch.delenv("KEY_LUCOS_ARACHNE", raising=False)
-        response = authenticated_client.get("/people", headers={"Accept": "text/html"})
-        assert response.status_code == 200
-        assert "__ARACHNE_KEY__" not in response.text
+        assert f'href="/people/{person.id}"' in response.text
 
     def test_people_page_marks_people_as_current(self, authenticated_client):
         """The People nav link should be marked as current-page on the people page."""
