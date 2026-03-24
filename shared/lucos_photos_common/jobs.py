@@ -915,7 +915,8 @@ def generate_profile_picture(person_id: str) -> None:
 
         # Emit Loganne event — updateLoganne swallows HTTP errors internally
         app_origin = os.environ.get("APP_ORIGIN", "")
-        updateLoganne("profilePhotoUpdated", f"Profile photo updated for person {person_id} in lucos_photos", url=f"{app_origin}/people/{person_id}")
+        person_label = person.display_name or str(person_id)
+        updateLoganne("profilePhotoUpdated", f"Profile photo updated for {person_label} in lucos_photos", url=f"{app_origin}/people/{person_id}")
 
     except Exception:
         logger.exception("generate_profile_picture: error for person %s", person_id)
