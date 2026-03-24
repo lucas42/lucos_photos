@@ -54,6 +54,14 @@ _UPLOAD_CHUNK_SIZE = 64 * 1024  # 64KB chunks
 
 VIDEO_MIME_TYPES = {"video/mp4", "video/quicktime"}
 
+# Patterns in uploaded filenames that indicate the file originated from TikTok.
+# The Android app is supposed to filter these client-side, but some slip through;
+# this acts as a server-side safety net.
+_TIKTOK_FILENAME_PATTERNS = re.compile(
+    r"tiktok|musically|snaptik|ssstik|tikmate|tik_tok",
+    re.IGNORECASE,
+)
+
 _CONTENT_TYPE_TO_EXT = {
     "image/jpeg": "jpg",
     "image/png": "png",
@@ -253,6 +261,14 @@ async def upload_photo(
     x_taken_at: Annotated[str | None, Header()] = None,
 ):
     content_type = file.content_type or ""
+    filename = file.filename or ""
+
+    # Server-side safety net: reject files with TikTok-related filenames.
+    # The Android app filters these client-side, but some patterns slip through.
+    if _TIKTOK_FILENAME_PATTERNS.search(filename):
+        print(f"upload_photo: rejected TikTok filename {filename!r}", flush=True)
+        raise HTTPException(status_code=422, detail="TikTok videos are not accepted")
+
     is_video = content_type in VIDEO_MIME_TYPES
     size_limit = MAX_VIDEO_SIZE if is_video else MAX_PHOTO_SIZE
 
@@ -329,7 +345,6 @@ async def upload_photo(
             return JSONResponse(status_code=200, content=photo_to_dict(existing))
 
         # Determine file extension from filename, falling back to content type
-        filename = file.filename or ""
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if not ext:
             ext = _CONTENT_TYPE_TO_EXT.get(content_type, "jpg")
