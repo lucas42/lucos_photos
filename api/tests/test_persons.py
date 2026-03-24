@@ -586,6 +586,25 @@ class TestMergePeople:
         reassigned = db_session.query(Face).filter(Face.id == face.id).first()
         assert reassigned.person_id == winner_id
 
+    def test_merge_marks_reassigned_faces_as_confirmed(self, authenticated_client, db_session):
+        """Merged faces must be marked person_confirmed=True so they survive reprocessing."""
+        with patch("app.routers.people._enqueue_profile_picture"), \
+             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+            person_a = make_person(db_session, "Alice")
+            person_b = make_person(db_session, "Bob")
+            photo = make_photo(db_session, "b" * 64)
+            face = Face(photo_id=photo.id, person_id=person_b.id, person_confirmed=False,
+                        bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2)
+            db_session.add(face)
+            db_session.commit()
+
+            response = authenticated_client.post("/people/merge", json={"personIds": [str(person_a.id), str(person_b.id)]})
+
+        assert response.status_code == 200
+        db_session.expire_all()
+        reassigned = db_session.query(Face).filter(Face.id == face.id).first()
+        assert reassigned.person_confirmed is True
+
     def test_merge_conflict_both_have_contacts(self, authenticated_client, db_session):
         """Merging two contact-linked people should return 409."""
         person_a = make_person(db_session, "Alice", contact_id="42")
