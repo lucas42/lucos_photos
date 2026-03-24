@@ -21,17 +21,17 @@
 (function () {
     'use strict';
 
-    var lightbox, lightboxInner, lightboxClose, lightboxPrev, lightboxNext, lightboxMetadata;
-    var mediaItems = [];
-    var currentIndex = -1;
-    var triggerElement = null;
-    var metadataCache = {};
-    var currentFetchId = 0;
+    let lightbox, lightboxInner, lightboxClose, lightboxPrev, lightboxNext, lightboxMetadata;
+    let mediaItems = [];
+    let currentIndex = -1;
+    let triggerElement = null;
+    const metadataCache = {};
+    let currentFetchId = 0;
 
     function formatDate(isoString) {
         if (!isoString) return null;
         try {
-            var d = new Date(isoString);
+            const d = new Date(isoString);
             return d.toLocaleDateString(undefined, {
                 year: 'numeric', month: 'long', day: 'numeric',
                 hour: '2-digit', minute: '2-digit'
@@ -41,37 +41,74 @@
         }
     }
 
-    function renderMetadata(data) {
-        var html = '<dl class="lightbox-metadata-list">';
+    function addMetadataRow(dl, label, valueText) {
+        const dt = document.createElement('dt');
+        dt.textContent = label;
+        const dd = document.createElement('dd');
+        dd.textContent = valueText;
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+    }
+
+    function renderMetadata(data, container) {
+        container.innerHTML = '';
+
+        const dl = document.createElement('dl');
+        dl.className = 'lightbox-metadata-list';
 
         if (data.takenAt) {
-            html += '<dt>Taken</dt><dd>' + formatDate(data.takenAt) + '</dd>';
+            addMetadataRow(dl, 'Taken', formatDate(data.takenAt));
         }
 
         if (data.width && data.height) {
-            html += '<dt>Dimensions</dt><dd>' + data.width + ' &times; ' + data.height + '</dd>';
+            const dt = document.createElement('dt');
+            dt.textContent = 'Dimensions';
+            const dd = document.createElement('dd');
+            dd.textContent = data.width + ' \u00D7 ' + data.height;
+            dl.appendChild(dt);
+            dl.appendChild(dd);
         }
 
         if (data.fileExtension) {
-            html += '<dt>Format</dt><dd>' + data.fileExtension.toUpperCase() + '</dd>';
+            addMetadataRow(dl, 'Format', data.fileExtension.toUpperCase());
         }
 
         if (data.people && data.people.length > 0) {
-            html += '<dt>People</dt><dd class="lightbox-people">';
+            const dt = document.createElement('dt');
+            dt.textContent = 'People';
+            const dd = document.createElement('dd');
+            dd.className = 'lightbox-people';
+
             data.people.forEach(function (person) {
-                html += '<a href="/people/' + person.id + '" class="lightbox-person-link">';
+                const link = document.createElement('a');
+                link.href = '/people/' + encodeURIComponent(person.id);
+                link.className = 'lightbox-person-link';
+
                 if (person.profilePictureUrl) {
-                    html += '<img class="lightbox-person-pic" src="' + person.profilePictureUrl + '" alt="">';
+                    const pic = document.createElement('img');
+                    pic.className = 'lightbox-person-pic';
+                    pic.src = person.profilePictureUrl;
+                    pic.alt = '';
+                    link.appendChild(pic);
                 }
-                html += '<span>' + (person.name || 'Unknown') + '</span>';
-                html += '</a>';
+
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = person.name || 'Unknown';
+                link.appendChild(nameSpan);
+                dd.appendChild(link);
             });
-            html += '</dd>';
+
+            dl.appendChild(dt);
+            dl.appendChild(dd);
         }
 
-        html += '</dl>';
-        html += '<a href="/photos/' + data.id + '" class="lightbox-details-link">View full details</a>';
-        return html;
+        container.appendChild(dl);
+
+        const detailsLink = document.createElement('a');
+        detailsLink.href = '/photos/' + encodeURIComponent(data.id);
+        detailsLink.className = 'lightbox-details-link';
+        detailsLink.textContent = 'View full details';
+        container.appendChild(detailsLink);
     }
 
     function fetchAndShowMetadata(photoId) {
@@ -80,25 +117,27 @@
             return;
         }
 
-        // If cached, render immediately
         if (metadataCache[photoId]) {
-            lightboxMetadata.innerHTML = renderMetadata(metadataCache[photoId]);
+            renderMetadata(metadataCache[photoId], lightboxMetadata);
             return;
         }
 
-        lightboxMetadata.innerHTML = '<p class="lightbox-metadata-loading">Loading details&hellip;</p>';
+        const loadingMsg = document.createElement('p');
+        loadingMsg.className = 'lightbox-metadata-loading';
+        loadingMsg.textContent = 'Loading details\u2026';
+        lightboxMetadata.innerHTML = '';
+        lightboxMetadata.appendChild(loadingMsg);
 
-        var fetchId = ++currentFetchId;
-        fetch('/photos/' + photoId, { headers: { 'Accept': 'application/json' } })
+        const fetchId = ++currentFetchId;
+        fetch('/photos/' + encodeURIComponent(photoId), { headers: { 'Accept': 'application/json' } })
             .then(function (res) {
                 if (!res.ok) throw new Error('Failed to load');
                 return res.json();
             })
             .then(function (data) {
                 metadataCache[photoId] = data;
-                // Only render if this is still the current photo
                 if (fetchId === currentFetchId) {
-                    lightboxMetadata.innerHTML = renderMetadata(data);
+                    renderMetadata(data, lightboxMetadata);
                 }
             })
             .catch(function () {
@@ -114,16 +153,16 @@
 
         lightboxInner.innerHTML = '';
 
-        var item = mediaItems[index];
+        const item = mediaItems[index];
         if (item.mediaType === 'video') {
-            var video = document.createElement('video');
+            const video = document.createElement('video');
             video.src = item.originalUrl;
             video.controls = true;
             video.autoplay = true;
             video.preload = 'metadata';
             lightboxInner.appendChild(video);
         } else {
-            var img = document.createElement('img');
+            const img = document.createElement('img');
             img.src = item.originalUrl;
             img.alt = 'Photo';
             lightboxInner.appendChild(img);
@@ -148,12 +187,11 @@
     function closeLightbox() {
         lightbox.classList.remove('open');
         document.body.style.overflow = '';
-        var video = lightboxInner.querySelector('video');
+        const video = lightboxInner.querySelector('video');
         if (video) video.pause();
         lightboxInner.innerHTML = '';
         if (lightboxMetadata) lightboxMetadata.innerHTML = '';
         currentIndex = -1;
-        // Restore focus to the element that opened the lightbox
         if (triggerElement) {
             triggerElement.focus();
             triggerElement = null;
@@ -189,7 +227,6 @@
         if (items) {
             mediaItems = items;
         } else {
-            // Collect from DOM data attributes
             mediaItems = [];
             document.querySelectorAll('.media-card-link[data-original-url]').forEach(function (link) {
                 mediaItems.push({
@@ -235,10 +272,10 @@
 
             // Focus trapping — keep Tab within the lightbox
             if (e.key === 'Tab') {
-                var focusable = lightbox.querySelectorAll('button:not([style*="display: none"]), a[href]');
+                const focusable = lightbox.querySelectorAll('button:not([style*="display: none"]), a[href]');
                 if (focusable.length === 0) return;
-                var first = focusable[0];
-                var last = focusable[focusable.length - 1];
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
                 if (e.shiftKey) {
                     if (document.activeElement === first) {
                         e.preventDefault();
