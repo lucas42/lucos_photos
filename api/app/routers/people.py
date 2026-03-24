@@ -328,9 +328,13 @@ async def merge_people(
         for f in db.query(Face).filter(Face.person_id.in_(loser_ids)).all()
     }
 
-    # Reassign all faces from losers to winner
+    # Reassign all faces from losers to winner, marking them as confirmed.
+    # A user-initiated merge is a manual confirmation that these faces belong
+    # to the same person; without person_confirmed=True the assignments would
+    # be lost if the photo is later reprocessed (detect_and_save_faces only
+    # snapshots confirmed assignments before re-detecting).
     db.query(Face).filter(Face.person_id.in_(loser_ids)).update(
-        {Face.person_id: winner.id},
+        {Face.person_id: winner.id, Face.person_confirmed: True},
         synchronize_session="fetch",
     )
 
