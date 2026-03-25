@@ -20,6 +20,8 @@ on:
   schedule:
     - cron: '44 17 * * *'
 
+permissions: {}
+
 jobs:
   analyze:
     name: Analyze
