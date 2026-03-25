@@ -9,8 +9,7 @@ on:
       - closed
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   reusable:
