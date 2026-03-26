@@ -1,4 +1,4 @@
-FROM lucas42/lucos_navbar:2.1.21 AS navbar
+FROM lucas42/lucos_navbar:2.1.24 AS navbar
 
 FROM node:25-alpine AS search-component
 WORKDIR /build
