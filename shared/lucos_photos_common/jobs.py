@@ -1105,7 +1105,7 @@ def sweep_contact_display_names() -> None:
             try:
                 response = httpx.get(
                     f"{contacts_url}/people/{person.contact_id}",
-                    headers={"Accept": "application/json", "Authorization": f"key {contacts_key}"},
+                    headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}"},
                     timeout=5.0,
                 )
                 response.raise_for_status()
