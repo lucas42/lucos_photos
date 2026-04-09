@@ -10,6 +10,9 @@ def make_person(db, display_name="Alice", contact_id=None):
     return person
 
 
+VALID_AUTH = {"Authorization": "Bearer validkey"}
+
+
 class TestLoganneWebhook:
     def test_contactUpdated_syncs_display_name(self, client, db_session):
         person = make_person(db_session, "Old Name", contact_id="contact-42")
@@ -21,7 +24,7 @@ class TestLoganneWebhook:
                 "source": "lucos_contacts",
                 "humanReadable": "Contact \"New Name\" updated",
                 "agent": {"id": "contact-42", "name": "New Name"},
-            })
+            }, headers=VALID_AUTH)
 
         assert response.status_code == 204
         mock_sync.assert_called_once_with("contact-42", "New Name")
@@ -33,7 +36,7 @@ class TestLoganneWebhook:
                 "source": "lucos_contacts",
                 "humanReadable": "Contact \"Alice\" created",
                 "agent": {"id": "contact-42", "name": "Alice"},
-            })
+            }, headers=VALID_AUTH)
 
         assert response.status_code == 204
         mock_sync.assert_not_called()
@@ -43,7 +46,7 @@ class TestLoganneWebhook:
             response = client.post("/webhooks/loganne", json={
                 "type": "contactUpdated",
                 "agent": {"name": "Alice"},
-            })
+            }, headers=VALID_AUTH)
 
         assert response.status_code == 204
         mock_sync.assert_not_called()
@@ -53,22 +56,22 @@ class TestLoganneWebhook:
             response = client.post("/webhooks/loganne", json={
                 "type": "contactUpdated",
                 "agent": {"id": "contact-42"},
-            })
+            }, headers=VALID_AUTH)
 
         assert response.status_code == 204
         mock_sync.assert_not_called()
 
-    def test_no_auth_accepted_during_migration(self, client):
-        """Phase 1: requests without an Authorization header are still accepted."""
+    def test_unauthenticated_rejected(self, client):
+        """Phase 3: requests without an Authorization header are rejected with 401."""
         with patch("lucos_photos_common.jobs.sync_single_contact_name"):
             response = client.post("/webhooks/loganne", json={
                 "type": "contactUpdated",
                 "agent": {"id": "contact-42", "name": "Alice"},
             })
-        assert response.status_code == 204
+        assert response.status_code == 401
 
     def test_invalid_token_rejected(self, client):
-        """Phase 1: requests with an invalid Bearer token are rejected with 401."""
+        """Phase 3: requests with an invalid Bearer token are rejected with 401."""
         with patch("lucos_photos_common.jobs.sync_single_contact_name"):
             response = client.post("/webhooks/loganne", json={
                 "type": "contactUpdated",
@@ -77,10 +80,11 @@ class TestLoganneWebhook:
         assert response.status_code == 401
 
     def test_valid_token_accepted(self, client):
-        """Phase 1: requests with a valid Bearer token are accepted."""
-        with patch("lucos_photos_common.jobs.sync_single_contact_name"):
+        """Phase 3: requests with a valid Bearer token are accepted."""
+        with patch("lucos_photos_common.jobs.sync_single_contact_name") as mock_sync:
             response = client.post("/webhooks/loganne", json={
                 "type": "contactUpdated",
                 "agent": {"id": "contact-42", "name": "Alice"},
             }, headers={"Authorization": "Bearer validkey"})
         assert response.status_code == 204
+        mock_sync.assert_called_once_with("contact-42", "Alice")
