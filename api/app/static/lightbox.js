@@ -27,6 +27,7 @@
     let triggerElement = null;
     const metadataCache = {};
     let currentFetchId = 0;
+    let initialized = false;
 
     function formatDate(isoString) {
         if (!isoString) return null;
@@ -236,6 +237,11 @@
                 });
             });
         }
+
+        // Only bind event listeners once — safe to call initLightbox() multiple times
+        // to update the items array (e.g. after dynamic content updates).
+        if (initialized) return;
+        initialized = true;
 
         // Bind click handlers on .media-card-link elements
         document.querySelectorAll('.media-card-link[data-original-url]').forEach(function (link, idx) {
