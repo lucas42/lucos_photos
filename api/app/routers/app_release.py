@@ -1,5 +1,6 @@
 """Routes for Android app release information."""
 
+import os
 import time
 from pathlib import Path
 from typing import Annotated
@@ -80,7 +81,7 @@ async def _fetch_latest_app_release() -> dict:
         raise HTTPException(status_code=status_code, detail=detail)
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(headers={"User-Agent": os.environ.get("SYSTEM", "")}) as client:
             resp = await client.get(
                 GITHUB_RELEASES_API_URL,
                 headers=_GITHUB_HEADERS,
@@ -103,7 +104,7 @@ async def _fetch_latest_app_release() -> dict:
         # Fall back to the most recent release that does have an APK so users can
         # still download a working version while the new one is being published.
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(headers={"User-Agent": os.environ.get("SYSTEM", "")}) as client:
                 list_resp = await client.get(
                     GITHUB_RELEASES_LIST_URL,
                     headers=_GITHUB_HEADERS,
