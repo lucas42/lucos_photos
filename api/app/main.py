@@ -168,49 +168,39 @@ async def get_metrics() -> dict:
     """Return live metrics: photo count, video count, and pending processing queue depth."""
     db = SessionLocal()
     try:
-        photo_count = await asyncio.to_thread(
-            lambda: db.query(MediaItem).filter(MediaItem.media_type == "photo").count()
+        row = await asyncio.wait_for(
+            asyncio.to_thread(
+                lambda: db.execute(text("""
+                    SELECT
+                        (SELECT COUNT(*) FROM media_item WHERE media_type = 'photo') AS photo_count,
+                        (SELECT COUNT(*) FROM media_item WHERE media_type = 'video') AS video_count,
+                        (SELECT COUNT(*) FROM processing_status WHERE state = 'pending') AS pending_count
+                """)).fetchone()
+            ),
+            timeout=CHECK_TIMEOUT,
         )
-        video_count = await asyncio.to_thread(
-            lambda: db.query(MediaItem).filter(MediaItem.media_type == "video").count()
-        )
-        pending_count = await asyncio.to_thread(
-            lambda: db.query(ProcessingStatus).filter(
-                ProcessingStatus.state == ProcessingState.pending
-            ).count()
-        )
-        return {
-            "photo-count": {
-                "value": photo_count,
-                "techDetail": "Total number of photos stored",
-            },
-            "video-count": {
-                "value": video_count,
-                "techDetail": "Total number of videos stored",
-            },
-            "processing-pending-count": {
-                "value": pending_count,
-                "techDetail": "Number of media items awaiting processing",
-            },
-        }
+        photo_count = row.photo_count if row else 0
+        video_count = row.video_count if row else 0
+        pending_count = row.pending_count if row else 0
     except Exception:
         db.invalidate()
-        return {
-            "photo-count": {
-                "value": 0,
-                "techDetail": "Total number of photos stored",
-            },
-            "video-count": {
-                "value": 0,
-                "techDetail": "Total number of videos stored",
-            },
-            "processing-pending-count": {
-                "value": 0,
-                "techDetail": "Number of media items awaiting processing",
-            },
-        }
+        photo_count = video_count = pending_count = 0
     finally:
         db.close()
+    return {
+        "photo-count": {
+            "value": photo_count,
+            "techDetail": "Total number of photos stored",
+        },
+        "video-count": {
+            "value": video_count,
+            "techDetail": "Total number of videos stored",
+        },
+        "processing-pending-count": {
+            "value": pending_count,
+            "techDetail": "Number of media items awaiting processing",
+        },
+    }
 
 
 @app.get("/_info")
