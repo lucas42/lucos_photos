@@ -58,11 +58,29 @@ class TestLoganneWebhook:
         assert response.status_code == 204
         mock_sync.assert_not_called()
 
-    def test_no_auth_required(self, client):
-        """Loganne sends no authentication — endpoint must be publicly accessible."""
+    def test_no_auth_accepted_during_migration(self, client):
+        """Phase 1: requests without an Authorization header are still accepted."""
         with patch("lucos_photos_common.jobs.sync_single_contact_name"):
             response = client.post("/webhooks/loganne", json={
                 "type": "contactUpdated",
                 "agent": {"id": "contact-42", "name": "Alice"},
             })
+        assert response.status_code == 204
+
+    def test_invalid_token_rejected(self, client):
+        """Phase 1: requests with an invalid Bearer token are rejected with 401."""
+        with patch("lucos_photos_common.jobs.sync_single_contact_name"):
+            response = client.post("/webhooks/loganne", json={
+                "type": "contactUpdated",
+                "agent": {"id": "contact-42", "name": "Alice"},
+            }, headers={"Authorization": "Bearer wrongtoken"})
+        assert response.status_code == 401
+
+    def test_valid_token_accepted(self, client):
+        """Phase 1: requests with a valid Bearer token are accepted."""
+        with patch("lucos_photos_common.jobs.sync_single_contact_name"):
+            response = client.post("/webhooks/loganne", json={
+                "type": "contactUpdated",
+                "agent": {"id": "contact-42", "name": "Alice"},
+            }, headers={"Authorization": "Bearer validkey"})
         assert response.status_code == 204
