@@ -135,7 +135,7 @@ async def verify_session(request: Request, auth_token: Annotated[str | None, Coo
 async def _validate_token_with_auth_service(token: str) -> dict | None:
     """Call auth.l42.eu/data?token=<token> and return the JSON payload, or None on failure."""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(headers={"User-Agent": os.environ.get("SYSTEM", "")}) as client:
             resp = await client.get(
                 f"{AUTH_DOMAIN}/data",
                 params={"token": token},

@@ -20,7 +20,7 @@ async def fetch_contact_name(contact_id: str) -> Optional[str]:
         print(f"Warning: LUCOS_CONTACTS_URL or KEY_LUCOS_CONTACTS not set, cannot fetch contact name for {contact_id}")
         return None
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(headers={"User-Agent": os.environ.get("SYSTEM", "")}) as client:
             response = await client.get(
                 f"{contacts_url}/people/{contact_id}",
                 headers={"Accept": "application/json", "Authorization": f"key {contacts_key}"},
