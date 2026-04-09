@@ -16,23 +16,27 @@
 {% block scripts %}
 <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Media viewer">
     <button class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
-    <div class="lightbox-inner" id="lightbox-inner">
-        <!-- Photo or video element injected by JS -->
+    <button class="lightbox-nav lightbox-prev" id="lightbox-prev" aria-label="Previous">&lsaquo;</button>
+    <button class="lightbox-nav lightbox-next" id="lightbox-next" aria-label="Next">&rsaquo;</button>
+    <div class="lightbox-content">
+        <div class="lightbox-inner" id="lightbox-inner"></div>
+        <div class="lightbox-metadata" id="lightbox-metadata"></div>
     </div>
 </div>
 
+<script src="/lightbox.js"></script>
 <script>
     const grid = document.getElementById('photo-grid');
     const paginationBar = document.getElementById('pagination-bar');
     const paginationPrev = document.getElementById('pagination-prev');
     const paginationSummary = document.getElementById('pagination-summary');
     const paginationNext = document.getElementById('pagination-next');
-    const lightbox = document.getElementById('lightbox');
-    const lightboxInner = document.getElementById('lightbox-inner');
-    const lightboxClose = document.getElementById('lightbox-close');
-    let triggerElement = null;
 
     const PAGE_SIZE = 200;
+
+    // Track the current media items in display order so the lightbox can navigate
+    // between them. Updated whenever the grid changes (initial load or WebSocket prepend).
+    let currentItems = [];
 
     // ------------------------------------------------------------------
     // Pagination helpers
@@ -92,68 +96,6 @@
     }
 
     // ------------------------------------------------------------------
-    // Lightbox
-    // ------------------------------------------------------------------
-
-    function openLightbox(mediaItem) {
-        triggerElement = document.activeElement;
-        lightboxInner.innerHTML = '';
-
-        if (mediaItem.mediaType === 'video') {
-            const video = document.createElement('video');
-            video.src = mediaItem.originalUrl;
-            video.controls = true;
-            video.autoplay = true;
-            video.preload = 'metadata';
-            lightboxInner.appendChild(video);
-        } else {
-            const img = document.createElement('img');
-            img.src = mediaItem.originalUrl;
-            img.alt = 'Photo';
-            lightboxInner.appendChild(img);
-        }
-
-        lightbox.classList.add('open');
-        document.body.style.overflow = 'hidden';
-        lightboxClose.focus();
-    }
-
-    function closeLightbox() {
-        lightbox.classList.remove('open');
-        document.body.style.overflow = '';
-        // Pause any playing video to stop audio/network activity
-        const video = lightboxInner.querySelector('video');
-        if (video) video.pause();
-        lightboxInner.innerHTML = '';
-        if (triggerElement) { triggerElement.focus(); triggerElement = null; }
-    }
-
-    lightboxClose.addEventListener('click', closeLightbox);
-
-    lightbox.addEventListener('click', (e) => {
-        if (e.target === lightbox) closeLightbox();
-    });
-
-    document.addEventListener('keydown', (e) => {
-        // Focus trapping
-        if (e.key === 'Tab' && lightbox.classList.contains('open')) {
-            const focusable = lightbox.querySelectorAll('button');
-            if (focusable.length > 0) {
-                const first = focusable[0];
-                const last = focusable[focusable.length - 1];
-                if (e.shiftKey) {
-                    if (document.activeElement === first) { e.preventDefault(); last.focus(); }
-                } else {
-                    if (document.activeElement === last) { e.preventDefault(); first.focus(); }
-                }
-            }
-        }
-        if (e.key === 'Escape' && lightbox.classList.contains('open')) {
-            closeLightbox();
-        }
-    });
-
-    // ------------------------------------------------------------------
     // Media card rendering
     // ------------------------------------------------------------------
 
@@ -168,16 +110,6 @@
             <p>No photos here yet.</p>
         `;
         grid.appendChild(div);
-    }
-
-    function renderProcessingCard() {
-        const card = document.createElement('div');
-        card.className = 'media-card processing';
-        card.innerHTML = `
-            <div class="spinner"></div>
-            <span class="processing-label">Processing&hellip;</span>
-        `;
-        return card;
     }
 
     function renderVideoPlayOverlay() {
@@ -226,10 +158,13 @@
 
         // Left-click opens lightbox; right-click / middle-click / "Open in new tab"
         // uses the native browser behaviour via the <a> href.
+        // Index is resolved at click time via currentItems so WebSocket prepends
+        // don't leave existing cards pointing at stale indices.
         function clickHandler(e) {
             if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
                 e.preventDefault();
-                openLightbox(item);
+                const idx = currentItems.findIndex(function (i) { return i.id === item.id; });
+                if (idx !== -1) openLightbox(idx);
             }
         }
 
@@ -269,12 +204,17 @@
 
             if (items.length === 0 && page === 1) {
                 renderEmptyState();
+                currentItems = [];
+                initLightbox(currentItems);
                 return;
             }
 
             for (const item of items) {
                 grid.appendChild(renderMediaCard(item));
             }
+
+            currentItems = items;
+            initLightbox(currentItems);
 
             renderPagination(page, offset, items.length, total);
         } catch (err) {
@@ -316,6 +256,13 @@
                 // Prepend the new card
                 const card = renderMediaCard(item);
                 grid.insertBefore(card, grid.firstChild);
+
+                // Update currentItems — prepend new item, drop last if over-full
+                currentItems.unshift(item);
+                if (currentItems.length > PAGE_SIZE) {
+                    currentItems.pop();
+                }
+                initLightbox(currentItems);
 
                 // Update our local counters
                 currentCount++;
