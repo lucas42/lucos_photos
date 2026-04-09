@@ -3,18 +3,18 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, status
 
-from app.auth import verify_key_if_present
+from app.auth import verify_key
 
 router = APIRouter()
 
 
 @router.post("/webhooks/loganne", status_code=status.HTTP_204_NO_CONTENT)
-async def loganne_webhook(body: dict, _auth: Annotated[None, Depends(verify_key_if_present)]):
+async def loganne_webhook(body: dict, _auth: Annotated[None, Depends(verify_key)]):
     """Receive event notifications from lucos_loganne.
 
-    Loganne POSTs the full event object as JSON with no authentication header.
+    Loganne POSTs the full event object as JSON with an Authorization: Bearer header.
     Currently handles:
       - ``contactUpdated``: syncs the display_name of any person linked to the
         updated contact, using the name included in the event payload.
