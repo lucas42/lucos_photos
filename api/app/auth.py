@@ -65,6 +65,17 @@ def verify_key(authorization: Annotated[str | None, Header()] = None):
         raise HTTPException(status_code=401, detail="Invalid key", headers=WWW_AUTHENTICATE)
 
 
+def verify_key_if_present(authorization: Annotated[str | None, Header()] = None):
+    """Accept requests without an Authorization header, but reject invalid tokens.
+
+    Used during the Phase 1 migration window before Loganne starts sending
+    Bearer tokens — allows zero-downtime rollout by not breaking unauthenticated
+    callers that haven't been updated yet.
+    """
+    if authorization is not None and not _is_valid_key(authorization):
+        raise HTTPException(status_code=401, detail="Invalid key", headers=WWW_AUTHENTICATE)
+
+
 async def verify_session_or_key(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
