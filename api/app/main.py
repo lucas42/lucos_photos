@@ -139,15 +139,18 @@ CHECK_TIMEOUT = 0.5  # seconds — must be well under monitoring system's 1s har
 async def check_db() -> dict:
     """Check whether a connection to PostgreSQL can be established."""
     tech_detail = "Checks whether a connection to PostgreSQL can be established"
+    db = SessionLocal()
     try:
-        db = SessionLocal()
-        try:
-            await asyncio.wait_for(asyncio.to_thread(db.execute, text("SELECT 1")), timeout=CHECK_TIMEOUT)
-        finally:
-            db.close()
+        await asyncio.wait_for(asyncio.to_thread(db.execute, text("SELECT 1")), timeout=CHECK_TIMEOUT)
         return {"ok": True, "techDetail": tech_detail}
     except Exception:
+        # Invalidate rather than return to the pool: asyncio.wait_for cancels the
+        # coroutine wrapper but the underlying thread keeps running, so db.close()
+        # would race with the in-flight execute and return a broken connection.
+        db.invalidate()
         return {"ok": False, "techDetail": tech_detail}
+    finally:
+        db.close()
 
 
 async def check_redis() -> dict:
@@ -163,22 +166,19 @@ async def check_redis() -> dict:
 
 async def get_metrics() -> dict:
     """Return live metrics: photo count, video count, and pending processing queue depth."""
+    db = SessionLocal()
     try:
-        db = SessionLocal()
-        try:
-            photo_count = await asyncio.to_thread(
-                lambda: db.query(MediaItem).filter(MediaItem.media_type == "photo").count()
-            )
-            video_count = await asyncio.to_thread(
-                lambda: db.query(MediaItem).filter(MediaItem.media_type == "video").count()
-            )
-            pending_count = await asyncio.to_thread(
-                lambda: db.query(ProcessingStatus).filter(
-                    ProcessingStatus.state == ProcessingState.pending
-                ).count()
-            )
-        finally:
-            db.close()
+        photo_count = await asyncio.to_thread(
+            lambda: db.query(MediaItem).filter(MediaItem.media_type == "photo").count()
+        )
+        video_count = await asyncio.to_thread(
+            lambda: db.query(MediaItem).filter(MediaItem.media_type == "video").count()
+        )
+        pending_count = await asyncio.to_thread(
+            lambda: db.query(ProcessingStatus).filter(
+                ProcessingStatus.state == ProcessingState.pending
+            ).count()
+        )
         return {
             "photo-count": {
                 "value": photo_count,
@@ -194,6 +194,7 @@ async def get_metrics() -> dict:
             },
         }
     except Exception:
+        db.invalidate()
         return {
             "photo-count": {
                 "value": 0,
@@ -208,6 +209,8 @@ async def get_metrics() -> dict:
                 "techDetail": "Number of media items awaiting processing",
             },
         }
+    finally:
+        db.close()
 
 
 @app.get("/_info")
