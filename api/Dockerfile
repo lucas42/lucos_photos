@@ -5,6 +5,8 @@ WORKDIR /build
 RUN echo '{"dependencies":{"lucos_search_component":"^1.0.14"}}' > package.json && npm install
 
 FROM python:3.14-slim
+ARG VERSION
+ENV VERSION=$VERSION
 
 RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
 
