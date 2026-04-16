@@ -7,6 +7,14 @@ updates:
       time: '07:00'
     allow:
       - dependency-type: all
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major:
+        update-types:
+          - major
   - package-ecosystem: pip
     directory: /worker
     schedule:
@@ -14,6 +22,14 @@ updates:
       time: '07:00'
     allow:
       - dependency-type: all
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major:
+        update-types:
+          - major
   - package-ecosystem: pip
     directory: /shared
     schedule:
@@ -21,6 +37,14 @@ updates:
       time: '07:00'
     allow:
       - dependency-type: all
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major:
+        update-types:
+          - major
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -28,6 +52,14 @@ updates:
       time: '07:00'
     allow:
       - dependency-type: all
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major:
+        update-types:
+          - major
   - package-ecosystem: docker
     directory: /api
     schedule:
@@ -35,6 +67,14 @@ updates:
       time: '07:00'
     allow:
       - dependency-type: all
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major:
+        update-types:
+          - major
   - package-ecosystem: docker
     directory: /worker
     schedule:
@@ -42,6 +82,14 @@ updates:
       time: '07:00'
     allow:
       - dependency-type: all
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major:
+        update-types:
+          - major
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -49,3 +97,11 @@ updates:
       time: '07:00'
     allow:
       - dependency-type: all
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major:
+        update-types:
+          - major
