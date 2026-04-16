@@ -1,4 +1,6 @@
 FROM python:3.14-slim
+ARG VERSION
+ENV VERSION=$VERSION
 
 WORKDIR /app
 
