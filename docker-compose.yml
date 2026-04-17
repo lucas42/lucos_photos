@@ -66,6 +66,7 @@ services:
       start_period: 15s
     restart: unless-stopped
     mem_limit: 3g
+    memswap_limit: 3g
 
   postgres:
     container_name: lucos_photos_postgres
