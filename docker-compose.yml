@@ -1,7 +1,7 @@
 services:
   api:
     container_name: lucos_photos_api
-    image: lucas42/lucos_photos_api
+    image: lucas42/lucos_photos_api:${VERSION:-latest}
     build:
       context: .
       dockerfile: api/Dockerfile
@@ -37,7 +37,7 @@ services:
 
   worker:
     container_name: lucos_photos_worker
-    image: lucas42/lucos_photos_worker
+    image: lucas42/lucos_photos_worker:${VERSION:-latest}
     build:
       context: .
       dockerfile: worker/Dockerfile
