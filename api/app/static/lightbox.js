@@ -165,7 +165,7 @@
         } else {
             const img = document.createElement('img');
             img.src = item.originalUrl;
-            img.alt = 'Photo';
+            img.alt = item.takenAt ? 'Photo taken ' + formatDate(item.takenAt) : 'Photo';
             lightboxInner.appendChild(img);
         }
 
@@ -234,6 +234,7 @@
                     originalUrl: link.getAttribute('data-original-url'),
                     mediaType: link.getAttribute('data-media-type') || 'image',
                     id: link.getAttribute('data-photo-id') || '',
+                    takenAt: link.getAttribute('data-taken-at') || '',
                 });
             });
         }

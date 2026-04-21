@@ -30,7 +30,8 @@
                 <a href="/photos/{{ photo.id }}" class="media-card-link"
                    data-original-url="{{ photo.originalUrl }}"
                    data-media-type="{{ photo.mediaType }}"
-                   data-photo-id="{{ photo.id }}">
+                   data-photo-id="{{ photo.id }}"
+                   {% if photo.takenAt %}data-taken-at="{{ photo.takenAt }}"{% endif %}>
                     <div class="media-card">
                         <img src="{{ photo.thumbnailUrl }}" alt="Photo{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}" loading="lazy">
                     </div>
