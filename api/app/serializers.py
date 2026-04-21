@@ -41,6 +41,7 @@ def photo_to_dict(photo: MediaItem) -> dict:
         "fileExtension": photo.file_extension,
         "mediaType": photo.media_type,
         "takenAt": photo.taken_at.isoformat() if photo.taken_at else None,
+        "takenAtDisplay": photo.taken_at.strftime("%-d %B %Y") if photo.taken_at else None,
         "uploadedAt": photo.uploaded_at.isoformat() if photo.uploaded_at else None,
         "width": photo.width,
         "height": photo.height,

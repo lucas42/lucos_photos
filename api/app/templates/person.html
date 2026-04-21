@@ -7,7 +7,7 @@
 
     <div class="person-detail-header">
         {% if person.profilePictureUrl %}
-        <img class="person-profile-picture-large" src="{{ person.profilePictureUrl }}" alt="Profile picture">
+        <img class="person-profile-picture-large" src="{{ person.profilePictureUrl }}" alt="">
         {% else %}
         <div class="person-profile-picture-placeholder person-profile-picture-large"></div>
         {% endif %}
@@ -21,7 +21,7 @@
             {% for photo in person.photos %}
             <a href="/photos/{{ photo.id }}" class="media-card-link">
                 <div class="media-card">
-                    <img src="{{ photo.thumbnailUrl }}" alt="Photo{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}" loading="lazy">
+                    <img src="{{ photo.thumbnailUrl }}" alt="Photo{% if photo.takenAtDisplay %} taken {{ photo.takenAtDisplay }}{% endif %}" loading="lazy">
                 </div>
             </a>
             {% endfor %}

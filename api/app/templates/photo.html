@@ -1,6 +1,6 @@
 {% extends "_base.html" %}
 
-{% block title %}Photo {{ photo.id[:8] }}… — Photos{% endblock %}
+{% block title %}{% if photo.takenAtDisplay %}Photo — {{ photo.takenAtDisplay }} — {% else %}Photo — {% endif %}Photos{% endblock %}
 
 {% block content %}
 <div class="container" id="app">
@@ -9,12 +9,12 @@
             {% if photo.prevPhotoId %}
             <a href="/photos/{{ photo.prevPhotoId }}" class="photo-nav-link photo-nav-prev" aria-label="Previous photo">&larr; Prev</a>
             {% else %}
-            <span class="photo-nav-link photo-nav-disabled" aria-disabled="true">&larr; Prev</span>
+            <span class="photo-nav-link photo-nav-disabled">&larr; Prev</span>
             {% endif %}
             {% if photo.nextPhotoId %}
             <a href="/photos/{{ photo.nextPhotoId }}" class="photo-nav-link photo-nav-next" aria-label="Next photo">Next &rarr;</a>
             {% else %}
-            <span class="photo-nav-link photo-nav-disabled" aria-disabled="true">Next &rarr;</span>
+            <span class="photo-nav-link photo-nav-disabled">Next &rarr;</span>
             {% endif %}
         </nav>
 
@@ -24,7 +24,7 @@
                class="photo-detail-media"></video>
         {% else %}
         <img src="{{ photo.originalUrl }}"
-             alt="{{ 'Video' if photo.mediaType == 'video' else 'Photo' }}{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}"
+             alt="{{ 'Video' if photo.mediaType == 'video' else 'Photo' }}{% if photo.takenAtDisplay %} taken {{ photo.takenAtDisplay }}{% endif %}"
              class="photo-detail-media" />
         {% endif %}
 
@@ -33,7 +33,7 @@
             <dd>{{ 'Video' if photo.mediaType == 'video' else 'Photo' }}</dd>
 
             <dt>Taken</dt>
-            <dd>{{ photo.takenAt if photo.takenAt else '—' }}</dd>
+            <dd>{{ photo.takenAtDisplay if photo.takenAtDisplay else '—' }}</dd>
 
             <dt>Uploaded</dt>
             <dd>{{ photo.uploadedAt if photo.uploadedAt else '—' }}</dd>

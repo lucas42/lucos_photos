@@ -1,6 +1,6 @@
 {% extends "_base.html" %}
 
-{% block title %}Photos — Photos{% endblock %}
+{% block title %}All Photos — Photos{% endblock %}
 
 {% block meta %}<meta name="description" content="All photos in the collection.">{% endblock %}
 
@@ -51,9 +51,10 @@
             <a href="/photos/{{ photo.id }}" class="media-card-link"
                data-original-url="{{ photo.originalUrl }}"
                data-media-type="{{ photo.mediaType }}"
-               data-photo-id="{{ photo.id }}">
+               data-photo-id="{{ photo.id }}"
+               {% if photo.takenAt %}data-taken-at="{{ photo.takenAt }}"{% endif %}>
                 <div class="media-card">
-                    <img src="{{ photo.thumbnailUrl }}" alt="{{ 'Video' if photo.mediaType == 'video' else 'Photo' }}{% if photo.takenAt %} taken {{ photo.takenAt }}{% endif %}" loading="lazy">
+                    <img src="{{ photo.thumbnailUrl }}" alt="{{ 'Video' if photo.mediaType == 'video' else 'Photo' }}{% if photo.takenAtDisplay %} taken {{ photo.takenAtDisplay }}{% endif %}" loading="lazy">
                     {% if photo.mediaType == 'video' %}
                     <div class="play-overlay">
                         <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -76,9 +77,9 @@
         "show": total > limit,
         "summary": "Showing " ~ (offset + 1) ~ "–" ~ ([offset + limit, total] | min) ~ " of " ~ total,
         "prev_url": ("/photos?offset=" ~ prev_offset ~ "&limit=" ~ limit ~ filter_params) if prev_offset is not none else none,
-        "prev_label": "<- Page " ~ (current_page_num - 1),
+        "prev_label": "← Page " ~ (current_page_num - 1),
         "next_url": ("/photos?offset=" ~ next_offset ~ "&limit=" ~ limit ~ filter_params) if next_offset is not none else none,
-        "next_label": "Page " ~ (current_page_num + 1) ~ " ->"
+        "next_label": "Page " ~ (current_page_num + 1) ~ " →"
     } %}
     {% include "_pagination.html" %}
 </div>

@@ -13,7 +13,7 @@
                 <div class="person-card">
                     <div class="person-card-header">
                         {% if person.profilePictureUrl %}
-                        <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="Profile picture">
+                        <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="">
                         {% else %}
                         <div class="person-profile-picture-placeholder"></div>
                         {% endif %}
@@ -32,9 +32,9 @@
         "show": total > limit,
         "summary": "Showing " ~ (offset + 1) ~ "–" ~ ([offset + limit, total] | min) ~ " of " ~ total,
         "prev_url": ("/people?offset=" ~ prev_offset ~ "&limit=" ~ limit) if prev_offset is not none else none,
-        "prev_label": "<- Page " ~ (current_page - 1),
+        "prev_label": "← Page " ~ (current_page - 1),
         "next_url": ("/people?offset=" ~ next_offset ~ "&limit=" ~ limit) if next_offset is not none else none,
-        "next_label": "Page " ~ (current_page + 1) ~ " ->"
+        "next_label": "Page " ~ (current_page + 1) ~ " →"
     } %}
     {% include "_pagination.html" %}
 </div>
