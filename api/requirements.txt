@@ -1,5 +1,5 @@
 alembic>=1.18.4
-fastapi>=0.110
+fastapi>=0.136.0
 jinja2>=3.0
 python-multipart
 uvicorn[standard]>=0.45.0
