@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.templating import Jinja2Templates
 
-from app.auth import verify_session, verify_session_or_key
+from app.auth import verify_session_or_key
 
 router = APIRouter()
 
@@ -143,5 +143,5 @@ async def get_app_latest(_: Annotated[None, Depends(verify_session_or_key)]):
 
 
 @router.get("/app", include_in_schema=False)
-async def app_page(request: Request, _: Annotated[None, Depends(verify_session)]):
+async def app_page(request: Request, _: Annotated[None, Depends(verify_session_or_key)]):
     return templates.TemplateResponse(request, "app.html", {"current_page": "app"})
