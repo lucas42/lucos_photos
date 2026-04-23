@@ -63,7 +63,7 @@
 
         {% if not person.contactId %}
         <button class="background-btn" id="background-btn">
-            {% if person.isBackground %}Unmark as background face{% else %}Mark as background face{% endif %}
+            {% if person.isBackground %}Stop ignoring this person{% else %}Ignore this person{% endif %}
         </button>
         {% endif %}
     </div>
@@ -307,7 +307,7 @@
     }
 
     async function handleToggleBackground(btn) {
-        const isBackground = btn.textContent.trim() === 'Unmark as background face';
+        const isBackground = btn.textContent.trim() === 'Stop ignoring this person';
         const method = isBackground ? 'DELETE' : 'PUT';
         try {
             const response = await fetch(`/people/${personId}/background`, { method });
@@ -315,9 +315,9 @@
                 throw new Error(`API responded with ${response.status}`);
             }
             if (isBackground) {
-                btn.textContent = 'Mark as background face';
+                btn.textContent = 'Ignore this person';
             } else {
-                btn.textContent = 'Unmark as background face';
+                btn.textContent = 'Stop ignoring this person';
             }
         } catch (err) {
             console.error('Failed to toggle background status:', err);
