@@ -116,6 +116,50 @@ class TestMetrics:
         assert data["metrics"]["processing-pending-count"]["value"] == 0
 
 
+class TestWorkerMemoryMetric:
+    """Tests for the worker-memory-rss-bytes metric surfaced from the Redis heartbeat."""
+
+    def _mock_redis_with_heartbeat(self, rss_bytes=52428800):
+        import json
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = json.dumps({
+            "rss_bytes": rss_bytes,
+            "pid": 42,
+            "timestamp": "2026-04-23T12:00:00+00:00",
+        }).encode()
+        return mock_redis
+
+    def test_worker_memory_metric_present_when_heartbeat_available(self, client):
+        mock_redis = self._mock_redis_with_heartbeat(rss_bytes=52428800)
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        assert "worker-memory-rss-bytes" in data["metrics"]
+        assert data["metrics"]["worker-memory-rss-bytes"]["value"] == 52428800
+
+    def test_worker_memory_metric_absent_when_no_heartbeat(self, client):
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = None
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        assert "worker-memory-rss-bytes" not in data["metrics"]
+
+    def test_worker_memory_metric_absent_when_redis_fails(self, client):
+        mock_redis = MagicMock()
+        mock_redis.get.side_effect = Exception("Redis unreachable")
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        assert "worker-memory-rss-bytes" not in data["metrics"]
+
+    def test_worker_memory_metric_has_correct_structure(self, client):
+        mock_redis = self._mock_redis_with_heartbeat()
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        metric = data["metrics"]["worker-memory-rss-bytes"]
+        assert "value" in metric
+        assert "techDetail" in metric
+        assert isinstance(metric["value"], int)
+
+
 class TestHealthChecks:
     """Tests for individual health check behaviour — happy paths and failure paths."""
 

@@ -4,6 +4,7 @@ Starts an RQ worker listening on the 'photos' queue, and a background thread
 that periodically sweeps for photos stuck in 'pending' or 'processing' state.
 """
 
+import json
 import logging
 import os
 import threading
@@ -30,6 +31,42 @@ PENDING_SWEEP_INTERVAL_SECONDS = int(os.environ.get("PENDING_SWEEP_INTERVAL_SECO
 # Circuit breaker: skip sweep if queue already has this many or more jobs waiting.
 # Prevents a positive-feedback flood (sweep re-enqueues -> jobs fail -> queue grows -> OOM).
 SWEEP_QUEUE_DEPTH_LIMIT = int(os.environ.get("SWEEP_QUEUE_DEPTH_LIMIT", 0))
+
+
+WORKER_HEARTBEAT_KEY = "worker:heartbeat"
+
+
+def get_rss_bytes() -> int | None:
+    """Return the current RSS of this process in bytes, or None if unreadable."""
+    try:
+        with open("/proc/self/status") as f:
+            content = f.read()
+        for line in content.splitlines():
+            if line.startswith("VmRSS:"):
+                kb = int(line.split()[1])
+                return kb * 1024
+    except Exception:
+        pass
+    return None
+
+
+def publish_heartbeat(redis_conn: Redis) -> None:
+    """Write current RSS and PID to Redis for the API to surface in /_info.
+
+    TTL is set to 3× the sweep interval so the key disappears if the worker stops.
+    Errors are absorbed so a Redis write failure cannot suppress the sweep.
+    """
+    try:
+        rss = get_rss_bytes()
+        payload = json.dumps({
+            "rss_bytes": rss,
+            "pid": os.getpid(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        ttl = PENDING_SWEEP_INTERVAL_SECONDS * 3
+        redis_conn.set(WORKER_HEARTBEAT_KEY, payload, ex=ttl)
+    except Exception:
+        logger.warning("publish_heartbeat: failed to write to Redis", exc_info=True)
 
 
 def _enqueue_for_media_item(queue: Queue, status: ProcessingStatus) -> None:
@@ -141,6 +178,7 @@ def run_sweep_loop(redis_conn: Redis) -> None:
     while True:
         time.sleep(PENDING_SWEEP_INTERVAL_SECONDS)
         try:
+            publish_heartbeat(redis_conn)
             sweep_pending_photos(redis_conn)
         except Exception:
             logger.exception("sweep: unhandled error in sweep loop")
