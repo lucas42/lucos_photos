@@ -54,15 +54,19 @@ def publish_heartbeat(redis_conn: Redis) -> None:
     """Write current RSS and PID to Redis for the API to surface in /_info.
 
     TTL is set to 3× the sweep interval so the key disappears if the worker stops.
+    Errors are absorbed so a Redis write failure cannot suppress the sweep.
     """
-    rss = get_rss_bytes()
-    payload = json.dumps({
-        "rss_bytes": rss,
-        "pid": os.getpid(),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
-    ttl = PENDING_SWEEP_INTERVAL_SECONDS * 3
-    redis_conn.set(WORKER_HEARTBEAT_KEY, payload, ex=ttl)
+    try:
+        rss = get_rss_bytes()
+        payload = json.dumps({
+            "rss_bytes": rss,
+            "pid": os.getpid(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        ttl = PENDING_SWEEP_INTERVAL_SECONDS * 3
+        redis_conn.set(WORKER_HEARTBEAT_KEY, payload, ex=ttl)
+    except Exception:
+        logger.warning("publish_heartbeat: failed to write to Redis", exc_info=True)
 
 
 def _enqueue_for_media_item(queue: Queue, status: ProcessingStatus) -> None:

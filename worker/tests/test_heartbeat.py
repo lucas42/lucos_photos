@@ -58,3 +58,10 @@ class TestPublishHeartbeat:
             publish_heartbeat(redis_mock)
         data = json.loads(redis_mock.set.call_args[0][1])
         assert data["rss_bytes"] is None
+
+    def test_redis_write_failure_is_absorbed(self):
+        """A Redis write error must not propagate — heartbeat failures must not suppress sweeps."""
+        redis_mock = MagicMock()
+        redis_mock.set.side_effect = Exception("Redis write failed")
+        with patch("app.main.get_rss_bytes", return_value=1234):
+            publish_heartbeat(redis_mock)  # must not raise
