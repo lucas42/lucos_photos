@@ -4,42 +4,11 @@ import asyncio
 import os
 from typing import Annotated
 
-import httpx
 from fastapi import APIRouter, Depends, status
 
 from app.auth import verify_key
 
 router = APIRouter()
-
-
-async def _fetch_contact(url: str) -> tuple[str, str] | None:
-    """Fetch contact JSON from url and return (contact_id, name), or None on failure.
-
-    contact_id is extracted from the last path segment of the URL.
-    name is read from the JSON response body.
-
-    The URL must start with LUCOS_CONTACTS_URL to prevent SSRF and credential exfiltration.
-    """
-    contacts_base = os.environ.get("LUCOS_CONTACTS_URL", "")
-    if not contacts_base or not url.startswith(contacts_base):
-        return None
-    contacts_key = os.environ.get("KEY_LUCOS_CONTACTS", "")
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url,
-                headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}"},
-                timeout=5.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        contact_id = url.rstrip("/").rsplit("/", 1)[-1]
-        name = str(data.get("name", "")).strip()
-        if not contact_id or not name:
-            return None
-        return contact_id, name
-    except Exception:
-        return None
 
 
 @router.post("/webhooks/loganne", status_code=status.HTTP_204_NO_CONTENT)
@@ -48,7 +17,7 @@ async def loganne_webhook(body: dict, _auth: Annotated[None, Depends(verify_key)
 
     Loganne POSTs the full event object as JSON with an Authorization: Bearer header.
     Currently handles:
-      - ``contactUpdated``: re-fetches the contact from the source URL and syncs
+      - ``contactUpdated``: re-fetches the contact from the contacts API and syncs
         display_name for any person linked to that contact.
 
     Other event types are silently ignored (return 204).
@@ -61,10 +30,18 @@ async def loganne_webhook(body: dict, _auth: Annotated[None, Depends(verify_key)
     if not url:
         return
 
-    result = await _fetch_contact(url)
-    if not result:
+    # Validate the URL is on the contacts domain before extracting any data from it.
+    contacts_base = os.environ.get("LUCOS_CONTACTS_URL", "")
+    if not contacts_base or not url.startswith(contacts_base):
         return
 
-    contact_id, name = result
-    from lucos_photos_common.jobs import sync_single_contact_name
-    await asyncio.to_thread(sync_single_contact_name, contact_id, name)
+    # Extract the contact_id from the URL path. This value is used only as a DB
+    # lookup key — the outbound HTTP call is made in refresh_contact_display_name
+    # using person.contact_id from the DB (untainted) + LUCOS_CONTACTS_URL (env var),
+    # so no user-supplied data ever reaches the httpx request URL.
+    contact_id = url.rstrip("/").rsplit("/", 1)[-1]
+    if not contact_id:
+        return
+
+    from lucos_photos_common.jobs import refresh_contact_display_name
+    await asyncio.to_thread(refresh_contact_display_name, contact_id)

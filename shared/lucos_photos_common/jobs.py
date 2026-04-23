@@ -1078,6 +1078,64 @@ def sync_single_contact_name(contact_id: str, name: str) -> None:
         db.close()
 
 
+def refresh_contact_display_name(contact_id: str) -> None:
+    """Re-fetch the display name for a single contact and update any linked persons.
+
+    Looks up persons by contact_id in the DB, then fetches the canonical name from
+    lucos_contacts using a URL constructed from LUCOS_CONTACTS_URL + person.contact_id
+    (both from trusted sources, not from user input).
+
+    Called by the Loganne webhook handler on contactUpdated events.
+    """
+    import httpx
+
+    contacts_url = os.environ.get("LUCOS_CONTACTS_URL", "").rstrip("/")
+    contacts_key = os.environ.get("KEY_LUCOS_CONTACTS", "")
+    if not contacts_url or not contacts_key:
+        logger.warning("refresh_contact_display_name: LUCOS_CONTACTS_URL or KEY_LUCOS_CONTACTS not set, skipping")
+        return
+
+    db = SessionLocal()
+    try:
+        persons = db.query(Person).filter(Person.contact_id == contact_id).all()
+        if not persons:
+            return
+
+        updated = 0
+        for person in persons:
+            try:
+                response = httpx.get(
+                    f"{contacts_url}/people/{person.contact_id}",
+                    headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}"},
+                    timeout=5.0,
+                )
+                response.raise_for_status()
+                canonical_name = response.json().get("name") or None
+            except Exception as e:
+                logger.warning(
+                    "refresh_contact_display_name: failed to fetch contact %s: %s",
+                    person.contact_id, e,
+                )
+                continue
+
+            if canonical_name and person.display_name != canonical_name:
+                logger.info(
+                    "refresh_contact_display_name: updating person %s display_name from %r to %r",
+                    person.id, person.display_name, canonical_name,
+                )
+                person.display_name = canonical_name
+                updated += 1
+
+        if updated:
+            db.commit()
+    except Exception:
+        logger.exception("refresh_contact_display_name: error for contact %s", contact_id)
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def sweep_contact_display_names() -> None:
     """Check all persons linked to contacts and sync display_name with lucos_contacts.
 
