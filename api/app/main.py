@@ -164,8 +164,20 @@ async def check_redis() -> dict:
         return {"ok": False, "techDetail": tech_detail}
 
 
+async def get_worker_memory_rss_bytes() -> int | None:
+    """Read the worker's last-reported RSS from the Redis heartbeat key, or None if absent."""
+    try:
+        redis_conn = get_redis()
+        raw = await asyncio.wait_for(asyncio.to_thread(redis_conn.get, "worker:heartbeat"), timeout=CHECK_TIMEOUT)
+        if raw:
+            return json.loads(raw).get("rss_bytes")
+    except Exception:
+        pass
+    return None
+
+
 async def get_metrics() -> dict:
-    """Return live metrics: photo count, video count, and pending processing queue depth."""
+    """Return live metrics: photo count, video count, pending queue depth, worker RSS."""
     db = SessionLocal()
     try:
         row = await asyncio.wait_for(
@@ -187,7 +199,10 @@ async def get_metrics() -> dict:
         photo_count = video_count = pending_count = 0
     finally:
         db.close()
-    return {
+
+    worker_rss = await get_worker_memory_rss_bytes()
+
+    metrics = {
         "photo-count": {
             "value": photo_count,
             "techDetail": "Total number of photos stored",
@@ -201,6 +216,12 @@ async def get_metrics() -> dict:
             "techDetail": "Number of media items awaiting processing",
         },
     }
+    if worker_rss is not None:
+        metrics["worker-memory-rss-bytes"] = {
+            "value": worker_rss,
+            "techDetail": "Worker process resident memory (RSS) in bytes",
+        }
+    return metrics
 
 
 @app.get("/_info")
