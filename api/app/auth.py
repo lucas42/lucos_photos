@@ -83,8 +83,7 @@ async def verify_session_or_key(
 ):
     """Accept either key auth (Authorization: key/Bearer <token>) or a session cookie.
 
-    Used for endpoints that need to be callable both from the browser (cookie auth)
-    and from machine-to-machine clients like the Android app (key auth).
+    Used for all authenticated endpoints — both browser UI routes and M2M/agent callers.
     If an Authorization header is present and contains a valid key, auth succeeds
     immediately. Otherwise, falls through to session cookie validation.
 
@@ -96,10 +95,10 @@ async def verify_session_or_key(
     if _is_valid_key(authorization):
         return  # key auth succeeded
 
-    await verify_session(request, auth_token)
+    await _verify_session_cookie(request, auth_token)
 
 
-async def verify_session(request: Request, auth_token: Annotated[str | None, Cookie()] = None):
+async def _verify_session_cookie(request: Request, auth_token: str | None):
     """Validate a user session via the lucos_authentication service.
 
     - If a ?token= query parameter is present (auth callback), validate it, set a

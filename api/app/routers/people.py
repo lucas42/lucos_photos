@@ -14,7 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import verify_session
+from app.auth import verify_session_or_key
 from app.database import get_db
 from app.serializers import DERIVATIVES_DIR, person_profile_picture_url, person_to_dict, photo_to_dict
 from app.services import emit_loganne_event, fetch_contact_name
@@ -36,7 +36,7 @@ PEOPLE_SORT_ORDER = [
 @router.get("/people")
 def list_people(
     request: Request,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     includePhotoCounts: bool = False,
     limit: int = 100,
     offset: int = 0,
@@ -79,7 +79,7 @@ def list_people(
 @router.post("/people", status_code=status.HTTP_201_CREATED)
 async def create_person(
     body: dict,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     name = body.get("name")
@@ -119,7 +119,7 @@ async def create_person(
 def get_person(
     person_id: str,
     request: Request,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     try:
@@ -166,7 +166,7 @@ def get_person(
 @router.get("/people/{person_id}/profile-picture")
 def get_person_profile_picture(
     person_id: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
 ):
     """Serve a person's profile picture derivative file."""
     try:
@@ -185,7 +185,7 @@ def get_person_profile_picture(
 async def link_person_contact(
     person_id: str,
     body: dict,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     try:
@@ -238,7 +238,7 @@ async def link_person_contact(
 @router.delete("/people/{person_id}/contact", status_code=status.HTTP_204_NO_CONTENT)
 async def unlink_person_contact(
     person_id: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     try:
@@ -259,7 +259,7 @@ async def unlink_person_contact(
 @router.post("/people/merge")
 async def merge_people(
     body: dict,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     """Merge two or more people into one.
@@ -362,7 +362,7 @@ async def merge_people(
 @router.put("/people/{person_id}/background", status_code=status.HTTP_200_OK)
 async def mark_person_background(
     person_id: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     """Mark a person as a background face (hides them from the people list)."""
@@ -387,7 +387,7 @@ async def mark_person_background(
 @router.delete("/people/{person_id}/background", status_code=status.HTTP_200_OK)
 async def unmark_person_background(
     person_id: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     """Unmark a person as a background face (shows them in the people list again)."""

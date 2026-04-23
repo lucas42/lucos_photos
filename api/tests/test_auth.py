@@ -1,7 +1,8 @@
-"""Tests for the lucos_authentication session auth middleware (verify_session).
+"""Tests for the lucos_authentication session auth middleware (verify_session_or_key).
 
-These tests focus on the behaviour of verify_session itself: cookie handling,
-auth service validation, browser redirect vs. API 401, etc.
+These tests focus on the behaviour of verify_session_or_key itself: cookie handling,
+auth service validation, browser redirect vs. API 401, and Bearer token acceptance
+on HTML routes.
 
 The M2M (CLIENT_KEYS) auth on the upload endpoint is covered in test_main.py.
 """
@@ -400,6 +401,54 @@ class TestOpenRedirectPrevention:
         assert response.status_code == 302
         location = response.headers["location"]
         assert location.startswith("https://photos.example.com/")
+
+
+class TestBearerTokenOnHtmlRoutes:
+    """HTML/UI routes must also accept a valid Authorization: Bearer <token> header."""
+
+    def test_valid_bearer_token_allows_access_to_html_route(self, client):
+        """A valid CLIENT_KEYS token in Authorization: Bearer grants access to /photos."""
+        response = client.get(
+            "/photos",
+            headers={
+                "Accept": "application/json",
+                "Authorization": "Bearer validkey",
+            },
+        )
+        assert response.status_code == 200
+
+    def test_valid_key_scheme_allows_access_to_html_route(self, client):
+        """The 'key' scheme (used by Android) is also accepted on HTML routes."""
+        response = client.get(
+            "/photos",
+            headers={
+                "Accept": "application/json",
+                "Authorization": "key validkey",
+            },
+        )
+        assert response.status_code == 200
+
+    def test_invalid_bearer_token_falls_through_to_cookie_check(self, client):
+        """An invalid Bearer token falls through to cookie validation, not a hard 401."""
+        response = client.get(
+            "/photos",
+            headers={
+                "Accept": "application/json",
+                "Authorization": "Bearer not-a-valid-key",
+            },
+        )
+        # No cookie present either, so we get the no-auth response (401 for JSON clients)
+        assert response.status_code == 401
+
+    def test_no_auth_browser_request_still_redirects_to_auth(self, client):
+        """Browser requests with no auth header and no cookie still redirect to auth.l42.eu."""
+        response = client.get(
+            "/photos",
+            headers={"Accept": "text/html"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        assert AUTH_DOMAIN in response.headers["location"]
 
 
 class TestUploadStillUsesMachineAuth:

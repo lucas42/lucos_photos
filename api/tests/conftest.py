@@ -16,7 +16,7 @@ import app.main as main_module
 import app.routers.photos as photos_module
 from app.main import app
 from app.database import get_db
-from app.auth import verify_session, verify_session_or_key
+from app.auth import verify_session_or_key
 import lucos_photos_common.models  # noqa: F401 - registers all models with Base.metadata
 from lucos_photos_common.database import Base
 
@@ -76,9 +76,7 @@ def authenticated_client(client):
     async def _noop_verify_session():
         return None
 
-    app.dependency_overrides[verify_session] = _noop_verify_session
     app.dependency_overrides[verify_session_or_key] = _noop_verify_session
     yield client
     # Restore: remove the auth overrides (other overrides like get_db remain)
-    app.dependency_overrides.pop(verify_session, None)
     app.dependency_overrides.pop(verify_session_or_key, None)

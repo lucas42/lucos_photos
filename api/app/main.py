@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from app.auth import _validate_token_with_auth_service, safe_path, verify_session, verify_session_or_key  # noqa: F401 - re-exported for tests
+from app.auth import _validate_token_with_auth_service, safe_path, verify_session_or_key  # noqa: F401 - re-exported for tests
 from app.database import get_db, SessionLocal  # noqa: F401 - re-exported for tests; SessionLocal used by check_db/get_metrics
 from app.redis_client import _broadcast, _redis_subscriber_task, _ws_clients, get_redis  # noqa: F401 - _broadcast and _ws_clients re-exported for tests
 from app.routers import app_release, faces, people, photos, telemetry, webhooks
@@ -100,7 +100,7 @@ def healthcheck():
 
 
 @app.get("/", include_in_schema=False)
-def root(request: Request, _: Annotated[None, Depends(verify_session)], db: Session = Depends(get_db)):
+def root(request: Request, _: Annotated[None, Depends(verify_session_or_key)], db: Session = Depends(get_db)):
     # Photos: count and 10 most recently added (by uploaded_at)
     photo_order_cols = [MediaItem.taken_at.desc().nullslast(), MediaItem.uploaded_at.desc()]
     processed_photos_query = (

@@ -19,7 +19,7 @@ from PIL import Image
 from sqlalchemy import case, or_, and_
 from sqlalchemy.orm import Session
 
-from app.auth import verify_key, verify_session
+from app.auth import verify_key, verify_session_or_key
 from app.database import get_db
 from app.redis_client import enqueue_process_media
 from app.serializers import face_to_dict_simple, person_to_dict, photo_to_dict, photo_url
@@ -393,7 +393,7 @@ async def upload_photo(
 @router.get("/photos")
 def list_photos(
     request: Request,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     limit: int = 100,
     offset: int = 0,
     person_id: str | None = None,
@@ -507,7 +507,7 @@ def list_photos(
 def get_photo(
     photo_id: str,
     request: Request,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     try:
@@ -556,7 +556,7 @@ def get_photo(
 @router.delete("/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_photo(
     photo_id: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     """Delete a photo, all its associated data, and its physical files on disk."""
@@ -591,7 +591,7 @@ async def delete_photo(
 @router.get("/photo_files/original/{photo_id_with_ext}")
 def get_photo_original(
     photo_id_with_ext: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
     range: Annotated[str | None, Header()] = None,
 ):
@@ -619,7 +619,7 @@ def get_photo_original(
 @router.get("/photo_files/thumbnail/{photo_id_with_ext}")
 def get_photo_thumbnail(
     photo_id_with_ext: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     """Serve the thumbnail/derivative of a media item.
@@ -668,7 +668,7 @@ def get_photo_thumbnail(
 @router.get("/photos/{photo_id}/original")
 def redirect_photo_original(
     photo_id: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     """Redirect legacy URL to the canonical file-serving route."""
@@ -683,7 +683,7 @@ def redirect_photo_original(
 @router.get("/photos/{photo_id}/thumbnail")
 def redirect_photo_thumbnail(
     photo_id: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     """Redirect legacy URL to the canonical file-serving route."""

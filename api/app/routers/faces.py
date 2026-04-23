@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.auth import verify_session
+from app.auth import verify_session_or_key
 from app.database import get_db
 from app.serializers import face_to_dict, photo_url
 from app.services import emit_loganne_event
@@ -19,7 +19,7 @@ router = APIRouter()
 @router.get("/photos/{photo_id}/faces")
 def list_faces(
     photo_id: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     try:
@@ -39,7 +39,7 @@ def list_faces(
 async def assign_person(
     face_id: str,
     body: dict,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     try:
@@ -78,7 +78,7 @@ async def assign_person(
 @router.delete("/faces/{face_id}/person", status_code=status.HTTP_204_NO_CONTENT)
 def unassign_person(
     face_id: str,
-    _: Annotated[None, Depends(verify_session)],
+    _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
     try:
