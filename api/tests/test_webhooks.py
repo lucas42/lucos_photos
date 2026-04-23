@@ -137,6 +137,7 @@ class TestFetchContact:
     def test_extracts_contact_id_from_url_path(self, client, monkeypatch):
         import asyncio
         from app.routers.webhooks import _fetch_contact
+        monkeypatch.setenv("LUCOS_CONTACTS_URL", "https://contacts.example.com")
         monkeypatch.setenv("KEY_LUCOS_CONTACTS", "testkey")
         mock_client = self._mock_httpx_response({"name": "Alice"})
         with patch("app.routers.webhooks.httpx.AsyncClient", return_value=mock_client):
@@ -153,6 +154,7 @@ class TestFetchContact:
         import httpx
         from unittest.mock import MagicMock
         from app.routers.webhooks import _fetch_contact
+        monkeypatch.setenv("LUCOS_CONTACTS_URL", "https://contacts.example.com")
         monkeypatch.setenv("KEY_LUCOS_CONTACTS", "testkey")
         mock_resp = MagicMock()
         mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -171,10 +173,35 @@ class TestFetchContact:
     def test_returns_none_when_name_missing(self, client, monkeypatch):
         import asyncio
         from app.routers.webhooks import _fetch_contact
+        monkeypatch.setenv("LUCOS_CONTACTS_URL", "https://contacts.example.com")
         monkeypatch.setenv("KEY_LUCOS_CONTACTS", "testkey")
         mock_client = self._mock_httpx_response({"id": "contact-99"})
         with patch("app.routers.webhooks.httpx.AsyncClient", return_value=mock_client):
             result = asyncio.run(
                 _fetch_contact("https://contacts.example.com/people/contact-99")
             )
+        assert result is None
+
+    def test_rejects_url_outside_contacts_base(self, client, monkeypatch):
+        """URL not starting with LUCOS_CONTACTS_URL is rejected without any HTTP call."""
+        import asyncio
+        from app.routers.webhooks import _fetch_contact
+        monkeypatch.setenv("LUCOS_CONTACTS_URL", "https://contacts.example.com")
+        with patch("app.routers.webhooks.httpx.AsyncClient") as mock_cls:
+            result = asyncio.run(
+                _fetch_contact("https://attacker.example.com/steal")
+            )
+            mock_cls.assert_not_called()
+        assert result is None
+
+    def test_rejects_url_when_contacts_base_not_set(self, client, monkeypatch):
+        """When LUCOS_CONTACTS_URL is unset, all URLs are rejected."""
+        import asyncio
+        from app.routers.webhooks import _fetch_contact
+        monkeypatch.delenv("LUCOS_CONTACTS_URL", raising=False)
+        with patch("app.routers.webhooks.httpx.AsyncClient") as mock_cls:
+            result = asyncio.run(
+                _fetch_contact("https://contacts.example.com/people/contact-99")
+            )
+            mock_cls.assert_not_called()
         assert result is None

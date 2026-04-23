@@ -17,7 +17,12 @@ async def _fetch_contact(url: str) -> tuple[str, str] | None:
 
     contact_id is extracted from the last path segment of the URL.
     name is read from the JSON response body.
+
+    The URL must start with LUCOS_CONTACTS_URL to prevent SSRF and credential exfiltration.
     """
+    contacts_base = os.environ.get("LUCOS_CONTACTS_URL", "")
+    if not contacts_base or not url.startswith(contacts_base):
+        return None
     contacts_key = os.environ.get("KEY_LUCOS_CONTACTS", "")
     try:
         async with httpx.AsyncClient() as client:
