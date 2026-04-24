@@ -74,6 +74,18 @@ a:hover {
 /* Homepage                                                           */
 /* ------------------------------------------------------------------ */
 
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
 .homepage-all-link-row a {
 	float: right;
 }
@@ -84,8 +96,23 @@ a:hover {
 	margin: 1em 0;
 }
 
-.homepage-section .photo-grid {
-	grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+.photo-strip {
+	display: flex;
+	gap: 0.75rem;
+	overflow-x: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--card-bg) transparent;
+	padding-bottom: 0.5rem;
+}
+
+.photo-strip .media-card-link {
+	flex: 0 0 auto;
+	width: 160px;
+}
+
+.photo-strip .media-card {
+	height: 120px;
+	aspect-ratio: unset;
 }
 
 /* ------------------------------------------------------------------ */

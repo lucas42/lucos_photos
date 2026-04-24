@@ -1,5 +1,7 @@
 {% extends "_base.html" %}
 
+{% block title %}Home — Photos{% endblock %}
+
 {% block meta %}<meta name="description" content="A simple and elegant photo management service.">{% endblock %}
 
 {% block scripts %}
@@ -18,13 +20,14 @@
 
 {% block content %}
 <div class="container">
+    <h1 class="sr-only">Photos</h1>
 
     <section class="homepage-section">
         <h2 class="homepage-section-heading">
             <a href="/photos">{{ photo_total }} Photos</a>
         </h2>
 
-        <div class="photo-grid">
+        <div class="photo-strip">
             {% if recent_photos %}
                 {% for photo in recent_photos %}
                 <a href="/photos/{{ photo.id }}" class="media-card-link"
@@ -38,9 +41,7 @@
                 </a>
                 {% endfor %}
             {% else %}
-                <div class="empty-state">
-                    <p>No photos yet.</p>
-                </div>
+                <p class="empty-state-text">No photos yet.</p>
             {% endif %}
         </div>
 
