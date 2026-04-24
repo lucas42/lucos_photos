@@ -96,6 +96,13 @@ a:hover {
 	margin: 1em 0;
 }
 
+.homepage-section-count {
+	font-size: 0.7em;
+	font-weight: 400;
+	opacity: 0.6;
+	margin-left: 0.4em;
+}
+
 .photo-strip {
 	display: flex;
 	gap: 0.75rem;
@@ -829,6 +836,13 @@ a:hover {
 	font-weight: 600;
 	margin-bottom: 2rem;
 	color: var(--text-color);
+}
+
+.page-count {
+	font-size: 1rem;
+	font-weight: 400;
+	opacity: 0.55;
+	margin-left: 0.4em;
 }
 
 .people-grid-list {
