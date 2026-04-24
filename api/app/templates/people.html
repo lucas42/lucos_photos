@@ -6,19 +6,17 @@
 <div class="container">
     <h1 class="page-title">People</h1>
 
-    <div id="people-list" class="people-list">
+    <div id="people-list" class="people-grid-list">
         {% if people %}
             {% for person in people %}
-            <a href="/people/{{ person.id }}" class="person-card-link">
-                <div class="person-card">
-                    <div class="person-card-header">
-                        {% if person.profilePictureUrl %}
-                        <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="">
-                        {% else %}
-                        <div class="person-profile-picture-placeholder"></div>
-                        {% endif %}
-                        <h2 class="person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</h2>
-                    </div>
+            <a href="/people/{{ person.id }}" class="person-grid-card-link">
+                <div class="person-grid-card">
+                    {% if person.profilePictureUrl %}
+                    <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="">
+                    {% else %}
+                    <div class="person-profile-picture-placeholder"></div>
+                    {% endif %}
+                    <h2 class="person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</h2>
                 </div>
             </a>
             {% endfor %}
