@@ -16,7 +16,7 @@
                     {% else %}
                     <div class="person-profile-picture-placeholder"></div>
                     {% endif %}
-                    <span class="person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</span>
+                    <h2 class="person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</h2>
                 </div>
             </a>
             {% endfor %}
