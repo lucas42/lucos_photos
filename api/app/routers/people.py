@@ -140,6 +140,7 @@ def get_person(
         .join(ProcessingStatus, MediaItem.id == ProcessingStatus.photo_id)
         .filter(PhotoPerson.person_id == person_uuid)
         .filter(ProcessingStatus.state == ProcessingState.complete)
+        .order_by(MediaItem.taken_at.desc().nullslast(), MediaItem.uploaded_at.desc())
         .all()
     )
 
