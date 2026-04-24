@@ -36,7 +36,7 @@
             <dd>{{ photo.takenAtDisplay if photo.takenAtDisplay else '—' }}</dd>
 
             <dt>Uploaded</dt>
-            <dd>{{ photo.uploadedAt if photo.uploadedAt else '—' }}</dd>
+            <dd>{% if photo.uploadedAt %}<time id="photo-uploaded-at" datetime="{{ photo.uploadedAt }}">{{ photo.uploadedAt }}</time>{% else %}—{% endif %}</dd>
 
             {% if photo.width and photo.height %}
             <dt>Dimensions</dt>
@@ -92,6 +92,14 @@
             alert('Failed to delete photo. Please try again.');
         }
     });
+
+    const uploadedEl = document.getElementById('photo-uploaded-at');
+    if (uploadedEl) {
+        const d = new Date(uploadedEl.getAttribute('datetime'));
+        uploadedEl.textContent = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+            + ' at '
+            + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    }
 
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
