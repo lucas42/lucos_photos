@@ -6,7 +6,7 @@
 
 {% block content %}
 <div class="container" id="app">
-    <h1 class="page-title">{{ total }} Photos</h1>
+    <h1 class="page-title">Photos <span class="page-count">{{ total }}</span></h1>
 
     <details class="filter-bar" {% if person_id or date_from or date_to or media_type %}open{% endif %}>
         <summary class="filter-toggle">Filters{% if person_id or date_from or date_to or media_type %} (active){% endif %}</summary>
