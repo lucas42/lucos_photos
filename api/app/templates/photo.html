@@ -9,12 +9,12 @@
             {% if photo.prevPhotoId %}
             <a href="/photos/{{ photo.prevPhotoId }}" class="photo-nav-link photo-nav-prev" aria-label="Previous photo">&larr; Prev</a>
             {% else %}
-            <span class="photo-nav-link photo-nav-disabled">&larr; Prev</span>
+            <span class="photo-nav-link photo-nav-disabled" aria-disabled="true">&larr; Prev</span>
             {% endif %}
             {% if photo.nextPhotoId %}
             <a href="/photos/{{ photo.nextPhotoId }}" class="photo-nav-link photo-nav-next" aria-label="Next photo">Next &rarr;</a>
             {% else %}
-            <span class="photo-nav-link photo-nav-disabled">Next &rarr;</span>
+            <span class="photo-nav-link photo-nav-disabled" aria-disabled="true">Next &rarr;</span>
             {% endif %}
         </nav>
 
@@ -48,7 +48,7 @@
 
             {% if photo.processingStatus %}
             <dt>Processing status</dt>
-            <dd>{{ photo.processingStatus }}</dd>
+            <dd>{{ photo.processingStatus | capitalize }}</dd>
             {% endif %}
 
             {% if photo.people %}
