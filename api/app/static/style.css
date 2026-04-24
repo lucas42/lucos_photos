@@ -804,27 +804,40 @@ a:hover {
 	color: var(--text-color);
 }
 
-.people-list {
+.people-grid-list {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+	gap: 1.5rem;
+}
+
+.people-grid-list .empty-state-text {
+	grid-column: 1 / -1;
+}
+
+.person-grid-card-link {
+	text-decoration: none;
+	color: inherit;
+}
+
+.person-grid-card {
 	display: flex;
 	flex-direction: column;
-	gap: 1.5rem;
-	max-width: 700px;
-}
-
-.person-card {
+	align-items: center;
+	gap: 0.75rem;
 	background: var(--card-bg);
 	border-radius: 12px;
-	padding: 1.5rem;
+	padding: 1.25rem 1rem;
+	text-align: center;
+	transition: background 0.15s ease;
 }
 
-.person-card-header {
-	margin-bottom: 1rem;
+.person-grid-card-link:hover .person-grid-card {
+	background: rgba(255, 255, 255, 0.1);
 }
 
 .person-name {
-	font-size: 1.1rem;
+	font-size: 0.95rem;
 	font-weight: 600;
-	margin: 0;
 }
 
 .person-contact {
