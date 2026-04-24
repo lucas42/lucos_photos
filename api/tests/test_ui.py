@@ -383,7 +383,7 @@ class TestHomepage:
 
         response = authenticated_client.get("/")
         assert response.status_code == 200
-        assert "1 Photos" in response.text
+        assert 'class="homepage-section-count">1<' in response.text
 
     def test_homepage_shows_people_count(self, authenticated_client, db_session):
         """Homepage renders people count as a section heading."""
@@ -394,7 +394,7 @@ class TestHomepage:
 
         response = authenticated_client.get("/")
         assert response.status_code == 200
-        assert "1 People" in response.text
+        assert 'class="homepage-section-count">1<' in response.text
 
     def test_homepage_photos_link_to_photos_page(self, authenticated_client):
         """Photos section heading and 'All Photos' link point to /photos."""
@@ -459,7 +459,7 @@ class TestHomepage:
         response = authenticated_client.get("/")
         assert response.status_code == 200
         # Photo count should be 0 since only pending photos exist
-        assert "0 Photos" in response.text
+        assert 'class="homepage-section-count">0<' in response.text
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +491,7 @@ class TestPhotosPageHtml:
 
         response = authenticated_client.get("/photos", headers={"Accept": "text/html"})
         assert response.status_code == 200
-        assert "1 Photos" in response.text
+        assert 'class="page-count">1<' in response.text
 
     def test_photos_page_marks_photos_as_current(self, authenticated_client):
         """The Photos nav link should be marked as current-page on /photos."""
