@@ -27,9 +27,9 @@ def get_engine():
         _engine = create_engine(
             database_url,
             # Check connections for liveness before handing them out.  This
-            # catches connections that have accumulated stuck transaction state
-            # (postgres "already/no transaction in progress" warnings) and
-            # discards them in favour of a fresh connection.
+            # discards connections that have been closed server-side (e.g. after a
+            # Postgres restart or idle timeout) rather than surfacing connection errors
+            # to application code on first use.
             pool_pre_ping=True,
             # Recycle connections after 1 hour.  Without this, SQLAlchemy's
             # default pool keeps connections alive indefinitely; production has
