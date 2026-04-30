@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,6 +18,8 @@ from app.redis_client import _broadcast, _redis_subscriber_task, _ws_clients, ge
 from app.routers import app_release, faces, people, photos, telemetry, webhooks
 from app.serializers import person_to_dict, photo_to_dict
 from lucos_photos_common.models import MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
+
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -143,12 +146,17 @@ async def check_db() -> dict:
     try:
         await asyncio.wait_for(asyncio.to_thread(db.execute, text("SELECT 1")), timeout=CHECK_TIMEOUT)
         return {"ok": True, "techDetail": tech_detail}
-    except Exception:
+    except asyncio.TimeoutError:
         # Invalidate rather than return to the pool: asyncio.wait_for cancels the
         # coroutine wrapper but the underlying thread keeps running, so db.close()
         # would race with the in-flight execute and return a broken connection.
         db.invalidate()
-        return {"ok": False, "techDetail": tech_detail}
+        log.warning("db-reachable check timed out after %ss", CHECK_TIMEOUT)
+        return {"ok": False, "techDetail": tech_detail, "debug": f"timeout after {CHECK_TIMEOUT}s"}
+    except Exception as exc:
+        db.invalidate()
+        log.warning("db-reachable check failed: %r", exc)
+        return {"ok": False, "techDetail": tech_detail, "debug": repr(exc)}
     finally:
         db.close()
 
@@ -160,8 +168,12 @@ async def check_redis() -> dict:
         redis_conn = get_redis()
         await asyncio.wait_for(asyncio.to_thread(redis_conn.ping), timeout=CHECK_TIMEOUT)
         return {"ok": True, "techDetail": tech_detail}
-    except Exception:
-        return {"ok": False, "techDetail": tech_detail}
+    except asyncio.TimeoutError:
+        log.warning("redis-reachable check timed out after %ss", CHECK_TIMEOUT)
+        return {"ok": False, "techDetail": tech_detail, "debug": f"timeout after {CHECK_TIMEOUT}s"}
+    except Exception as exc:
+        log.warning("redis-reachable check failed: %r", exc)
+        return {"ok": False, "techDetail": tech_detail, "debug": repr(exc)}
 
 
 async def get_worker_memory_rss_bytes() -> int | None:
