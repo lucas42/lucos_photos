@@ -180,6 +180,8 @@ class TestHealthChecks:
         check = data["checks"]["db-reachable"]
         assert check["ok"] is False
         assert "techDetail" in check
+        assert "debug" in check
+        assert "Connection refused" in check["debug"]
 
     def test_db_check_fails_on_timeout(self, client):
         mock_session = MagicMock()
@@ -189,6 +191,8 @@ class TestHealthChecks:
         check = data["checks"]["db-reachable"]
         assert check["ok"] is False
         assert "techDetail" in check
+        assert "debug" in check
+        assert "timeout" in check["debug"]
 
     def test_redis_check_ok_when_redis_reachable(self, client):
         mock_redis = _make_mock_redis()
@@ -203,6 +207,8 @@ class TestHealthChecks:
         check = data["checks"]["redis-reachable"]
         assert check["ok"] is False
         assert "techDetail" in check
+        assert "debug" in check
+        assert "Connection refused" in check["debug"]
 
     def test_one_check_failure_does_not_prevent_others(self, client):
         """A failure in one check must not propagate — all checks must always appear."""
