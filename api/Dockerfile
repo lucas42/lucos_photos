@@ -1,6 +1,6 @@
 FROM lucas42/lucos_navbar:2.1.70 AS navbar
 
-FROM node:25-alpine AS search-component
+FROM node:26-alpine AS search-component
 WORKDIR /build
 RUN echo '{"dependencies":{"lucos_search_component":"^1.0.14"}}' > package.json && npm install
 
