@@ -23,7 +23,7 @@ async def fetch_contact_name(contact_id: str) -> Optional[str]:
         async with httpx.AsyncClient(headers={"User-Agent": os.environ.get("SYSTEM", "")}) as client:
             response = await client.get(
                 f"{contacts_url}/people/{contact_id}",
-                headers={"Accept": "application/json", "Authorization": f"key {contacts_key}"},
+                headers={"Accept": "application/json", "Authorization": f"bearer {contacts_key}"},
                 timeout=5.0,
             )
             response.raise_for_status()
