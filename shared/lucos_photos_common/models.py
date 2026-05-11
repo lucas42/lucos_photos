@@ -47,6 +47,19 @@ class MediaItem(Base):
 Photo = MediaItem
 
 
+def photo_date_label(photo: MediaItem) -> str:
+    """Return a human-readable date identifier for use in loganne messages.
+
+    Uses taken_at (the date the photo was captured) when available; falls back
+    to uploaded_at (the date the file was received by the server).
+
+    Examples: "taken 2024-05-15", "uploaded 2026-05-11"
+    """
+    if photo.taken_at is not None:
+        return f"taken {photo.taken_at.date()}"
+    return f"uploaded {photo.uploaded_at.date()}"
+
+
 class ProcessingStatus(Base):
     __tablename__ = "processing_status"
 

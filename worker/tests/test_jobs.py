@@ -964,8 +964,34 @@ class TestProcessPhotoLoganne:
 
         mock_update.assert_called_once()
         assert mock_update.call_args[0][0] == "photoProcessed"
+        # No EXIF in the test JPEG → taken_at remains None → falls back to uploaded_at
+        human_readable = mock_update.call_args[0][1]
+        assert human_readable.startswith("Photo uploaded "), \
+            f"Expected 'Photo uploaded <date> processed by ...', got: {human_readable!r}"
+        assert human_readable.endswith(" processed by lucos_photos"), \
+            f"Expected 'Photo uploaded <date> processed by lucos_photos', got: {human_readable!r}"
         url = mock_update.call_args.kwargs.get("url", "")
         assert url.startswith("http"), f"Loganne url should be an absolute URL, got: {url!r}"
+
+    def test_emits_loganne_event_uses_taken_at(self, db_session, pending_photo, tmp_path):
+        """process_photo humanReadable should use taken_at date when EXIF is present."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+        src = uploads_dir / f"{pending_photo.sha256_hash}.{pending_photo.file_extension}"
+        src.write_bytes(make_jpeg_with_exif("2023:06:15 14:30:00"))
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update:
+            process_photo(str(pending_photo.id))
+
+        mock_update.assert_called_once()
+        human_readable = mock_update.call_args[0][1]
+        assert human_readable == "Photo taken 2023-06-15 processed by lucos_photos", \
+            f"Unexpected humanReadable: {human_readable!r}"
 
     def test_does_not_emit_loganne_when_already_complete(self, db_session, pending_photo, tmp_path):
         """process_photo should not call updateLoganne when exiting early (already complete)."""

@@ -24,7 +24,7 @@ from app.database import get_db
 from app.redis_client import enqueue_process_media
 from app.serializers import face_to_dict_simple, person_to_dict, photo_to_dict, photo_url
 from app.services import emit_loganne_event
-from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus, photo_date_label
 
 router = APIRouter()
 
@@ -378,9 +378,9 @@ async def upload_photo(
             tmp_path.unlink()
 
     if is_video:
-        await emit_loganne_event("videoAdded", f"Video {photo.id} added to lucos_photos", url=photo_url(photo.id))
+        await emit_loganne_event("videoAdded", f"Video {photo_date_label(photo)} added to lucos_photos", url=photo_url(photo.id))
     else:
-        await emit_loganne_event("photoAdded", f"Photo {photo.id} added to lucos_photos", url=photo_url(photo.id))
+        await emit_loganne_event("photoAdded", f"Photo {photo_date_label(photo)} added to lucos_photos", url=photo_url(photo.id))
 
     # Enqueue a job for the worker to process this media item.
     # If Redis is unavailable, we log a warning and continue — the worker's
@@ -562,7 +562,8 @@ async def delete_photo(
     """Delete a photo, all its associated data, and its physical files on disk."""
     photo = _get_photo_or_404(photo_id, db)
 
-    # Capture file info before deleting the DB row
+    # Capture info before deleting the DB row (ORM attributes are expired after commit)
+    date_label = photo_date_label(photo)
     sha = photo.sha256_hash
     ext = photo.file_extension
     media_type = photo.media_type
@@ -585,7 +586,7 @@ async def delete_photo(
     for f in files_to_delete:
         f.unlink(missing_ok=True)
 
-    await emit_loganne_event("photoDeleted", f"Photo {photo_id} deleted from lucos_photos")
+    await emit_loganne_event("photoDeleted", f"Photo {date_label} deleted from lucos_photos")
 
 
 @router.get("/photo_files/original/{photo_id_with_ext}")
