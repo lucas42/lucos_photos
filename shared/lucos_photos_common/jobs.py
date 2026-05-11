@@ -19,7 +19,7 @@ from rq import Queue
 from rq.job import Retry
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus, photo_date_label
 
 PHOTO_PROCESSED_CHANNEL = "photos:processed"
 
@@ -419,7 +419,7 @@ def process_photo(photo_id: str) -> None:
 
             # Emit Loganne event — updateLoganne swallows HTTP errors internally
             app_origin = os.environ.get("APP_ORIGIN", "")
-            updateLoganne("photoProcessed", f"Photo {photo_id} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
+            updateLoganne("photoProcessed", f"Photo {photo_date_label(photo)} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
 
             # Notify the API's WebSocket clients that this photo is ready
             _publish_photo_processed(photo_id)
@@ -616,7 +616,7 @@ def process_video(photo_id: str) -> None:
 
             # Emit Loganne event — updateLoganne swallows HTTP errors internally
             app_origin = os.environ.get("APP_ORIGIN", "")
-            updateLoganne("videoProcessed", f"Video {photo_id} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
+            updateLoganne("videoProcessed", f"Video {photo_date_label(photo)} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
 
             # Notify the API's WebSocket clients that this media item is ready
             _publish_photo_processed(photo_id)
