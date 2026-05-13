@@ -221,6 +221,31 @@ class TestHealthChecks:
         assert "redis-reachable" in checks
         assert checks["db-reachable"]["ok"] is False
 
+    def test_db_check_swallows_illegal_state_change_error_on_close(self, client):
+        """IllegalStateChangeError on session.close() must not propagate — check result is unaffected."""
+        from sqlalchemy.exc import IllegalStateChangeError
+        mock_session = MagicMock()
+        mock_session.execute.return_value = None
+        mock_session.close.side_effect = IllegalStateChangeError(
+            "Method 'close()' can't be called here; method '_connection_for_bind()' is already in progress"
+        )
+        with patch("app.main.SessionLocal", return_value=mock_session):
+            data = client.get("/_info").json()
+        assert data["checks"]["db-reachable"]["ok"] is True
+
+    def test_metrics_swallows_illegal_state_change_error_on_close(self, client):
+        """IllegalStateChangeError on session.close() in get_metrics must not propagate."""
+        from sqlalchemy.exc import IllegalStateChangeError
+        mock_session = MagicMock()
+        mock_session.execute.return_value.fetchone.return_value = None
+        mock_session.close.side_effect = IllegalStateChangeError(
+            "Method 'close()' can't be called here; method '_connection_for_bind()' is already in progress"
+        )
+        with patch("app.main.SessionLocal", return_value=mock_session):
+            data = client.get("/_info").json()
+        assert "metrics" in data
+        assert data["metrics"]["photo-count"]["value"] == 0
+
 
 class TestIcon:
     def test_returns_200(self, client):
