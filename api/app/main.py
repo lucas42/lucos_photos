@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, text
+from sqlalchemy.exc import IllegalStateChangeError
 from sqlalchemy.orm import Session
 
 from app.auth import _validate_token_with_auth_service, safe_path, verify_session_or_key  # noqa: F401 - re-exported for tests
@@ -158,7 +159,12 @@ async def check_db() -> dict:
         log.warning("db-reachable check failed: %r", exc)
         return {"ok": False, "techDetail": tech_detail, "debug": repr(exc)}
     finally:
-        db.close()
+        try:
+            db.close()
+        except IllegalStateChangeError:
+            # Connection was interrupted mid-_connection_for_bind() (e.g. pool eviction during a
+            # deploy). The response is already written; swallow and log at debug to avoid log noise.
+            log.debug("session.close() skipped in check_db: _connection_for_bind() still in progress")
 
 
 async def check_redis() -> dict:
@@ -210,7 +216,11 @@ async def get_metrics() -> dict:
         db.invalidate()
         photo_count = video_count = pending_count = 0
     finally:
-        db.close()
+        try:
+            db.close()
+        except IllegalStateChangeError:
+            # Same guard as check_db: connection interrupted mid-_connection_for_bind().
+            log.debug("session.close() skipped in get_metrics: _connection_for_bind() still in progress")
 
     worker_rss = await get_worker_memory_rss_bytes()
 
