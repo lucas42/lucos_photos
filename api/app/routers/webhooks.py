@@ -31,13 +31,13 @@ async def loganne_webhook(body: dict, _auth: Annotated[None, Depends(verify_key)
         return
 
     # Validate the URL is on the contacts domain before extracting any data from it.
-    contacts_base = os.environ.get("LUCOS_CONTACTS_URL", "")
+    contacts_base = os.environ.get("LUCOS_CONTACTS_ORIGIN", "")
     if not contacts_base or not url.startswith(contacts_base):
         return
 
     # Extract the contact_id from the URL path. This value is used only as a DB
     # lookup key — the outbound HTTP call is made in refresh_contact_display_name
-    # using person.contact_id from the DB (untainted) + LUCOS_CONTACTS_URL (env var),
+    # using person.contact_id from the DB (untainted) + LUCOS_CONTACTS_ORIGIN (env var),
     # so no user-supplied data ever reaches the httpx request URL.
     contact_id = url.rstrip("/").rsplit("/", 1)[-1]
     if not contact_id:

@@ -1082,17 +1082,17 @@ def refresh_contact_display_name(contact_id: str) -> None:
     """Re-fetch the display name for a single contact and update any linked persons.
 
     Looks up persons by contact_id in the DB, then fetches the canonical name from
-    lucos_contacts using a URL constructed from LUCOS_CONTACTS_URL + person.contact_id
+    lucos_contacts using a URL constructed from LUCOS_CONTACTS_ORIGIN + person.contact_id
     (both from trusted sources, not from user input).
 
     Called by the Loganne webhook handler on contactUpdated events.
     """
     import httpx
 
-    contacts_url = os.environ.get("LUCOS_CONTACTS_URL", "").rstrip("/")
+    contacts_url = os.environ.get("LUCOS_CONTACTS_ORIGIN", "").rstrip("/")
     contacts_key = os.environ.get("KEY_LUCOS_CONTACTS", "")
     if not contacts_url or not contacts_key:
-        logger.warning("refresh_contact_display_name: LUCOS_CONTACTS_URL or KEY_LUCOS_CONTACTS not set, skipping")
+        logger.warning("refresh_contact_display_name: LUCOS_CONTACTS_ORIGIN or KEY_LUCOS_CONTACTS not set, skipping")
         return
 
     db = SessionLocal()
@@ -1147,10 +1147,10 @@ def sweep_contact_display_names() -> None:
     """
     import httpx
 
-    contacts_url = os.environ.get("LUCOS_CONTACTS_URL", "").rstrip("/")
+    contacts_url = os.environ.get("LUCOS_CONTACTS_ORIGIN", "").rstrip("/")
     contacts_key = os.environ.get("KEY_LUCOS_CONTACTS", "")
     if not contacts_url or not contacts_key:
-        logger.warning("sweep_contact_display_names: LUCOS_CONTACTS_URL or KEY_LUCOS_CONTACTS not set, skipping")
+        logger.warning("sweep_contact_display_names: LUCOS_CONTACTS_ORIGIN or KEY_LUCOS_CONTACTS not set, skipping")
         return
 
     db = SessionLocal()

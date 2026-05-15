@@ -17,7 +17,7 @@ CONTACT_URL = "https://contacts.example.com/people/contact-42"
 class TestLoganneWebhook:
     def test_contactUpdated_extracts_contact_id_and_refreshes(self, client, db_session, monkeypatch):
         """contactUpdated with a valid URL triggers refresh_contact_display_name."""
-        monkeypatch.setenv("LUCOS_CONTACTS_URL", "https://contacts.example.com")
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.example.com")
         make_person(db_session, "Old Name", contact_id="contact-42")
         db_session.commit()
 
@@ -32,8 +32,8 @@ class TestLoganneWebhook:
         mock_refresh.assert_called_once_with("contact-42")
 
     def test_contactUpdated_url_validated_against_contacts_base(self, client, db_session, monkeypatch):
-        """URL outside LUCOS_CONTACTS_URL is rejected before any refresh."""
-        monkeypatch.setenv("LUCOS_CONTACTS_URL", "https://contacts.example.com")
+        """URL outside LUCOS_CONTACTS_ORIGIN is rejected before any refresh."""
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.example.com")
         with patch("lucos_photos_common.jobs.refresh_contact_display_name") as mock_refresh:
             response = client.post("/webhooks/loganne", json={
                 "type": "contactUpdated",
@@ -44,8 +44,8 @@ class TestLoganneWebhook:
         mock_refresh.assert_not_called()
 
     def test_contactUpdated_rejected_when_contacts_base_unset(self, client, db_session, monkeypatch):
-        """When LUCOS_CONTACTS_URL is unset, all contactUpdated events are silently ignored."""
-        monkeypatch.delenv("LUCOS_CONTACTS_URL", raising=False)
+        """When LUCOS_CONTACTS_ORIGIN is unset, all contactUpdated events are silently ignored."""
+        monkeypatch.delenv("LUCOS_CONTACTS_ORIGIN", raising=False)
         with patch("lucos_photos_common.jobs.refresh_contact_display_name") as mock_refresh:
             response = client.post("/webhooks/loganne", json={
                 "type": "contactUpdated",
@@ -57,7 +57,7 @@ class TestLoganneWebhook:
 
     def test_missing_url_is_ignored(self, client, db_session, monkeypatch):
         """contactUpdated with no url field is silently ignored."""
-        monkeypatch.setenv("LUCOS_CONTACTS_URL", "https://contacts.example.com")
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.example.com")
         with patch("lucos_photos_common.jobs.refresh_contact_display_name") as mock_refresh:
             response = client.post("/webhooks/loganne", json={
                 "type": "contactUpdated",
@@ -68,7 +68,7 @@ class TestLoganneWebhook:
         mock_refresh.assert_not_called()
 
     def test_other_event_types_ignored(self, client, db_session, monkeypatch):
-        monkeypatch.setenv("LUCOS_CONTACTS_URL", "https://contacts.example.com")
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.example.com")
         with patch("lucos_photos_common.jobs.refresh_contact_display_name") as mock_refresh:
             response = client.post("/webhooks/loganne", json={
                 "type": "contactCreated",
@@ -99,7 +99,7 @@ class TestLoganneWebhook:
 
     def test_valid_token_accepted(self, client, monkeypatch):
         """Requests with a valid Bearer token are accepted."""
-        monkeypatch.setenv("LUCOS_CONTACTS_URL", "https://contacts.example.com")
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.example.com")
         with patch("lucos_photos_common.jobs.refresh_contact_display_name") as mock_refresh:
             response = client.post("/webhooks/loganne", json={
                 "type": "contactUpdated",

@@ -151,7 +151,7 @@ def get_person(
     accept_header = request.headers.get("accept", "*/*")
     best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
     if best_match == "text/html":
-        contacts_url = os.environ.get("LUCOS_CONTACTS_URL", "").rstrip("/")
+        contacts_url = os.environ.get("LUCOS_CONTACTS_ORIGIN", "").rstrip("/")
         arachne_key = os.environ.get("KEY_LUCOS_ARACHNE", "")
         contact_page_url = f"{contacts_url}/people/{person.contact_id}" if person.contact_id and contacts_url else None
         return templates.TemplateResponse(request, "person.html", {
