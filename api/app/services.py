@@ -14,10 +14,10 @@ async def emit_loganne_event(event_type: str, human_readable: str, url: str | No
 
 async def fetch_contact_name(contact_id: str) -> Optional[str]:
     """Fetch a contact's name from lucos_contacts. Returns None on any failure."""
-    contacts_url = os.environ.get("LUCOS_CONTACTS_URL", "")
+    contacts_url = os.environ.get("LUCOS_CONTACTS_ORIGIN", "")
     contacts_key = os.environ.get("KEY_LUCOS_CONTACTS", "")
     if not contacts_url or not contacts_key:
-        print(f"Warning: LUCOS_CONTACTS_URL or KEY_LUCOS_CONTACTS not set, cannot fetch contact name for {contact_id}")
+        print(f"Warning: LUCOS_CONTACTS_ORIGIN or KEY_LUCOS_CONTACTS not set, cannot fetch contact name for {contact_id}")
         return None
     try:
         async with httpx.AsyncClient(headers={"User-Agent": os.environ.get("SYSTEM", "")}) as client:

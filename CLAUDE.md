@@ -138,7 +138,7 @@ Sensitive and environment-varying variables come from lucos_creds (see `.env.exa
 | `PORT`, `APP_ORIGIN`, `ENVIRONMENT`, `SYSTEM` | lucos_creds | Standard lucos vars, always present |
 | `POSTGRES_PASSWORD` | lucos_creds | |
 | `LOGANNE_ENDPOINT` | lucos_creds | Named this way for cross-project consistency |
-| `LUCOS_CONTACTS_URL` | lucos_creds | |
+| `LUCOS_CONTACTS_ORIGIN` | lucos_creds | |
 | `CLIENT_KEYS` | lucos_creds | Semicolon-separated `$system:$environment=$key` pairs; used by `POST /photos` and any future authenticated endpoints |
 | `POSTGRES_USER` | docker-compose (hardcoded) | Always `photos` |
 | `POSTGRES_DB` | docker-compose (hardcoded) | Always `photos` |
@@ -151,7 +151,7 @@ The API and worker integrate with existing lucos services. Exact interfaces to b
 
 - **lucos_authentication** — handles web UI authentication; domain is always `auth.l42.eu`
 - **lucos_loganne** — receives external domain events (`photoProcessed`, `personTagged`, `profilePhotoUpdated`); env var is `LOGANNE_ENDPOINT`. The worker calls Loganne directly after photo processing completes.
-- **lucos_contacts** — provides the contact list used for person identification/linking; env var is `LUCOS_CONTACTS_URL`
+- **lucos_contacts** — provides the contact list used for person identification/linking; env var is `LUCOS_CONTACTS_ORIGIN`
 
 ## Event Strategy
 
