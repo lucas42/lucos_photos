@@ -24,6 +24,10 @@ services:
       - CLIENT_KEYS
       - POSTGRES_USER=photos
       - REDIS_URL=redis://redis:6379
+      - INSIGHTFACE_ROOT
+      - MAX_PHOTO_SIZE
+      - MAX_VIDEO_SIZE
+      - MIN_FREE_DISK_SPACE
     depends_on:
       - postgres
       - redis
@@ -55,6 +59,11 @@ services:
       - FACE_SIMILARITY_THRESHOLD
       - POSTGRES_USER=photos
       - REDIS_URL=redis://redis:6379
+      - INSIGHTFACE_ROOT
+      - PENDING_SWEEP_INTERVAL_SECONDS
+      - PENDING_SWEEP_THRESHOLD_MINUTES
+      - PROCESSING_SWEEP_THRESHOLD_MINUTES
+      - SWEEP_QUEUE_DEPTH_LIMIT
     depends_on:
       - postgres
       - redis
