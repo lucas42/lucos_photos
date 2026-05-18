@@ -80,8 +80,24 @@
             } else {
                 versionLabel.textContent = `Version ${data.version}`;
                 if (data.released_at) {
+                    const _DAY_ABBR = ['Sun', 'Mon', 'Tues', 'Weds', 'Thurs', 'Fri', 'Sat'];
+                    const _MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+                        'July', 'August', 'September', 'October', 'November', 'December'];
+                    function _ordinal(n) {
+                        const mod100 = n % 100, mod10 = n % 10;
+                        if (mod100 >= 11 && mod100 <= 13) return n + 'th';
+                        if (mod10 === 1) return n + 'st';
+                        if (mod10 === 2) return n + 'nd';
+                        if (mod10 === 3) return n + 'rd';
+                        return n + 'th';
+                    }
                     const date = new Date(data.released_at);
-                    const formatted = date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+                    const hour12 = date.getHours() % 12 || 12;
+                    const mins = String(date.getMinutes()).padStart(2, '0');
+                    const ampm = date.getHours() >= 12 ? 'pm' : 'am';
+                    const formatted = _DAY_ABBR[date.getDay()] + ' ' + _ordinal(date.getDate()) + ' ' +
+                        _MONTH_NAMES[date.getMonth()] + ' ' + date.getFullYear() +
+                        ' at ' + hour12 + ':' + mins + ampm;
                     statusMessage.textContent = `Released ${formatted}`;
                 }
             }
