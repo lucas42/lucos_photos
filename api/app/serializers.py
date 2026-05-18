@@ -1,10 +1,40 @@
 """Serialization helpers: convert ORM models to API response dicts."""
 
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from lucos_photos_common.models import Face, MediaItem, Person
+
+# British English abbreviated day names. "Weds" is the standard informal
+# abbreviation for Wednesday in en-GB, unlike the 3-letter "Wed" used in
+# most locales. List is indexed by datetime.weekday() (0 = Monday).
+_DAY_ABBR = ["Mon", "Tue", "Weds", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _ordinal(n: int) -> str:
+    """Return the number with its ordinal suffix: 1st, 2nd, 3rd, 4th..."""
+    suffix = "th"
+    if n % 100 not in (11, 12, 13):
+        if n % 10 == 1:
+            suffix = "st"
+        elif n % 10 == 2:
+            suffix = "nd"
+        elif n % 10 == 3:
+            suffix = "rd"
+    return f"{n}{suffix}"
+
+
+def _format_taken_at(dt: datetime) -> str:
+    """Format a taken_at datetime as e.g. 'Weds 29th April 2026 at 6:31pm'."""
+    day_abbr = _DAY_ABBR[dt.weekday()]
+    day_ord = _ordinal(dt.day)
+    month = dt.strftime("%B")
+    year = dt.strftime("%Y")
+    # 12-hour clock without leading zero (%-I is Linux-specific but so is strftime("%-d"))
+    time_str = dt.strftime("%-I:%M") + dt.strftime("%p").lower()
+    return f"{day_abbr} {day_ord} {month} {year} at {time_str}"
 
 DERIVATIVES_DIR = Path("/data/photos/derivatives")
 
@@ -41,7 +71,7 @@ def photo_to_dict(photo: MediaItem) -> dict:
         "fileExtension": photo.file_extension,
         "mediaType": photo.media_type,
         "takenAt": photo.taken_at.isoformat() if photo.taken_at else None,
-        "takenAtDisplay": photo.taken_at.strftime("%-d %B %Y") if photo.taken_at else None,
+        "takenAtDisplay": _format_taken_at(photo.taken_at) if photo.taken_at else None,
         "uploadedAt": photo.uploaded_at.isoformat() if photo.uploaded_at else None,
         "width": photo.width,
         "height": photo.height,
