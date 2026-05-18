@@ -29,34 +29,7 @@
     let currentFetchId = 0;
     let initialized = false;
 
-    const _DAY_ABBR = ['Sun', 'Mon', 'Tues', 'Weds', 'Thurs', 'Fri', 'Sat'];
-    const _MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
-        'July', 'August', 'September', 'October', 'November', 'December'];
-
-    function _ordinal(n) {
-        const mod100 = n % 100;
-        const mod10 = n % 10;
-        if (mod100 >= 11 && mod100 <= 13) return n + 'th';
-        if (mod10 === 1) return n + 'st';
-        if (mod10 === 2) return n + 'nd';
-        if (mod10 === 3) return n + 'rd';
-        return n + 'th';
-    }
-
-    function formatHumanDate(isoString) {
-        if (!isoString) return null;
-        try {
-            const d = new Date(isoString);
-            const hour12 = d.getHours() % 12 || 12;
-            const mins = String(d.getMinutes()).padStart(2, '0');
-            const ampm = d.getHours() >= 12 ? 'pm' : 'am';
-            return _DAY_ABBR[d.getDay()] + ' ' + _ordinal(d.getDate()) + ' ' +
-                _MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear() +
-                ' at ' + hour12 + ':' + mins + ampm;
-        } catch (e) {
-            return isoString;
-        }
-    }
+    // formatHumanDate is provided by date-utils.js, loaded before this script.
 
     function addMetadataRow(dl, label, valueText) {
         const dt = document.createElement('dt');
