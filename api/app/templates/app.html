@@ -80,9 +80,7 @@
             } else {
                 versionLabel.textContent = `Version ${data.version}`;
                 if (data.released_at) {
-                    const date = new Date(data.released_at);
-                    const formatted = date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-                    statusMessage.textContent = `Released ${formatted}`;
+                    statusMessage.textContent = `Released ${formatHumanDate(data.released_at)}`;
                 }
             }
 

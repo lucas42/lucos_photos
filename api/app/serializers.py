@@ -7,10 +7,10 @@ from typing import Optional
 
 from lucos_photos_common.models import Face, MediaItem, Person
 
-# British English abbreviated day names. "Weds" is the standard informal
-# abbreviation for Wednesday in en-GB, unlike the 3-letter "Wed" used in
-# most locales. List is indexed by datetime.weekday() (0 = Monday).
-_DAY_ABBR = ["Mon", "Tue", "Weds", "Thu", "Fri", "Sat", "Sun"]
+# British English informal day abbreviations, indexed by datetime.weekday()
+# (0 = Monday). Tuesday, Wednesday, and Thursday use 4-letter forms (Tues,
+# Weds, Thurs) consistent with common informal UK usage.
+_DAY_ABBR = ["Mon", "Tues", "Weds", "Thurs", "Fri", "Sat", "Sun"]
 
 
 def _ordinal(n: int) -> str:

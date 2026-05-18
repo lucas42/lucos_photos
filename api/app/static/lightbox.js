@@ -29,18 +29,7 @@
     let currentFetchId = 0;
     let initialized = false;
 
-    function formatDate(isoString) {
-        if (!isoString) return null;
-        try {
-            const d = new Date(isoString);
-            return d.toLocaleDateString(undefined, {
-                year: 'numeric', month: 'long', day: 'numeric',
-                hour: '2-digit', minute: '2-digit'
-            });
-        } catch (e) {
-            return isoString;
-        }
-    }
+    // formatHumanDate is provided by date-utils.js, loaded before this script.
 
     function addMetadataRow(dl, label, valueText) {
         const dt = document.createElement('dt');
@@ -58,7 +47,7 @@
         dl.className = 'lightbox-metadata-list';
 
         if (data.takenAt) {
-            addMetadataRow(dl, 'Taken', formatDate(data.takenAt));
+            addMetadataRow(dl, 'Taken', formatHumanDate(data.takenAt));
         }
 
         if (data.width && data.height) {
@@ -165,7 +154,7 @@
         } else {
             const img = document.createElement('img');
             img.src = item.originalUrl;
-            img.alt = item.takenAt ? 'Photo taken ' + formatDate(item.takenAt) : 'Photo';
+            img.alt = item.takenAt ? 'Photo taken ' + formatHumanDate(item.takenAt) : 'Photo';
             lightboxInner.appendChild(img);
         }
 

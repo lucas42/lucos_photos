@@ -70,14 +70,14 @@ class TestFormatTakenAt:
     def test_tuesday_with_noon(self):
         dt = datetime(2025, 6, 3, 12, 0, 0, tzinfo=timezone.utc)
         result = _format_taken_at(dt)
-        assert result.startswith("Tue ")
+        assert result.startswith("Tues ")
         assert "3rd June 2025" in result
         assert result.endswith("at 12:00pm")
 
     def test_thursday_with_midnight(self):
         dt = datetime(2023, 11, 2, 0, 0, 0, tzinfo=timezone.utc)
         result = _format_taken_at(dt)
-        assert result.startswith("Thu ")
+        assert result.startswith("Thurs ")
         assert "2nd November 2023" in result
         assert result.endswith("at 12:00am")
 

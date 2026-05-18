@@ -95,10 +95,7 @@
 
     const uploadedEl = document.getElementById('photo-uploaded-at');
     if (uploadedEl) {
-        const d = new Date(uploadedEl.getAttribute('datetime'));
-        uploadedEl.textContent = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
-            + ' at '
-            + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        uploadedEl.textContent = formatHumanDate(uploadedEl.getAttribute('datetime'));
     }
 
     document.addEventListener('keydown', (e) => {
