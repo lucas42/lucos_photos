@@ -40,15 +40,9 @@ def list_people(
     includePhotoCounts: bool = False,
     limit: int = 100,
     offset: int = 0,
-    contact_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    # When filtering by contact_id, skip the is_background guard — the caller wants a specific
-    # person by their contact link, regardless of background status.
-    if contact_id:
-        base_filter = Person.contact_id == contact_id
-    else:
-        base_filter = Person.is_background == False  # noqa: E712
+    base_filter = Person.is_background == False  # noqa: E712
     total = db.query(func.count(Person.id)).filter(base_filter).scalar()
 
     if includePhotoCounts:
