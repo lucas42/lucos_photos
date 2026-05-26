@@ -2,7 +2,8 @@ FROM lucas42/lucos_navbar:2.1.73 AS navbar
 
 FROM node:26-alpine AS search-component
 WORKDIR /build
-RUN echo '{"dependencies":{"lucos_search_component":"^3.0.3"}}' > package.json && npm install
+COPY api/search-component/package.json api/search-component/package-lock.json ./
+RUN npm ci
 
 FROM python:3.14-slim
 ARG VERSION
