@@ -262,8 +262,6 @@ class TestFaceTaggingUi:
         db_session.add(ProcessingStatus(photo_id=video.id, state=ProcessingState.complete))
         db_session.commit()
 
-        response = authenticated_client.get(f"/videos/{video.id}", headers={"Accept": "text/html"})
-        # Videos are served via the same /photos/{id} route
         response = authenticated_client.get(f"/photos/{video.id}", headers={"Accept": "text/html"})
         assert response.status_code == 200
         assert 'data-is-contact="true"' not in response.text
