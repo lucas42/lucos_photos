@@ -117,6 +117,42 @@ class TestListpeople:
         # All have same created_at — must be alphabetical, then UUID as tiebreaker
         assert names == sorted(names)
 
+    def test_filter_by_contact_id_returns_matching_person(self, authenticated_client, db_session):
+        """GET /people?contact_id=X returns only the person linked to that contact."""
+        make_person(db_session, "Alice", contact_id="alice-123")
+        make_person(db_session, "Bob", contact_id="bob-456")
+        db_session.commit()
+
+        response = authenticated_client.get("/people?contact_id=alice-123")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert body["people"][0]["name"] == "Alice"
+        assert body["people"][0]["contactId"] == "alice-123"
+
+    def test_filter_by_contact_id_returns_empty_when_no_match(self, authenticated_client, db_session):
+        """GET /people?contact_id=X returns an empty list when no person has that contact link."""
+        make_person(db_session, "Alice", contact_id="alice-123")
+        db_session.commit()
+
+        response = authenticated_client.get("/people?contact_id=nobody-000")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 0
+        assert body["people"] == []
+
+    def test_filter_by_contact_id_includes_background_persons(self, authenticated_client, db_session):
+        """GET /people?contact_id=X bypasses the is_background filter so contact lookups still work."""
+        person = Person(display_name="Background Alice", contact_id="alice-bg", is_background=True)
+        db_session.add(person)
+        db_session.commit()
+
+        response = authenticated_client.get("/people?contact_id=alice-bg")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert body["people"][0]["contactId"] == "alice-bg"
+
 class TestCreatePerson:
     def test_create_person(self, authenticated_client, db_session):
         with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
