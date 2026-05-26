@@ -361,6 +361,29 @@ class TestPeoplePageHtml:
 
 
 # ---------------------------------------------------------------------------
+# Person detail page HTML tests
+# ---------------------------------------------------------------------------
+
+class TestPersonDetailHtml:
+    def test_person_page_search_has_is_contact_filter(self, authenticated_client, db_session, monkeypatch):
+        """The face-tagging search on the person page must pass data-is-contact=true.
+
+        When linking a face cluster (Person) to a contact, only real contacts should
+        appear as candidates — not eolas-only people like public figures who are not
+        personal contacts.
+        """
+        from lucos_photos_common.models import Person
+        monkeypatch.setenv("KEY_LUCOS_ARACHNE", "test-arachne-key")
+        person = Person(display_name="Alice")
+        db_session.add(person)
+        db_session.commit()
+
+        response = authenticated_client.get(f"/people/{person.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'data-is-contact="true"' in response.text
+
+
+# ---------------------------------------------------------------------------
 # Homepage tests
 # ---------------------------------------------------------------------------
 

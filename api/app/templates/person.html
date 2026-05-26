@@ -46,7 +46,7 @@
         {% endif %}
 
         <label class="search-label">{% if person.contactId %}Change contact:{% else %}Link to contact:{% endif %}
-            <span is="lucos-search" data-api-key="{{ arachne_key }}" data-types="Person">
+            <span is="lucos-search" data-api-key="{{ arachne_key }}" data-types="Person" data-is-contact="true">
                 <select id="contact-search">
                     {% if person.contactId %}
                     <option value="https://contacts.l42.eu/people/{{ person.contactId }}" selected>
