@@ -548,7 +548,12 @@ def get_photo(
     accept_header = request.headers.get("accept", "*/*")
     best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
     if best_match == "text/html":
-        return templates.TemplateResponse(request, "photo.html", {"photo": data, "current_page": "photos"}, headers={"Vary": "Accept"})
+        arachne_key = os.environ.get("KEY_LUCOS_ARACHNE", "")
+        return templates.TemplateResponse(request, "photo.html", {
+            "photo": data,
+            "current_page": "photos",
+            "arachne_key": arachne_key,
+        }, headers={"Vary": "Accept"})
 
     return JSONResponse(content=data, headers={"Vary": "Accept"})
 

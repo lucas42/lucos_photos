@@ -176,6 +176,100 @@ class TestPhotoDetailHtml:
 
 
 # ---------------------------------------------------------------------------
+# Face-tagging UI
+# ---------------------------------------------------------------------------
+
+class TestFaceTaggingUi:
+    def _make_photo_with_face(self, db_session, sha_char="ft", person_id=None):
+        """Create a processed photo with one detected face."""
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState, Face
+        import uuid
+        photo = MediaItem(sha256_hash=sha_char * 32, file_extension="jpg", media_type="photo")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        face = Face(
+            photo_id=photo.id,
+            person_id=person_id,
+            person_confirmed=False,
+            bbox_x=0.1, bbox_y=0.2, bbox_width=0.15, bbox_height=0.2,
+        )
+        db_session.add(face)
+        db_session.commit()
+        return photo, face
+
+    def test_photo_with_faces_includes_search_component(self, authenticated_client, db_session, monkeypatch):
+        """Photo page with detected faces must include the lucos-search component."""
+        monkeypatch.setenv("KEY_LUCOS_ARACHNE", "test-arachne-key")
+        photo, face = self._make_photo_with_face(db_session)
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'is="lucos-search"' in response.text
+
+    def test_face_tagging_search_has_is_contact_filter(self, authenticated_client, db_session, monkeypatch):
+        """The face-tagging search component must pass data-is-contact=true to filter contacts only."""
+        monkeypatch.setenv("KEY_LUCOS_ARACHNE", "test-arachne-key")
+        photo, face = self._make_photo_with_face(db_session)
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'data-is-contact="true"' in response.text
+
+    def test_face_tagging_search_has_person_type(self, authenticated_client, db_session, monkeypatch):
+        """The face-tagging search component must search the Person type."""
+        monkeypatch.setenv("KEY_LUCOS_ARACHNE", "test-arachne-key")
+        photo, face = self._make_photo_with_face(db_session)
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'data-types="Person"' in response.text
+
+    def test_photo_without_faces_has_no_search_component(self, authenticated_client, db_session, monkeypatch):
+        """Photo page with no detected faces must NOT include the face-tagging search component."""
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState
+        monkeypatch.setenv("KEY_LUCOS_ARACHNE", "test-arachne-key")
+        photo = MediaItem(sha256_hash="nf" * 32, file_extension="jpg", media_type="photo")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        # No faces → no face-tagging search component (the person page has its own search)
+        assert 'data-is-contact="true"' not in response.text
+
+    def test_face_overlay_rendered_with_bounding_box(self, authenticated_client, db_session, monkeypatch):
+        """Face overlay buttons must be rendered with percentage-based position styles."""
+        monkeypatch.setenv("KEY_LUCOS_ARACHNE", "test-arachne-key")
+        photo, face = self._make_photo_with_face(db_session)
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        # Bounding box: x=0.1 → 10%, y=0.2 → 20%, width=0.15 → 15%, height=0.2 → 20%
+        assert 'face-overlay' in response.text
+        assert 'left:10.0%' in response.text
+        assert 'top:20.0%' in response.text
+
+    def test_video_page_has_no_face_tagging_ui(self, authenticated_client, db_session, monkeypatch):
+        """Video pages never show the face-tagging UI (face detection doesn't run on videos)."""
+        from lucos_photos_common.models import MediaItem, ProcessingStatus, ProcessingState
+        monkeypatch.setenv("KEY_LUCOS_ARACHNE", "test-arachne-key")
+        video = MediaItem(sha256_hash="vd" * 32, file_extension="mp4", media_type="video")
+        db_session.add(video)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=video.id, state=ProcessingState.complete))
+        db_session.commit()
+
+        response = authenticated_client.get(f"/videos/{video.id}", headers={"Accept": "text/html"})
+        # Videos are served via the same /photos/{id} route
+        response = authenticated_client.get(f"/photos/{video.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'data-is-contact="true"' not in response.text
+
+
+# ---------------------------------------------------------------------------
 # Photo detail: prev/next navigation
 # ---------------------------------------------------------------------------
 

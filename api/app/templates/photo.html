@@ -22,6 +22,30 @@
         <video src="{{ photo.originalUrl }}"
                controls preload="metadata"
                class="photo-detail-media"></video>
+        {% elif photo.faces %}
+        <div class="photo-with-faces" id="photo-with-faces">
+            <img src="{{ photo.originalUrl }}"
+                 alt="Photo{% if photo.takenAtDisplay %} taken {{ photo.takenAtDisplay }}{% endif %}"
+                 class="photo-detail-media" id="photo-media" />
+            {% for face in photo.faces %}
+            <button class="face-overlay{% if face.personConfirmed %} face-confirmed{% elif face.personId %} face-assigned{% endif %}"
+                    data-face-id="{{ face.id }}"
+                    data-person-id="{{ face.personId or '' }}"
+                    style="left:{{ (face.boundingBox.x * 100) | round(2) }}%;top:{{ (face.boundingBox.y * 100) | round(2) }}%;width:{{ (face.boundingBox.width * 100) | round(2) }}%;height:{{ (face.boundingBox.height * 100) | round(2) }}%"
+                    aria-label="Tag face"></button>
+            {% endfor %}
+        </div>
+
+        <div class="face-tag-panel" id="face-tag-panel" hidden>
+            <p class="face-tag-heading">Tag this face:</p>
+            <label class="search-label">
+                <span is="lucos-search" data-api-key="{{ arachne_key }}" data-types="Person" data-is-contact="true">
+                    <select id="face-person-search"></select>
+                </span>
+            </label>
+            <button class="unlink-btn" id="face-tag-remove" hidden>Remove tag</button>
+            <p class="face-tag-status" id="face-tag-status" hidden></p>
+        </div>
         {% else %}
         <img src="{{ photo.originalUrl }}"
              alt="{{ 'Video' if photo.mediaType == 'video' else 'Photo' }}{% if photo.takenAtDisplay %} taken {{ photo.takenAtDisplay }}{% endif %}"
@@ -80,6 +104,161 @@
 {% endblock %}
 
 {% block scripts %}
+{% if photo.faces and photo.mediaType != 'video' %}
+<script type="module">
+    import '/lucos_search_component.js';
+
+    const panel = document.getElementById('face-tag-panel');
+    const searchSelect = document.getElementById('face-person-search');
+    const removeBtn = document.getElementById('face-tag-remove');
+    const statusEl = document.getElementById('face-tag-status');
+    let activeFaceId = null;
+
+    // Build a lookup map from person UUID → person data for pre-populating the panel
+    const personMap = {};
+    {{ photo.people | tojson }}.forEach(function (p) { personMap[p.id] = p; });
+
+    document.querySelectorAll('.face-overlay').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            document.querySelectorAll('.face-overlay').forEach(function (b) {
+                b.classList.remove('face-active');
+            });
+            btn.classList.add('face-active');
+            activeFaceId = btn.dataset.faceId;
+            const personId = btn.dataset.personId || null;
+
+            // Reset the search and status
+            if (searchSelect) {
+                searchSelect.innerHTML = '';
+                // Pre-populate the search when the face already has a person with a contact link
+                if (personId && personMap[personId] && personMap[personId].contactId) {
+                    const contactId = personMap[personId].contactId;
+                    const opt = document.createElement('option');
+                    opt.value = 'https://contacts.l42.eu/people/' + contactId;
+                    opt.selected = true;
+                    opt.textContent = personMap[personId].name || contactId;
+                    searchSelect.appendChild(opt);
+                }
+            }
+            if (statusEl) { statusEl.hidden = true; statusEl.textContent = ''; }
+            if (removeBtn) { removeBtn.hidden = !personId; }
+            if (panel) { panel.hidden = false; }
+        });
+    });
+
+    if (searchSelect) {
+        searchSelect.addEventListener('change', async function () {
+            if (!activeFaceId || !searchSelect.value) return;
+
+            const selectedValue = searchSelect.value;
+            const match = selectedValue.match(/\/people\/([^/]+)\/?$/);
+            if (!match) {
+                console.error('Could not extract contact ID from URI:', selectedValue);
+                return;
+            }
+            const contactId = match[1];
+
+            if (statusEl) { statusEl.hidden = true; }
+
+            try {
+                // Find the person in lucos_photos by their contact_id link
+                let personId = null;
+                const lookupRes = await fetch('/people?contact_id=' + encodeURIComponent(contactId), {
+                    headers: { 'Accept': 'application/json' },
+                });
+                if (lookupRes.ok) {
+                    const lookupData = await lookupRes.json();
+                    if (lookupData.people && lookupData.people.length > 0) {
+                        personId = lookupData.people[0].id;
+                    }
+                }
+
+                // If no matching person exists yet, create one
+                if (!personId) {
+                    const createRes = await fetch('/people', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contactId: contactId }),
+                    });
+                    if (createRes.ok) {
+                        const newPerson = await createRes.json();
+                        personId = newPerson.id;
+                        personMap[personId] = newPerson;
+                    } else if (createRes.status === 409) {
+                        // Created concurrently — retry the lookup
+                        const retryRes = await fetch('/people?contact_id=' + encodeURIComponent(contactId), {
+                            headers: { 'Accept': 'application/json' },
+                        });
+                        if (retryRes.ok) {
+                            const retryData = await retryRes.json();
+                            if (retryData.people && retryData.people.length > 0) {
+                                personId = retryData.people[0].id;
+                            }
+                        }
+                    }
+                    if (!personId) {
+                        throw new Error('Failed to find or create person for contact ' + contactId);
+                    }
+                }
+
+                // Assign the face to the person
+                const tagRes = await fetch('/faces/' + activeFaceId + '/person', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ personId: personId }),
+                });
+                if (!tagRes.ok) throw new Error('Tag request failed: ' + tagRes.status);
+
+                // Update the face button state
+                const faceBtn = document.querySelector('[data-face-id="' + activeFaceId + '"]');
+                if (faceBtn) {
+                    faceBtn.dataset.personId = personId;
+                    faceBtn.classList.add('face-confirmed');
+                    faceBtn.classList.remove('face-assigned');
+                }
+                if (removeBtn) { removeBtn.hidden = false; }
+                if (statusEl) {
+                    statusEl.textContent = 'Tagged!';
+                    statusEl.hidden = false;
+                    setTimeout(function () { if (statusEl) { statusEl.hidden = true; } }, 2000);
+                }
+            } catch (err) {
+                console.error('Failed to tag face:', err);
+                if (statusEl) {
+                    statusEl.textContent = 'Failed to tag face. Please try again.';
+                    statusEl.hidden = false;
+                }
+            }
+        });
+    }
+
+    if (removeBtn) {
+        removeBtn.addEventListener('click', async function () {
+            if (!activeFaceId) return;
+            try {
+                const res = await fetch('/faces/' + activeFaceId + '/person', { method: 'DELETE' });
+                if (!res.ok) throw new Error('Remove request failed: ' + res.status);
+
+                const faceBtn = document.querySelector('[data-face-id="' + activeFaceId + '"]');
+                if (faceBtn) {
+                    faceBtn.dataset.personId = '';
+                    faceBtn.classList.remove('face-confirmed', 'face-assigned', 'face-active');
+                }
+                if (searchSelect) { searchSelect.innerHTML = ''; }
+                if (removeBtn) { removeBtn.hidden = true; }
+                if (panel) { panel.hidden = true; }
+                activeFaceId = null;
+            } catch (err) {
+                console.error('Failed to remove face tag:', err);
+                if (statusEl) {
+                    statusEl.textContent = 'Failed to remove tag. Please try again.';
+                    statusEl.hidden = false;
+                }
+            }
+        });
+    }
+</script>
+{% endif %}
 <script>
     document.getElementById('delete-btn').addEventListener('click', async () => {
         if (!confirm('Are you sure you want to delete this photo? This cannot be undone.')) {
