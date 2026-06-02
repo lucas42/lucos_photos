@@ -419,7 +419,7 @@ def process_photo(photo_id: str) -> None:
 
             # Emit Loganne event — updateLoganne swallows HTTP errors internally
             app_origin = os.environ.get("APP_ORIGIN", "")
-            updateLoganne("photoProcessed", f"Photo {photo_date_label(photo)} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
+            updateLoganne("photoProcessed", f"Photo {photo_date_label(photo)} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}", level="detail")
 
             # Notify the API's WebSocket clients that this photo is ready
             _publish_photo_processed(photo_id)
