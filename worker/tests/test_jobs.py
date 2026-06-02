@@ -972,6 +972,8 @@ class TestProcessPhotoLoganne:
             f"Expected 'Photo uploaded <date> processed by lucos_photos', got: {human_readable!r}"
         url = mock_update.call_args.kwargs.get("url", "")
         assert url.startswith("http"), f"Loganne url should be an absolute URL, got: {url!r}"
+        level = mock_update.call_args.kwargs.get("level")
+        assert level == "detail", f"Loganne level should be 'detail' for photoProcessed, got: {level!r}"
 
     def test_emits_loganne_event_uses_taken_at(self, db_session, pending_photo, tmp_path):
         """process_photo humanReadable should use taken_at date when EXIF is present."""
