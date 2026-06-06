@@ -1902,6 +1902,7 @@ class TestGenerateProfilePicture:
         mock_update.assert_called_once_with(
             "profilePhotoUpdated",
             f"Profile photo updated for {person_id} in lucos_photos",
+            level="routine",
             url=mock_update.call_args[1]["url"],
         )
         assert f"/people/{person_id}" in mock_update.call_args[1]["url"]
@@ -1934,6 +1935,7 @@ class TestGenerateProfilePicture:
         mock_update.assert_called_once_with(
             "profilePhotoUpdated",
             f"Profile photo updated for {person_id} in lucos_photos",
+            level="routine",
             url=f"https://photos.example.com/people/{person_id}",
         )
 
@@ -1967,6 +1969,7 @@ class TestGenerateProfilePicture:
         mock_update.assert_called_once_with(
             "profilePhotoUpdated",
             "Profile photo updated for Alice in lucos_photos",
+            level="routine",
             url=f"https://photos.example.com/people/{person_id}",
         )
 
