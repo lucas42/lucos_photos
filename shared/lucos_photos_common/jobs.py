@@ -616,7 +616,7 @@ def process_video(photo_id: str) -> None:
 
             # Emit Loganne event — updateLoganne swallows HTTP errors internally
             app_origin = os.environ.get("APP_ORIGIN", "")
-            updateLoganne("videoProcessed", f"Video {photo_date_label(photo)} processed by lucos_photos", url=f"{app_origin}/photos/{photo_id}")
+            updateLoganne("videoProcessed", f"Video {photo_date_label(photo)} processed by lucos_photos", level="detail", url=f"{app_origin}/photos/{photo_id}")
 
             # Notify the API's WebSocket clients that this media item is ready
             _publish_photo_processed(photo_id)
@@ -916,7 +916,7 @@ def generate_profile_picture(person_id: str) -> None:
         # Emit Loganne event — updateLoganne swallows HTTP errors internally
         app_origin = os.environ.get("APP_ORIGIN", "")
         person_label = person.display_name or str(person_id)
-        updateLoganne("profilePhotoUpdated", f"Profile photo updated for {person_label} in lucos_photos", url=f"{app_origin}/people/{person_id}")
+        updateLoganne("profilePhotoUpdated", f"Profile photo updated for {person_label} in lucos_photos", level="routine", url=f"{app_origin}/people/{person_id}")
 
     except Exception:
         logger.exception("generate_profile_picture: error for person %s", person_id)

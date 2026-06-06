@@ -910,33 +910,39 @@ class TestDetectAndSaveFaces:
 
 
 class TestUpdateLoganne:
-    """Tests that the jobs module calls the loganne library correctly."""
+    """Tests the real loganne client against a stubbed HTTP transport.
+
+    Uses requests-mock (which intercepts at the HTTPAdapter level) rather than
+    mocking loganne.session directly, so the real serialisation and header logic
+    is exercised.  Any call that omits `level` or passes an invalid value will
+    raise a ValueError from the v2 client before reaching the transport.
+    """
 
     def test_posts_to_loganne_endpoint(self):
-        """Should POST a JSON payload to the Loganne endpoint via the library."""
-        with patch("loganne.session") as mock_session:
-            mock_response = MagicMock()
-            mock_response.raise_for_status.return_value = None
-            mock_session.post.return_value = mock_response
+        """Should POST a well-formed JSON payload — including level — to the endpoint."""
+        import requests_mock as requests_mock_lib
+        from loganne import updateLoganne
 
-            from loganne import updateLoganne
-            updateLoganne("photoProcessed", "Photo test-id processed by lucos_photos")
+        with requests_mock_lib.Mocker() as m:
+            m.post("http://loganne.test/events", json={})
+            updateLoganne("photoProcessed", "Photo test-id processed by lucos_photos", level="detail")
 
-        mock_session.post.assert_called_once()
-        call_args = mock_session.post.call_args
-        payload = call_args[1]["json"]
+        assert m.called
+        payload = m.last_request.json()
         assert payload["type"] == "photoProcessed"
         assert payload["humanReadable"] == "Photo test-id processed by lucos_photos"
+        assert payload["level"] == "detail"
 
     def test_swallows_http_errors(self):
         """A failed HTTP call to Loganne must not propagate — the library handles this."""
         import requests
+        import requests_mock as requests_mock_lib
+        from loganne import updateLoganne
 
-        with patch("loganne.session") as mock_session:
-            mock_session.post.side_effect = requests.ConnectionError("connection refused")
+        with requests_mock_lib.Mocker() as m:
+            m.post("http://loganne.test/events", exc=requests.ConnectionError("connection refused"))
             # Should not raise — the library swallows the error
-            from loganne import updateLoganne
-            updateLoganne("photoProcessed", "Photo test-id processed by lucos_photos")
+            updateLoganne("photoProcessed", "Photo test-id processed by lucos_photos", level="detail")
 
 
 class TestProcessPhotoLoganne:

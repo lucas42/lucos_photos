@@ -7,9 +7,9 @@ from typing import Optional
 import httpx
 
 
-async def emit_loganne_event(event_type: str, human_readable: str, url: str | None = None):
+async def emit_loganne_event(event_type: str, human_readable: str, url: str | None = None, level: str = "routine"):
     from loganne import updateLoganne
-    await asyncio.to_thread(updateLoganne, event_type, human_readable, url)
+    await asyncio.to_thread(updateLoganne, type=event_type, humanReadable=human_readable, level=level, url=url)
 
 
 async def fetch_contact_name(contact_id: str) -> Optional[str]:
