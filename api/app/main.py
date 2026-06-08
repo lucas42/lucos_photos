@@ -145,27 +145,31 @@ async def check_db() -> dict:
     db = SessionLocal()
     ok = False
     debug_info = None
+    error_occurred = False
     try:
         await asyncio.wait_for(asyncio.to_thread(db.execute, text("SELECT 1")), timeout=CHECK_TIMEOUT)
         ok = True
     except asyncio.TimeoutError:
+        error_occurred = True
         log.warning("db-reachable check timed out after %ss", CHECK_TIMEOUT)
         debug_info = f"timeout after {CHECK_TIMEOUT}s"
     except Exception as exc:
+        error_occurred = True
         log.warning("db-reachable check failed: %r", exc)
         debug_info = repr(exc)
     finally:
-        # Always attempt to invalidate before close: this tells the pool to discard the
-        # connection rather than recycle it, preventing a broken/in-flight connection from
-        # contaminating future sessions.  Both calls are wrapped with broad except because
-        # db.invalidate() can itself raise IllegalStateChangeError when asyncio.wait_for
-        # cancelled the coroutine wrapper but the underlying thread is still running
-        # _connection_for_bind() — a concurrent state-machine violation that must never
-        # escape as a 500 from a health endpoint.
-        try:
-            db.invalidate()
-        except Exception:
-            pass
+        # Only invalidate on error: invalidate() tells the pool to discard the connection
+        # rather than recycle it (preventing a broken/in-flight connection from contaminating
+        # future sessions).  It must NOT be called on the happy path because it can race with
+        # other concurrent sessions sharing the same underlying connection (e.g. SQLite in tests).
+        # Both calls are wrapped broadly because db.invalidate() can itself raise
+        # IllegalStateChangeError when the underlying thread is still running _connection_for_bind()
+        # — a concurrent state-machine violation that must never escape as a 500.
+        if error_occurred:
+            try:
+                db.invalidate()
+            except Exception:
+                pass
         try:
             db.close()
         except Exception:
@@ -207,6 +211,7 @@ async def get_metrics() -> dict:
     """Return live metrics: photo count, video count, pending queue depth, worker RSS."""
     db = SessionLocal()
     photo_count = video_count = pending_count = 0
+    metrics_error = False
     try:
         row = await asyncio.wait_for(
             asyncio.to_thread(
@@ -223,14 +228,15 @@ async def get_metrics() -> dict:
         video_count = row.video_count if row else 0
         pending_count = row.pending_count if row else 0
     except Exception:
-        pass  # defaults already set; same broad-except pattern as check_db
+        metrics_error = True  # defaults already set
     finally:
-        # Same invalidate-before-close pattern as check_db: both wrapped broadly so that
-        # a concurrent _connection_for_bind() in the worker thread can never surface as a 500.
-        try:
-            db.invalidate()
-        except Exception:
-            pass
+        # Same error-guarded invalidate pattern as check_db: only invalidate on error to avoid
+        # racing with other concurrent sessions on the shared SQLite connection in tests.
+        if metrics_error:
+            try:
+                db.invalidate()
+            except Exception:
+                pass
         try:
             db.close()
         except Exception:
