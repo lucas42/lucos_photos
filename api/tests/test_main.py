@@ -233,6 +233,22 @@ class TestHealthChecks:
             data = client.get("/_info").json()
         assert data["checks"]["db-reachable"]["ok"] is True
 
+    def test_db_check_does_not_500_when_timeout_and_invalidate_raises(self, client):
+        """The root-cause bug: timeout fires, then invalidate() also raises because the thread
+        is still mid-_connection_for_bind().  The endpoint must return unhealthy, not 500."""
+        from sqlalchemy.exc import IllegalStateChangeError
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = asyncio.TimeoutError()
+        mock_session.invalidate.side_effect = IllegalStateChangeError(
+            "Method 'invalidate()' can't be called here; method '_connection_for_bind()' is already in progress"
+        )
+        with patch("app.main.SessionLocal", return_value=mock_session):
+            response = client.get("/_info")
+        assert response.status_code == 200
+        check = response.json()["checks"]["db-reachable"]
+        assert check["ok"] is False
+        assert "timeout" in check["debug"]
+
     def test_metrics_swallows_illegal_state_change_error_on_close(self, client):
         """IllegalStateChangeError on session.close() in get_metrics must not propagate."""
         from sqlalchemy.exc import IllegalStateChangeError
@@ -245,6 +261,19 @@ class TestHealthChecks:
             data = client.get("/_info").json()
         assert "metrics" in data
         assert data["metrics"]["photo-count"]["value"] == 0
+
+    def test_metrics_does_not_500_when_exception_and_invalidate_raises(self, client):
+        """get_metrics must not 500 when the DB query fails and invalidate() also raises."""
+        from sqlalchemy.exc import IllegalStateChangeError
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = Exception("DB error")
+        mock_session.invalidate.side_effect = IllegalStateChangeError(
+            "Method 'invalidate()' can't be called here; method '_connection_for_bind()' is already in progress"
+        )
+        with patch("app.main.SessionLocal", return_value=mock_session):
+            response = client.get("/_info")
+        assert response.status_code == 200
+        assert "metrics" in response.json()
 
 
 class TestIcon:
