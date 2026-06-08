@@ -10,7 +10,6 @@ from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, text
-from sqlalchemy.exc import IllegalStateChangeError
 from sqlalchemy.orm import Session
 
 from app.auth import _validate_token_with_auth_service, safe_path, verify_session_or_key  # noqa: F401 - re-exported for tests
@@ -144,27 +143,41 @@ async def check_db() -> dict:
     """Check whether a connection to PostgreSQL can be established."""
     tech_detail = "Checks whether a connection to PostgreSQL can be established"
     db = SessionLocal()
+    ok = False
+    debug_info = None
+    error_occurred = False
     try:
         await asyncio.wait_for(asyncio.to_thread(db.execute, text("SELECT 1")), timeout=CHECK_TIMEOUT)
-        return {"ok": True, "techDetail": tech_detail}
+        ok = True
     except asyncio.TimeoutError:
-        # Invalidate rather than return to the pool: asyncio.wait_for cancels the
-        # coroutine wrapper but the underlying thread keeps running, so db.close()
-        # would race with the in-flight execute and return a broken connection.
-        db.invalidate()
+        error_occurred = True
         log.warning("db-reachable check timed out after %ss", CHECK_TIMEOUT)
-        return {"ok": False, "techDetail": tech_detail, "debug": f"timeout after {CHECK_TIMEOUT}s"}
+        debug_info = f"timeout after {CHECK_TIMEOUT}s"
     except Exception as exc:
-        db.invalidate()
+        error_occurred = True
         log.warning("db-reachable check failed: %r", exc)
-        return {"ok": False, "techDetail": tech_detail, "debug": repr(exc)}
+        debug_info = repr(exc)
     finally:
+        # Only invalidate on error: invalidate() tells the pool to discard the connection
+        # rather than recycle it (preventing a broken/in-flight connection from contaminating
+        # future sessions).  It must NOT be called on the happy path because it can race with
+        # other concurrent sessions sharing the same underlying connection (e.g. SQLite in tests).
+        # Both calls are wrapped broadly because db.invalidate() can itself raise
+        # IllegalStateChangeError when the underlying thread is still running _connection_for_bind()
+        # — a concurrent state-machine violation that must never escape as a 500.
+        if error_occurred:
+            try:
+                db.invalidate()
+            except Exception:
+                pass
         try:
             db.close()
-        except IllegalStateChangeError:
-            # Connection was interrupted mid-_connection_for_bind() (e.g. pool eviction during a
-            # deploy). The response is already written; swallow and log at debug to avoid log noise.
-            log.debug("session.close() skipped in check_db: _connection_for_bind() still in progress")
+        except Exception:
+            log.debug("session.close() skipped in check_db: state error during cleanup")
+    result: dict = {"ok": ok, "techDetail": tech_detail}
+    if debug_info is not None:
+        result["debug"] = debug_info
+    return result
 
 
 async def check_redis() -> dict:
@@ -197,6 +210,8 @@ async def get_worker_memory_rss_bytes() -> int | None:
 async def get_metrics() -> dict:
     """Return live metrics: photo count, video count, pending queue depth, worker RSS."""
     db = SessionLocal()
+    photo_count = video_count = pending_count = 0
+    metrics_error = False
     try:
         row = await asyncio.wait_for(
             asyncio.to_thread(
@@ -213,14 +228,19 @@ async def get_metrics() -> dict:
         video_count = row.video_count if row else 0
         pending_count = row.pending_count if row else 0
     except Exception:
-        db.invalidate()
-        photo_count = video_count = pending_count = 0
+        metrics_error = True  # defaults already set
     finally:
+        # Same error-guarded invalidate pattern as check_db: only invalidate on error to avoid
+        # racing with other concurrent sessions on the shared SQLite connection in tests.
+        if metrics_error:
+            try:
+                db.invalidate()
+            except Exception:
+                pass
         try:
             db.close()
-        except IllegalStateChangeError:
-            # Same guard as check_db: connection interrupted mid-_connection_for_bind().
-            log.debug("session.close() skipped in get_metrics: _connection_for_bind() still in progress")
+        except Exception:
+            log.debug("session.close() skipped in get_metrics: state error during cleanup")
 
     worker_rss = await get_worker_memory_rss_bytes()
 
