@@ -46,6 +46,11 @@
             <dt>Format</dt>
             <dd>{{ photo.fileExtension.upper() if photo.fileExtension else '—' }}</dd>
 
+            {% if photo.description %}
+            <dt>Description</dt>
+            <dd>{{ photo.description }}</dd>
+            {% endif %}
+
             {% if photo.processingStatus %}
             <dt>Processing status</dt>
             <dd>{{ photo.processingStatus | capitalize }}</dd>

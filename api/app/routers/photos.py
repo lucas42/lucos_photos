@@ -259,6 +259,7 @@ async def upload_photo(
     _: Annotated[None, Depends(verify_key)],
     db: Session = Depends(get_db),
     x_taken_at: Annotated[str | None, Header()] = None,
+    x_description: Annotated[str | None, Header()] = None,
 ):
     content_type = file.content_type or ""
     filename = file.filename or ""
@@ -337,11 +338,18 @@ async def upload_photo(
         # update the record — the first upload may have been sent without the header.
         existing = db.query(MediaItem).filter(MediaItem.sha256_hash == sha256_hash).first()
         if existing:
+            updated = False
             if client_taken_at is not None and existing.taken_at is None:
                 existing.taken_at = client_taken_at
+                updated = True
+                print(f"upload_photo: updated taken_at to client-supplied {client_taken_at} for existing photo {sha256_hash}", flush=True)
+            if x_description is not None and existing.description is None:
+                existing.description = x_description
+                updated = True
+                print(f"upload_photo: updated description for existing photo {sha256_hash}", flush=True)
+            if updated:
                 db.commit()
                 db.refresh(existing)
-                print(f"upload_photo: updated taken_at to client-supplied {client_taken_at} for existing photo {sha256_hash}", flush=True)
             return JSONResponse(status_code=200, content=photo_to_dict(existing))
 
         # Determine file extension from filename, falling back to content type
@@ -360,7 +368,7 @@ async def upload_photo(
         try:
             # Create media item record and initial processing status
             media_type = "video" if is_video else "photo"
-            photo = MediaItem(sha256_hash=sha256_hash, file_extension=ext, media_type=media_type, taken_at=client_taken_at)
+            photo = MediaItem(sha256_hash=sha256_hash, file_extension=ext, media_type=media_type, taken_at=client_taken_at, description=x_description)
             db.add(photo)
             db.flush()
             db.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))

@@ -30,6 +30,9 @@ class MediaItem(Base):
     width: Mapped[Optional[int]] = mapped_column(Integer)
     height: Mapped[Optional[int]] = mapped_column(Integer)
 
+    # Free-text description (optional; populated e.g. from Google Takeout sidecar JSON)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Video-specific columns (nullable; only populated for media_type='video')
     duration: Mapped[Optional[float]] = mapped_column(Float)
     codec: Mapped[Optional[str]] = mapped_column(String(50))
