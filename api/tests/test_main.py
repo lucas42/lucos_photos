@@ -466,6 +466,62 @@ class TestUpload:
         data = response.json()
         assert data["takenAt"] is None
 
+    def test_x_description_header_sets_description(self, client):
+        """X-Description header should be stored as description on the photo."""
+        response = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", VALID_IMAGE_CONTENT, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Description": "A lovely sunset over the hills"},
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["description"] == "A lovely sunset over the hills"
+
+    def test_description_is_null_when_header_absent(self, client):
+        """Uploads without X-Description should have description=null."""
+        response = client.post(
+            "/photos",
+            files={"file": ("photo2.jpg", VALID_IMAGE_CONTENT + b"\x02", "image/jpeg")},
+            headers=AUTH_HEADER,
+        )
+        assert response.status_code == 201
+        assert response.json()["description"] is None
+
+    def test_duplicate_upload_with_x_description_updates_null_description(self, client):
+        """Re-uploading the same photo with X-Description should backfill description if it was null on the first upload."""
+        content = VALID_IMAGE_CONTENT
+        # First upload without description
+        first = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+        assert first.json()["description"] is None
+        # Second upload of same photo with X-Description — description should be updated
+        second = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Description": "Backfilled description"},
+        )
+        assert second.status_code == 200
+        assert second.json()["id"] == first.json()["id"]
+        assert second.json()["description"] == "Backfilled description"
+
+    def test_duplicate_upload_does_not_overwrite_existing_description(self, client):
+        """Re-uploading a photo that already has a description should not overwrite it."""
+        content = VALID_IMAGE_CONTENT
+        # First upload with description
+        first = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Description": "Original description"},
+        )
+        assert first.json()["description"] == "Original description"
+        # Second upload with a different description — should not overwrite
+        second = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Description": "New description"},
+        )
+        assert second.status_code == 200
+        assert second.json()["description"] == "Original description"
+
     def test_invalid_image_returns_422(self, client):
         response = client.post(
             "/photos",

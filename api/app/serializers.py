@@ -75,6 +75,7 @@ def photo_to_dict(photo: MediaItem) -> dict:
         "uploadedAt": photo.uploaded_at.isoformat() if photo.uploaded_at else None,
         "width": photo.width,
         "height": photo.height,
+        "description": photo.description,
         "originalUrl": original_url,
         "thumbnailUrl": thumbnail_url,
     }
