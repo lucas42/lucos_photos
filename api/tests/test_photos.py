@@ -57,8 +57,8 @@ def make_person(db, display_name="Alice"):
 
 class TestListPhotos:
     def test_requires_auth(self, client):
-        response = client.get("/photos")
-        assert response.status_code == 401
+        response = client.get("/photos", follow_redirects=False)
+        assert response.status_code == 302
 
     def test_returns_empty_list_when_no_photos(self, authenticated_client):
         response = authenticated_client.get("/photos")
@@ -392,8 +392,8 @@ class TestGetPhoto:
     def test_requires_auth(self, client, db_session):
         photo = make_photo(db_session)
         db_session.commit()
-        response = client.get(f"/photos/{photo.id}")
-        assert response.status_code == 401
+        response = client.get(f"/photos/{photo.id}", follow_redirects=False)
+        assert response.status_code == 302
 
     def test_returns_404_for_unknown_id(self, authenticated_client):
         response = authenticated_client.get(f"/photos/{uuid.uuid4()}", headers=JSON_ACCEPT)
@@ -524,8 +524,12 @@ class TestDeletePhoto:
     def test_requires_auth(self, client, db_session):
         photo = make_photo(db_session)
         db_session.commit()
-        response = client.delete(f"/photos/{photo.id}")
-        assert response.status_code == 401
+        response = client.delete(
+            f"/photos/{photo.id}",
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
 
     def test_returns_404_for_unknown_photo(self, authenticated_client):
         response = authenticated_client.delete(f"/photos/{uuid.uuid4()}")
@@ -649,8 +653,8 @@ class TestGetPhotoOriginal:
     def test_requires_auth(self, client, db_session):
         photo = make_photo(db_session)
         db_session.commit()
-        response = client.get(f"/photo_files/original/{photo.id}.jpg")
-        assert response.status_code == 401
+        response = client.get(f"/photo_files/original/{photo.id}.jpg", follow_redirects=False)
+        assert response.status_code == 302
 
     def test_returns_404_for_unknown_photo(self, authenticated_client):
         response = authenticated_client.get(f"/photo_files/original/{uuid.uuid4()}.jpg")
@@ -747,8 +751,8 @@ class TestGetPhotoThumbnail:
     def test_requires_auth(self, client, db_session):
         photo = make_photo(db_session)
         db_session.commit()
-        response = client.get(f"/photo_files/thumbnail/{photo.id}.jpg")
-        assert response.status_code == 401
+        response = client.get(f"/photo_files/thumbnail/{photo.id}.jpg", follow_redirects=False)
+        assert response.status_code == 302
 
     def test_returns_404_for_unknown_photo(self, authenticated_client):
         response = authenticated_client.get(f"/photo_files/thumbnail/{uuid.uuid4()}.jpg")
@@ -873,13 +877,13 @@ class TestLegacyPhotoUrls:
         photo = make_photo(db_session)
         db_session.commit()
         response = client.get(f"/photos/{photo.id}/original", follow_redirects=False)
-        assert response.status_code == 401
+        assert response.status_code == 302
 
     def test_thumbnail_redirect_requires_auth(self, client, db_session):
         photo = make_photo(db_session)
         db_session.commit()
         response = client.get(f"/photos/{photo.id}/thumbnail", follow_redirects=False)
-        assert response.status_code == 401
+        assert response.status_code == 302
 
     def test_original_redirect_404_for_unknown(self, authenticated_client):
         response = authenticated_client.get(f"/photos/{uuid.uuid4()}/original", follow_redirects=False)

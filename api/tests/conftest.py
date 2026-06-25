@@ -3,10 +3,13 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Set loganne env vars before any imports that would trigger loganne module-level code.
-# The loganne library calls sys.exit() at import time if these aren't set.
+# Set env vars before any imports that would trigger module-level code.
+# LOGANNE_ENDPOINT: the loganne library calls sys.exit() at import time if not set.
+# SYSTEM: force to "lucos_photos" so /_info tests get the correct value even when
+#   the outer shell environment has SYSTEM set to something else (e.g. "lucos_agent"
+#   in CI/agent sandboxes where setdefault would not override the existing value).
 os.environ.setdefault("LOGANNE_ENDPOINT", "http://loganne.test/events")
-os.environ.setdefault("SYSTEM", "lucos_photos")
+os.environ["SYSTEM"] = "lucos_photos"
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

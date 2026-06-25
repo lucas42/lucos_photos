@@ -12,7 +12,7 @@
 
 <body>
     <a href="#main-content" class="skip-link">Skip to content</a>
-    <lucos-navbar font="'Pinyon', cursive" title-padding="4px">Photos</lucos-navbar>
+    <lucos-navbar font="'Pinyon', cursive" title-padding="4px" aithne-origin="{{ aithne_origin }}">Photos</lucos-navbar>
     <nav class="site-nav" aria-label="Site navigation">
         <a href="/" {% if current_page == 'home' %}class="current-page"{% endif %}>Home</a>
         <a href="/photos" {% if current_page == 'photos' %}class="current-page"{% endif %}>Photos</a>

@@ -22,6 +22,8 @@ services:
       - FACE_SIMILARITY_THRESHOLD
       - KEY_LUCOS_ARACHNE
       - CLIENT_KEYS
+      - AITHNE_ORIGIN
+      - AITHNE_JWKS_URL
       - POSTGRES_USER=photos
       - REDIS_URL=redis://redis:6379
       - INSIGHTFACE_ROOT

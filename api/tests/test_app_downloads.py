@@ -1,10 +1,63 @@
 """Tests for GET /api/app/latest and the /app downloads page."""
 
+import time
+
+import jwt
 import pytest
 import httpx
+from cryptography.hazmat.primitives.asymmetric import ec
 from unittest.mock import AsyncMock, patch, MagicMock
 
+import app.auth as auth_module
 import app.routers.app_release as app_release_module
+
+# ---------------------------------------------------------------------------
+# Test key pair for aithne session auth tests in this module
+# ---------------------------------------------------------------------------
+_PRIVATE_KEY = ec.generate_private_key(ec.SECP256R1())
+_PUBLIC_KEY = _PRIVATE_KEY.public_key()
+
+AITHNE_ORIGIN = "http://aithne.test"
+
+
+class _MockSigningKey:
+    def __init__(self):
+        self.key = _PUBLIC_KEY
+        self.key_id = "test-key-id"
+
+
+class _MockJWKSClient:
+    def __init__(self):
+        self.jwk_set_data = {"keys": []}
+
+    def get_signing_key_from_jwt(self, token):
+        return _MockSigningKey()
+
+    def get_jwk_set(self, refresh=False):
+        return MagicMock()
+
+
+def _make_token(scopes=None):
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "iss": AITHNE_ORIGIN, "sub": "test-user", "aud": ["l42.eu"],
+            "iat": now, "exp": now + 900, "jti": "t1",
+            "principal_class": "human", "scopes": scopes or [],
+        },
+        _PRIVATE_KEY, algorithm="ES256", headers={"kid": "test-key-id"},
+    )
+
+
+@pytest.fixture(autouse=True)
+def inject_jwks_and_origin(monkeypatch):
+    # AITHNE_ORIGIN is module-level in auth.py; patch derived attrs directly.
+    monkeypatch.setenv("AITHNE_ORIGIN", AITHNE_ORIGIN)
+    monkeypatch.setattr(auth_module, "AITHNE_ORIGIN", AITHNE_ORIGIN)
+    monkeypatch.setattr(auth_module, "AITHNE_LOGIN_URL", f"{AITHNE_ORIGIN}/auth/login")
+    auth_module._set_jwks_client(_MockJWKSClient())
+    yield
+    auth_module._set_jwks_client(None)
 
 
 @pytest.fixture(autouse=True)
@@ -55,14 +108,16 @@ SAMPLE_RELEASE = {
 class TestAppLatestAuth:
     """Authentication checks for GET /api/app/latest."""
 
-    def test_unauthenticated_api_request_returns_401(self, client):
-        response = client.get("/api/app/latest", headers={"Accept": "application/json"})
-        assert response.status_code == 401
+    def test_unauthenticated_request_redirects_to_aithne(self, client):
+        """Unauthenticated requests redirect to aithne login (not 401 — aithne is the gate)."""
+        response = client.get("/api/app/latest", headers={"Accept": "application/json"}, follow_redirects=False)
+        assert response.status_code == 302
+        assert AITHNE_ORIGIN in response.headers["location"]
 
-    def test_unauthenticated_browser_request_redirects_to_auth(self, client):
+    def test_unauthenticated_browser_request_redirects_to_aithne(self, client):
         response = client.get("/api/app/latest", headers={"Accept": "text/html"}, follow_redirects=False)
         assert response.status_code == 302
-        assert "auth.l42.eu" in response.headers["location"]
+        assert AITHNE_ORIGIN in response.headers["location"]
 
     def test_authenticated_request_succeeds(self, authenticated_client):
         """Authenticated requests should not be blocked by auth (GitHub API call is mocked)."""
@@ -103,52 +158,32 @@ class TestAppLatestAuth:
             response = client.get("/api/app/latest", headers={"Authorization": "key validkey"})
         assert response.status_code == 200
 
-    def test_invalid_key_returns_401(self, client):
-        """Requests with an invalid key and no session cookie should be rejected."""
+    def test_invalid_key_falls_through_to_session(self, client):
+        """An invalid key falls through to session cookie validation → redirect if no session."""
         response = client.get(
             "/api/app/latest",
             headers={"Authorization": "key wrongkey", "Accept": "application/json"},
+            follow_redirects=False,
         )
-        assert response.status_code == 401
+        assert response.status_code == 302
 
     def test_invalid_key_with_valid_session_cookie_succeeds(self, client):
-        """An invalid key falls through to session cookie validation.
+        """An invalid key falls through to aithne_session cookie validation.
 
         This is deliberate: a browser user who happens to have an unrelated or
         stale Authorization header set (e.g. from a dev tool) should still be
         authenticated via their session cookie rather than being locked out.
         """
         mock_resp = _make_github_response(200, SAMPLE_RELEASE)
-
-        # Mock the auth service to validate the session cookie
-        mock_auth_resp = MagicMock()
-        mock_auth_resp.raise_for_status.return_value = None
-        mock_auth_resp.json.return_value = {"id": 1}
-
-        mock_auth_client = AsyncMock()
-        mock_auth_client.__aenter__ = AsyncMock(return_value=mock_auth_client)
-        mock_auth_client.__aexit__ = AsyncMock(return_value=False)
-
-        # The session verification calls httpx.AsyncClient for the auth service,
-        # then the endpoint itself calls it for the GitHub API. We need to return
-        # the right mock for each call.
-        call_count = 0
-
-        async def mock_get(url, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if "auth.l42.eu" in url:
-                return mock_auth_resp
-            return mock_resp
-
-        mock_auth_client.get = mock_get
-
-        with patch("app.auth.httpx.AsyncClient", return_value=mock_auth_client), \
-             patch("app.routers.app_release.httpx.AsyncClient", return_value=mock_auth_client):
+        with patch("app.routers.app_release.httpx.AsyncClient", return_value=_make_async_client(mock_resp)):
             response = client.get(
                 "/api/app/latest",
-                headers={"Authorization": "key wrongkey", "Accept": "application/json"},
-                cookies={"auth_token": "valid-session-token"},
+                headers={
+                    "Authorization": "key wrongkey",
+                    "Accept": "application/json",
+                    "X-Requested-With": "XMLHttpRequest",  # CSRF header (GET is exempt but add for clarity)
+                },
+                cookies={"aithne_session": _make_token(scopes=["photos:use"])},
             )
 
         assert response.status_code == 200
@@ -414,14 +449,16 @@ class TestAppLatestFallback:
 class TestAppPage:
     """Tests for the /app HTML downloads page."""
 
-    def test_requires_auth(self, client):
-        response = client.get("/app", headers={"Accept": "application/json"})
-        assert response.status_code == 401
+    def test_unauthenticated_request_redirects_to_aithne(self, client):
+        """Unauthenticated requests redirect to aithne login."""
+        response = client.get("/app", headers={"Accept": "application/json"}, follow_redirects=False)
+        assert response.status_code == 302
+        assert AITHNE_ORIGIN in response.headers["location"]
 
-    def test_browser_without_auth_redirects_to_auth(self, client):
+    def test_browser_without_auth_redirects_to_aithne(self, client):
         response = client.get("/app", headers={"Accept": "text/html"}, follow_redirects=False)
         assert response.status_code == 302
-        assert "auth.l42.eu" in response.headers["location"]
+        assert AITHNE_ORIGIN in response.headers["location"]
 
     def test_authenticated_request_returns_200(self, authenticated_client):
         response = authenticated_client.get("/app")
