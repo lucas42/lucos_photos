@@ -82,6 +82,24 @@ def inject_test_jwks(monkeypatch):
 # ---------------------------------------------------------------------------
 
 class TestWebSocketStream:
+    def test_rejects_connection_from_cross_origin(self, client):
+        """Cross-origin Origin header → connection rejected even with a valid token.
+
+        aithne_session is SameSite=None, so a browser page at evil.example.com
+        can open a WebSocket with the user's cookie attached.  The Origin check
+        must block this before the token is even inspected.
+        """
+        token = _make_token(scopes=["photos:use"])
+        client.cookies.set("aithne_session", token)
+        try:
+            with pytest.raises(Exception):
+                with client.websocket_connect(
+                    "/stream", headers={"origin": "https://evil.example.com"}
+                ):
+                    pass
+        finally:
+            client.cookies.clear()
+
     def test_rejects_connection_without_cookie(self, client):
         """No aithne_session cookie → close with 4401."""
         with pytest.raises(Exception):

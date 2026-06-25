@@ -91,9 +91,10 @@ class _ResilientJWKSClient(jwt.PyJWKClient):
             return super().get_jwk_set(refresh=refresh)
         except jwt.exceptions.PyJWKClientConnectionError as exc:
             safe_msg = _sanitize_for_log(str(exc))
-            log.warning("JWKS fetch failed: %s — serving last-known-good key set", safe_msg)
             if self.jwk_set_data is not None:
+                log.warning("JWKS fetch failed: %s — serving last-known-good key set", safe_msg)
                 return jwt.PyJWKSet.from_dict(self.jwk_set_data)
+            log.error("JWKS fetch failed: %s — no cached key set available, cannot authenticate", safe_msg)
             raise
 
 
@@ -188,6 +189,21 @@ def verify_aithne_token(token: str) -> "dict | None":
 # ---------------------------------------------------------------------------
 
 
+def is_allowed_origin(origin: str | None) -> bool:
+    """Return True if ``origin`` is ``l42.eu`` or a subdomain thereof.
+
+    Used by both CSRF protection (_check_csrf) and WebSocket Origin checks
+    to keep the allow-list in one place.  Returns False for absent/empty
+    origins — callers decide whether a missing Origin header is acceptable
+    for their protocol context.
+    """
+    if not origin:
+        return False
+    parsed = urlparse(origin)
+    host = parsed.hostname or ""
+    return host == "l42.eu" or host.endswith(".l42.eu")
+
+
 def _check_csrf(request: Request) -> None:
     """Reject cross-origin state-mutating requests that lack CSRF protection.
 
@@ -206,12 +222,8 @@ def _check_csrf(request: Request) -> None:
     """
     if request.headers.get("x-requested-with", "").lower() == "xmlhttprequest":
         return
-    origin = request.headers.get("origin")
-    if origin:
-        parsed = urlparse(origin)
-        host = parsed.hostname or ""
-        if host == "l42.eu" or host.endswith(".l42.eu"):
-            return
+    if is_allowed_origin(request.headers.get("origin")):
+        return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="CSRF check failed: missing X-Requested-With header or valid l42.eu Origin",

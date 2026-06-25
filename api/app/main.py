@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from app.auth import (  # noqa: F401 - safe_path and verify_session_or_key re-exported for tests
     AITHNE_ORIGIN,
     has_photos_access,
+    is_allowed_origin,
     safe_path,
     verify_aithne_token,
     verify_session_or_key,
@@ -99,6 +100,17 @@ async def websocket_stream(websocket: WebSocket):
         {"type": "photoProcessed", "photoId": "<uuid>"}
     The client is responsible for fetching photo details and inserting the card into the grid.
     """
+    # Guard against Cross-Site WebSocket Hijacking.
+    # aithne_session is SameSite=None, so browsers attach it to cross-origin
+    # WebSocket upgrades.  Browsers always send the Origin header on WS upgrades
+    # (RFC 6455); reject any request whose Origin is not l42.eu or *.l42.eu.
+    # Absent Origin (non-browser programmatic clients) is allowed — it cannot be
+    # CSRF-triggered from a browser page.
+    origin = websocket.headers.get("origin")
+    if origin is not None and not is_allowed_origin(origin):
+        await websocket.close(code=4403, reason="Cross-origin connection rejected")
+        return
+
     aithne_session = websocket.cookies.get("aithne_session")
     if not aithne_session:
         await websocket.close(code=4401, reason="Authentication required")
