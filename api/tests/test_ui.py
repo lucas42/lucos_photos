@@ -4,16 +4,16 @@ from pathlib import Path
 
 
 def test_root_requires_auth(client):
-    """Unauthenticated requests to GET / must not return the page."""
-    response = client.get("/", headers={"Accept": "application/json"})
-    assert response.status_code == 401
+    """Unauthenticated requests to GET / must not return the page — they redirect to aithne."""
+    response = client.get("/", headers={"Accept": "application/json"}, follow_redirects=False)
+    assert response.status_code == 302
 
 
 def test_root_redirects_browser_to_auth(client):
-    """Browser requests to GET / without a session must be redirected to the auth service."""
+    """Browser requests to GET / without a session must be redirected to the aithne login page."""
     response = client.get("/", headers={"Accept": "text/html"}, follow_redirects=False)
     assert response.status_code == 302
-    assert "auth.l42.eu" in response.headers["location"]
+    assert "aithne.l42.eu" in response.headers["location"]
 
 
 def test_root_returns_html(authenticated_client):
@@ -65,7 +65,7 @@ class TestPaginationHtml:
 
 class TestPhotoDetailHtml:
     def test_photo_page_requires_auth(self, client, db_session):
-        """Unauthenticated requests to GET /photos/{id} (HTML) must redirect to auth."""
+        """Unauthenticated requests to GET /photos/{id} (HTML) must redirect to aithne login."""
         from lucos_photos_common.models import Photo, ProcessingStatus, ProcessingState
         photo = Photo(sha256_hash="a" * 64, file_extension="jpg")
         db_session.add(photo)
@@ -75,7 +75,7 @@ class TestPhotoDetailHtml:
 
         response = client.get(f"/photos/{photo.id}", headers={"Accept": "text/html"}, follow_redirects=False)
         assert response.status_code == 302
-        assert "auth.l42.eu" in response.headers["location"]
+        assert "aithne.l42.eu" in response.headers["location"]
 
     def test_photo_page_returns_html_with_data(self, authenticated_client, db_session):
         """GET /photos/{id} with Accept: text/html returns HTML with photo data baked in."""
@@ -288,10 +288,10 @@ class TestPhotoNavigation:
 
 class TestPeoplePageHtml:
     def test_people_page_requires_auth(self, client):
-        """Unauthenticated requests to GET /people (HTML) must redirect to auth."""
+        """Unauthenticated requests to GET /people (HTML) must redirect to aithne login."""
         response = client.get("/people", headers={"Accept": "text/html"}, follow_redirects=False)
         assert response.status_code == 302
-        assert "auth.l42.eu" in response.headers["location"]
+        assert "aithne.l42.eu" in response.headers["location"]
 
     def test_people_page_returns_html(self, authenticated_client, db_session):
         """GET /people with Accept: text/html returns the people list page."""
@@ -491,10 +491,10 @@ class TestHomepage:
 
 class TestPhotosPageHtml:
     def test_photos_page_requires_auth(self, client):
-        """Unauthenticated requests to GET /photos (HTML) must redirect to auth."""
+        """Unauthenticated requests to GET /photos (HTML) must redirect to aithne login."""
         response = client.get("/photos", headers={"Accept": "text/html"}, follow_redirects=False)
         assert response.status_code == 302
-        assert "auth.l42.eu" in response.headers["location"]
+        assert "aithne.l42.eu" in response.headers["location"]
 
     def test_photos_page_returns_html(self, authenticated_client):
         """GET /photos with Accept: text/html returns the photos list page."""

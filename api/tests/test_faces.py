@@ -105,8 +105,8 @@ class TestListFaces:
     def test_requires_authentication(self, client, db_session):
         photo = make_photo(db_session)
         db_session.commit()
-        response = client.get(f"/photos/{photo.id}/faces")
-        assert response.status_code == 401
+        response = client.get(f"/photos/{photo.id}/faces", follow_redirects=False)
+        assert response.status_code == 302
 
 
 # ---------------------------------------------------------------------------
@@ -231,8 +231,10 @@ class TestAssignPerson:
         response = client.put(
             f"/faces/{face.id}/person",
             json={"personId": str(person.id)},
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
         )
-        assert response.status_code == 401
+        assert response.status_code == 302
 
     def test_emits_loganne_event(self, authenticated_client, db_session):
         from unittest.mock import AsyncMock, patch
@@ -314,5 +316,9 @@ class TestUnassignPerson:
         person = make_person(db_session)
         face = make_face(db_session, photo, person=person, confirmed=True)
         db_session.commit()
-        response = client.delete(f"/faces/{face.id}/person")
-        assert response.status_code == 401
+        response = client.delete(
+            f"/faces/{face.id}/person",
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302

@@ -72,8 +72,8 @@ class TestListpeople:
         assert bob["photoCount"] == 0
 
     def test_requires_authentication(self, client):
-        response = client.get("/people")
-        assert response.status_code == 401
+        response = client.get("/people", follow_redirects=False)
+        assert response.status_code == 302  # redirects to aithne login
 
     def test_sort_order_profile_pictures_first(self, authenticated_client, db_session):
         """Persons with profile pictures sort before those without."""
@@ -188,8 +188,14 @@ class TestCreatePerson:
             mock_fetch.assert_not_called()
 
     def test_requires_authentication(self, client):
-        response = client.post("/people", json={"name": "Charlie"})
-        assert response.status_code == 401
+        # CSRF header required on write methods (aithne_session is SameSite=None);
+        # with a valid CSRF header but no session cookie → 302 redirect to aithne login.
+        response = client.post(
+            "/people", json={"name": "Charlie"},
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
 
 class TestLinkPersonContact:
     def test_link_contact(self, authenticated_client, db_session):
@@ -306,8 +312,12 @@ class TestLinkPersonContact:
     def test_requires_authentication(self, client, db_session):
         person = make_person(db_session, "Alice")
         db_session.commit()
-        response = client.put(f"/people/{person.id}/contact", json={"contactId": "42"})
-        assert response.status_code == 401
+        response = client.put(
+            f"/people/{person.id}/contact", json={"contactId": "42"},
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
 
 
 class TestUnlinkPersonContact:
@@ -340,8 +350,12 @@ class TestUnlinkPersonContact:
     def test_requires_authentication(self, client, db_session):
         person = make_person(db_session, "Alice", contact_id="42")
         db_session.commit()
-        response = client.delete(f"/people/{person.id}/contact")
-        assert response.status_code == 401
+        response = client.delete(
+            f"/people/{person.id}/contact",
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
 
 
 class TestGetPerson:
@@ -382,8 +396,8 @@ class TestGetPerson:
     def test_requires_authentication(self, client, db_session):
         person = make_person(db_session, "Alice")
         db_session.commit()
-        response = client.get(f"/people/{person.id}")
-        assert response.status_code == 401
+        response = client.get(f"/people/{person.id}", follow_redirects=False)
+        assert response.status_code == 302
 
     def test_returns_html_when_browser_accept_header(self, authenticated_client, db_session):
         person = make_person(db_session, "Alice")
@@ -478,8 +492,8 @@ class TestGetPersonProfilePicture:
     def test_requires_authentication(self, client, db_session):
         person = make_person(db_session, "Alice")
         db_session.commit()
-        response = client.get(f"/people/{person.id}/profile-picture")
-        assert response.status_code == 401
+        response = client.get(f"/people/{person.id}/profile-picture", follow_redirects=False)
+        assert response.status_code == 302
 
 
 class TestListPeopleIncludesProfilePictureUrl:
@@ -646,8 +660,12 @@ class TestMergePeople:
 
     def test_merge_requires_authentication(self, client, db_session):
         """Merge endpoint should require authentication."""
-        response = client.post("/people/merge", json={"personIds": ["a" * 32, "b" * 32]})
-        assert response.status_code == 401
+        response = client.post(
+            "/people/merge", json={"personIds": ["a" * 32, "b" * 32]},
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
 
     def test_merge_three_people(self, authenticated_client, db_session):
         """Merging three people should delete two and keep one."""
@@ -698,8 +716,12 @@ class TestMarkBackgroundFace:
     def test_mark_background_requires_authentication(self, client, db_session):
         person = make_person(db_session, "Alice")
         db_session.commit()
-        response = client.put(f"/people/{person.id}/background")
-        assert response.status_code == 401
+        response = client.put(
+            f"/people/{person.id}/background",
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
 
     def test_unmark_background(self, authenticated_client, db_session):
         person = Person(display_name="Bob", is_background=True)
@@ -725,8 +747,12 @@ class TestMarkBackgroundFace:
     def test_unmark_background_requires_authentication(self, client, db_session):
         person = make_person(db_session, "Alice")
         db_session.commit()
-        response = client.delete(f"/people/{person.id}/background")
-        assert response.status_code == 401
+        response = client.delete(
+            f"/people/{person.id}/background",
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
 
     def test_background_people_hidden_from_list(self, authenticated_client, db_session):
         make_person(db_session, "Visible")

@@ -12,7 +12,16 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from app.auth import _validate_token_with_auth_service, safe_path, verify_session_or_key  # noqa: F401 - re-exported for tests
+from fastapi.responses import JSONResponse
+
+from app.auth import (  # noqa: F401 - safe_path and verify_session_or_key re-exported for tests
+    AITHNE_ORIGIN,
+    has_photos_access,
+    is_allowed_origin,
+    safe_path,
+    verify_aithne_token,
+    verify_session_or_key,
+)
 from app.database import get_db, SessionLocal  # noqa: F401 - re-exported for tests; SessionLocal used by check_db/get_metrics
 from app.redis_client import _broadcast, _redis_subscriber_task, _ws_clients, get_redis  # noqa: F401 - _broadcast and _ws_clients re-exported for tests
 from app.routers import app_release, faces, people, photos, telemetry, webhooks
@@ -35,22 +44,38 @@ async def lifespan(fastapi_app):
 
 app = FastAPI(title="lucos_photos", lifespan=lifespan)
 
-from app.auth import _RedirectWithCookie  # noqa: E402
 
+@app.exception_handler(403)
+async def forbidden_handler(request: Request, exc: Exception):
+    """Render a styled HTML 403 for browser clients; JSON for API clients.
 
-@app.middleware("http")
-async def catch_redirect_with_cookie(request: Request, call_next):
-    """Catch _RedirectWithCookie raised inside verify_session and return the redirect response."""
-    try:
-        return await call_next(request)
-    except _RedirectWithCookie as exc:
-        return exc.response
+    The scope-missing branch of verify_session_or_key raises HTTPException(403,
+    detail="access_denied").  Browser users (Accept: text/html) see the error
+    template; API clients get a JSON body.
+    """
+    from fastapi import HTTPException as _HTTPException
+    detail = exc.detail if isinstance(exc, _HTTPException) else "Forbidden"
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {
+                "title": "Access Denied",
+                "message": "You're signed in but don't have access to Photos. Contact the administrator to request access.",
+            },
+            status_code=403,
+        )
+    return JSONResponse({"detail": detail}, status_code=403)
 
 
 STATIC_DIR = Path(__file__).parent / "static"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# Inject AITHNE_ORIGIN as a Jinja2 global so every template can render the
+# aithne-origin attribute on the navbar without per-route boilerplate.
+templates.env.globals["aithne_origin"] = AITHNE_ORIGIN
 
 app.include_router(photos.router)
 app.include_router(people.router)
@@ -64,20 +89,40 @@ app.include_router(app_release.router)
 async def websocket_stream(websocket: WebSocket):
     """WebSocket endpoint: push photo-processed events to browser clients.
 
-    Auth: requires a valid `auth_token` cookie (same session cookie used by the web UI).
-    On successful connection the server sends a `{"type": "connected"}` message.
+    Auth: requires a valid ``aithne_session`` cookie with the ``photos:use`` scope.
+    A WebSocket cannot redirect a browser, so the unauthenticated and forbidden
+    branches close the socket with custom close codes:
+    - 4401 — no token, or token invalid/expired
+    - 4403 — valid session but missing ``photos:use`` scope
+
+    On successful connection the server sends a ``{"type": "connected"}`` message.
     When a photo finishes processing the server sends:
         {"type": "photoProcessed", "photoId": "<uuid>"}
     The client is responsible for fetching photo details and inserting the card into the grid.
     """
-    auth_token = websocket.cookies.get("auth_token")
-    if not auth_token:
+    # Guard against Cross-Site WebSocket Hijacking.
+    # aithne_session is SameSite=None, so browsers attach it to cross-origin
+    # WebSocket upgrades.  Browsers always send the Origin header on WS upgrades
+    # (RFC 6455); reject any request whose Origin is not l42.eu or *.l42.eu.
+    # Absent Origin (non-browser programmatic clients) is allowed — it cannot be
+    # CSRF-triggered from a browser page.
+    origin = websocket.headers.get("origin")
+    if origin is not None and not is_allowed_origin(origin):
+        await websocket.close(code=4403, reason="Cross-origin connection rejected")
+        return
+
+    aithne_session = websocket.cookies.get("aithne_session")
+    if not aithne_session:
         await websocket.close(code=4401, reason="Authentication required")
         return
 
-    data = await _validate_token_with_auth_service(auth_token)
-    if not data or not data.get("id"):
+    payload = verify_aithne_token(aithne_session)
+    if payload is None:
         await websocket.close(code=4401, reason="Authentication required")
+        return
+
+    if not has_photos_access(payload.get("scopes", [])):
+        await websocket.close(code=4403, reason="Insufficient scope")
         return
 
     await websocket.accept()
