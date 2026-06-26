@@ -12,4 +12,4 @@ rq
 pydantic-settings
 Pillow
 python-mimeparse
-PyJWT[crypto]>=2.0.0
+PyJWT[crypto]>=2.13.0
