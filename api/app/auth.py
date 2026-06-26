@@ -307,7 +307,7 @@ async def _verify_aithne_session(request: Request, aithne_session: "str | None")
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="access_denied",
+                detail=f"This action requires the {REQUIRED_SCOPE} scope.",
             )
 
     # Branch 3: no session cookie, or token failed verification

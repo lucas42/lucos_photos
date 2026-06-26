@@ -49,9 +49,11 @@ app = FastAPI(title="lucos_photos", lifespan=lifespan)
 async def forbidden_handler(request: Request, exc: Exception):
     """Render a styled HTML 403 for browser clients; JSON for API clients.
 
-    The scope-missing branch of verify_session_or_key raises HTTPException(403,
-    detail="access_denied").  Browser users (Accept: text/html) see the error
-    template; API clients get a JSON body.
+    The scope-missing branch of verify_session_or_key raises HTTPException(403)
+    whose detail names the required scope (e.g. "This action requires the
+    photos:use scope.").  Browser users (Accept: text/html) see the error
+    template; API clients get a JSON body.  Both surfaces name the scope per
+    contract §6.
     """
     from fastapi import HTTPException as _HTTPException
     detail = exc.detail if isinstance(exc, _HTTPException) else "Forbidden"
@@ -62,7 +64,7 @@ async def forbidden_handler(request: Request, exc: Exception):
             "error.html",
             {
                 "title": "Access Denied",
-                "message": "You're signed in but don't have access to Photos. Contact the administrator to request access.",
+                "message": f"{detail} Contact the administrator to request access.",
             },
             status_code=403,
         )
