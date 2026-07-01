@@ -4,7 +4,7 @@ import logging
 import os
 import re
 from typing import Annotated
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import jwt
 from fastapi import Cookie, Header, HTTPException, Request, status
@@ -24,6 +24,8 @@ log = logging.getLogger(__name__)
 AITHNE_ORIGIN = os.environ.get("AITHNE_ORIGIN", "https://aithne.l42.eu")
 AITHNE_JWKS_URL = os.environ.get("AITHNE_JWKS_URL") or f"{AITHNE_ORIGIN}/.well-known/jwks.json"
 AITHNE_LOGIN_URL = f"{AITHNE_ORIGIN}/auth/login"
+
+APP_ORIGIN = os.environ.get("APP_ORIGIN", "")
 
 REQUIRED_SCOPE = "photos:use"
 CLOCK_SKEW = 30  # seconds, per contract §"Clock skew"
@@ -289,8 +291,12 @@ async def _verify_aithne_session(request: Request, aithne_session: "str | None")
     ``/_info`` is exempt because that route carries no auth ``Depends`` — this
     function is never called for monitoring requests (FastAPI per-route wiring).
 
-    Open-redirect guard: ``?next=`` is built from ``request.url.path`` via
-    ``safe_path()``, never from a user-supplied query parameter.
+    Open-redirect guard: ``?next=`` is built from ``APP_ORIGIN`` (env var) combined
+    with ``request.url.path`` validated through ``safe_path()``, never from a
+    user-supplied parameter.  ``safe_path()`` rejects any path carrying a scheme or
+    netloc before it is combined with ``APP_ORIGIN``, so a crafted path cannot
+    produce an external redirect.  The resulting full URL is percent-encoded before
+    embedding in the ``next=`` query parameter.
     """
     if aithne_session:
         payload = verify_aithne_token(aithne_session)
@@ -310,9 +316,16 @@ async def _verify_aithne_session(request: Request, aithne_session: "str | None")
                 detail=f"This action requires the {REQUIRED_SCOPE} scope.",
             )
 
-    # Branch 3: no session cookie, or token failed verification
+    # Branch 3: no session cookie, or token failed verification.
+    # Build a full absolute URL for ?next= so aithne redirects back to photos,
+    # not to itself.  safe_path() validates the path before combining with
+    # APP_ORIGIN; quote() percent-encodes the whole URL for safe embedding.
     path = safe_path(request.url.path)
-    login_url = f"{AITHNE_LOGIN_URL}?next={path}"
+    query = request.url.query
+    full_next_url = f"{APP_ORIGIN}{path}"
+    if query:
+        full_next_url = f"{full_next_url}?{query}"
+    login_url = f"{AITHNE_LOGIN_URL}?next={quote(full_next_url, safe='')}"
     raise HTTPException(
         status_code=status.HTTP_302_FOUND,
         headers={"Location": login_url},

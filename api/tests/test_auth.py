@@ -14,6 +14,7 @@ Coverage:
 """
 import time
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlparse as _urlparse
 
 import jwt
 import pytest
@@ -31,6 +32,7 @@ _PUBLIC_KEY = _PRIVATE_KEY.public_key()
 _TEST_KID = "test-key-id"
 
 AITHNE_ORIGIN = "http://aithne.test"
+APP_ORIGIN_TEST = "https://photos.test"
 
 
 def _make_token(scopes=None, principal_class="human", expired=False, wrong_iss=False, wrong_aud=False, kid=_TEST_KID):
@@ -89,6 +91,7 @@ def inject_test_jwks_and_origin(monkeypatch):
     monkeypatch.setenv("AITHNE_ORIGIN", AITHNE_ORIGIN)
     monkeypatch.setattr(auth_module, "AITHNE_ORIGIN", AITHNE_ORIGIN)
     monkeypatch.setattr(auth_module, "AITHNE_LOGIN_URL", f"{AITHNE_ORIGIN}/auth/login")
+    monkeypatch.setattr(auth_module, "APP_ORIGIN", APP_ORIGIN_TEST)
     auth_module._set_jwks_client(_MockJWKSClient())
     yield
     auth_module._set_jwks_client(None)
@@ -209,7 +212,7 @@ class TestNoOrInvalidToken:
         assert response.status_code == 302
         assert response.headers["location"].startswith(f"{AITHNE_ORIGIN}/auth/login")
 
-    def test_redirect_includes_next_path(self, client):
+    def test_redirect_includes_next_full_url(self, client):
         response = client.get(
             "/photos",
             headers={"Accept": "text/html"},
@@ -217,7 +220,9 @@ class TestNoOrInvalidToken:
         )
         assert response.status_code == 302
         location = response.headers["location"]
-        assert "?next=/photos" in location
+        # ?next= must be a full absolute URL back to photos, not a bare path
+        next_val = parse_qs(_urlparse(location).query)["next"][0]
+        assert next_val == f"{APP_ORIGIN_TEST}/photos"
 
     def test_json_request_without_cookie_redirects(self, client):
         """Both JSON and HTML unauthenticated requests redirect — aithne is the gate."""
@@ -260,13 +265,22 @@ class TestNoOrInvalidToken:
         assert response.status_code == 302
 
     def test_redirect_uses_server_side_path_not_query_param(self, client):
-        """The ?next= value must come from request.url.path, never a user-supplied param."""
+        """?next= must be a full URL built from APP_ORIGIN server-side, never user input."""
         response = client.get("/photos", follow_redirects=False)
         location = response.headers["location"]
-        # next= must point to the actual path
-        assert "next=/photos" in location
-        # Must not contain any evil domain
+        next_val = parse_qs(_urlparse(location).query)["next"][0]
+        # next= must be a full photos.test URL pointing to the actual path
+        assert next_val == f"{APP_ORIGIN_TEST}/photos"
+        # Must not contain any evil domain in any part of the redirect URL
         assert "evil" not in location
+
+    def test_redirect_preserves_query_string(self, client):
+        """Query string is included in the ?next= URL so the user returns to the right page."""
+        response = client.get("/photos?page=2&sort=date", follow_redirects=False)
+        assert response.status_code == 302
+        location = response.headers["location"]
+        next_val = parse_qs(_urlparse(location).query)["next"][0]
+        assert next_val == f"{APP_ORIGIN_TEST}/photos?page=2&sort=date"
 
     def test_unknown_kid_redirects_to_login(self, client):
         auth_module._set_jwks_client(_MockJWKSClient(unknown_kid=True))
