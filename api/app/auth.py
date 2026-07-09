@@ -88,14 +88,20 @@ class _ResilientJWKSClient(jwt.PyJWKClient):
     ``PyJWKClient`` (it stores its cache in ``self.jwk_set_cache``, a
     ``JWKSetCache`` object) — so that fallback silently raised
     ``AttributeError`` instead of serving stale keys, turning a would-be clean
-    rejection into an unhandled exception. The parent's own cache doesn't
-    help either: ``PyJWKClient.fetch_data()`` calls
-    ``self.jwk_set_cache.put(jwk_set)`` in a ``finally`` block even when the
-    fetch failed (``jwk_set`` is still ``None`` at that point), and
-    ``JWKSetCache.put(None)`` explicitly *clears* the cache — so a failed
-    fetch wipes PyJWT's own cache before this subclass's ``except`` block
-    even runs. An independent snapshot is the only reliable way to serve
-    stale keys here.
+    rejection into an unhandled exception.
+
+    The parent's own cache isn't a substitute fallback source either, though
+    for a narrower reason than a self-wiping bug: PyJWT 2.13.0 fixed exactly
+    that failure mode as a security patch (GHSA-fhv5-28vv-h8m8) —
+    ``fetch_data()`` only calls ``self.jwk_set_cache.put(...)`` on the
+    success path now, so a failed fetch does *not* clear an existing cache
+    entry. The real limitation is TTL: ``JWKSetCache.get()`` returns ``None``
+    once ``lifespan`` (300s here) has elapsed, regardless of whether the most
+    recent fetch succeeded or failed. So once the cache has gone stale by
+    time alone, ``get_jwk_set`` must call ``fetch_data()`` again — and if
+    aithne is down at that moment, there is nothing left in the parent's
+    cache to fall back to. An independent, non-expiring snapshot is what
+    actually survives past that TTL boundary.
 
     Per contract §"Serve last-known-good on a failed refresh".
     """
