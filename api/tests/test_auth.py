@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse as _urlparse
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
+from jwt.algorithms import ECAlgorithm
 
 import app.auth as auth_module
 
@@ -496,3 +497,87 @@ class TestSafePath:
     def test_empty_string_is_allowed(self):
         from app.main import safe_path
         assert safe_path("") == ""
+
+
+# ---------------------------------------------------------------------------
+# _ResilientJWKSClient — exercises the REAL PyJWKClient base class, not the
+# _MockJWKSClient test double used above. The double sets self.jwk_set_data
+# directly and skips get_jwk_set entirely, which is exactly why the
+# AttributeError bug in the original implementation went unnoticed: these
+# tests monkeypatch only the network-level fetch_data(), so get_jwk_set(),
+# the parent's jwk_set_cache, and our own _last_known_good snapshot logic
+# all run for real.
+# ---------------------------------------------------------------------------
+
+def _jwk_set_dict_for(public_key, kid):
+    """Build a real {"keys": [...]} JWKS dict for a test EC public key."""
+    jwk_json = ECAlgorithm(ECAlgorithm.SHA256).to_jwk(public_key)
+    import json
+    jwk = json.loads(jwk_json)
+    jwk["kid"] = kid
+    jwk["use"] = "sig"
+    jwk["alg"] = "ES256"
+    return {"keys": [jwk]}
+
+
+class TestResilientJWKSClient:
+    def _make_client(self):
+        return auth_module._ResilientJWKSClient(
+            "http://aithne.test/.well-known/jwks.json", cache_keys=False, lifespan=300
+        )
+
+    def test_successful_fetch_returns_keys_and_records_snapshot(self, monkeypatch):
+        client = self._make_client()
+        jwks_dict = _jwk_set_dict_for(_PUBLIC_KEY, _TEST_KID)
+        monkeypatch.setattr(client, "fetch_data", lambda: jwks_dict)
+
+        jwk_set = client.get_jwk_set()
+
+        assert len(jwk_set.keys) == 1
+        assert jwk_set.keys[0].key_id == _TEST_KID
+        assert client._last_known_good is jwk_set
+
+    def test_fetch_failure_falls_back_to_last_known_good(self, monkeypatch):
+        client = self._make_client()
+        jwks_dict = _jwk_set_dict_for(_PUBLIC_KEY, _TEST_KID)
+        monkeypatch.setattr(client, "fetch_data", lambda: jwks_dict)
+
+        # First call succeeds and captures the snapshot.
+        first = client.get_jwk_set(refresh=True)
+
+        # Second call: simulate aithne being unreachable.
+        def _raise_connection_error():
+            raise jwt.exceptions.PyJWKClientConnectionError("JWKS unreachable")
+        monkeypatch.setattr(client, "fetch_data", _raise_connection_error)
+
+        fallback = client.get_jwk_set(refresh=True)
+        assert fallback is first
+        assert fallback.keys[0].key_id == _TEST_KID
+
+    def test_fetch_failure_with_no_snapshot_yet_reraises(self, monkeypatch):
+        client = self._make_client()
+
+        def _raise_connection_error():
+            raise jwt.exceptions.PyJWKClientConnectionError("JWKS unreachable")
+        monkeypatch.setattr(client, "fetch_data", _raise_connection_error)
+
+        with pytest.raises(jwt.exceptions.PyJWKClientConnectionError):
+            client.get_jwk_set(refresh=True)
+
+    def test_get_signing_key_from_jwt_still_rejects_unknown_kid_after_fallback(self, monkeypatch):
+        """Serve-stale must not bypass rotation-awareness: a kid absent from
+        the last-known-good set is still rejected, even during an outage."""
+        client = self._make_client()
+        jwks_dict = _jwk_set_dict_for(_PUBLIC_KEY, _TEST_KID)
+        monkeypatch.setattr(client, "fetch_data", lambda: jwks_dict)
+        client.get_jwk_set(refresh=True)  # capture the snapshot
+
+        def _raise_connection_error():
+            raise jwt.exceptions.PyJWKClientConnectionError("JWKS unreachable")
+        monkeypatch.setattr(client, "fetch_data", _raise_connection_error)
+
+        token = jwt.encode(
+            {"sub": "x"}, _PRIVATE_KEY, algorithm="ES256", headers={"kid": "unknown-kid"}
+        )
+        with pytest.raises(jwt.exceptions.PyJWKClientError):
+            client.get_signing_key_from_jwt(token)
