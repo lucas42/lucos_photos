@@ -81,21 +81,39 @@ class _ResilientJWKSClient(jwt.PyJWKClient):
     that specific error, log a WARNING (contract §"Log a failed JWKS fetch"), and
     return the previously cached key set instead.
 
-    The parent class stores the most recently fetched key-set data in
-    ``self.jwk_set_data``; that attribute is not cleared on a failed fetch, so
-    it naturally acts as the last-known-good cache.
+    Maintains its own ``self._last_known_good`` snapshot, updated only on a
+    successful fetch — deliberately NOT relying on the parent class's own
+    ``jwk_set_cache``. An earlier version of this class read
+    ``self.jwk_set_data``, an attribute that does not exist on PyJWT>=2.13.0's
+    ``PyJWKClient`` (it stores its cache in ``self.jwk_set_cache``, a
+    ``JWKSetCache`` object) — so that fallback silently raised
+    ``AttributeError`` instead of serving stale keys, turning a would-be clean
+    rejection into an unhandled exception. The parent's own cache doesn't
+    help either: ``PyJWKClient.fetch_data()`` calls
+    ``self.jwk_set_cache.put(jwk_set)`` in a ``finally`` block even when the
+    fetch failed (``jwk_set`` is still ``None`` at that point), and
+    ``JWKSetCache.put(None)`` explicitly *clears* the cache — so a failed
+    fetch wipes PyJWT's own cache before this subclass's ``except`` block
+    even runs. An independent snapshot is the only reliable way to serve
+    stale keys here.
 
     Per contract §"Serve last-known-good on a failed refresh".
     """
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._last_known_good: "jwt.PyJWKSet | None" = None
+
     def get_jwk_set(self, refresh: bool = False) -> "jwt.PyJWKSet":  # type: ignore[override]
         try:
-            return super().get_jwk_set(refresh=refresh)
+            jwk_set = super().get_jwk_set(refresh=refresh)
+            self._last_known_good = jwk_set
+            return jwk_set
         except jwt.exceptions.PyJWKClientConnectionError as exc:
             safe_msg = _sanitize_for_log(str(exc))
-            if self.jwk_set_data is not None:
+            if self._last_known_good is not None:
                 log.warning("JWKS fetch failed: %s — serving last-known-good key set", safe_msg)
-                return jwt.PyJWKSet.from_dict(self.jwk_set_data)
+                return self._last_known_good
             log.error("JWKS fetch failed: %s — no cached key set available, cannot authenticate", safe_msg)
             raise
 
