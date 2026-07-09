@@ -20,11 +20,11 @@ Designed to evolve toward ML-driven automation (object detection, rule engine, p
 - `/_info` endpoint (standard lucos monitoring endpoint)
 - Database schema with Alembic migrations (runs automatically on API startup)
 - Basic web UI scaffold (landing page + app icon)
+- Authentication via lucos_aithne for the web UI
 
 **Next up:**
 - Worker job queue implementation (library not yet chosen — discuss trade-offs when implementing)
   - Worker should consume jobs from Redis, pick up files from `/data/uploads/`, move originals to `/data/photos/originals/`, and update processing status
-- Authentication via lucos_authentication for the web UI
 
 ## Commands
 
@@ -149,7 +149,7 @@ Sensitive and environment-varying variables come from lucos_creds (see `.env.exa
 
 The API and worker integrate with existing lucos services. Exact interfaces to be documented here as each is implemented.
 
-- **lucos_authentication** — handles web UI authentication; domain is always `auth.l42.eu`
+- **lucos_aithne** — handles web UI authentication; domain is always `aithne.l42.eu`
 - **lucos_loganne** — receives external domain events (`photoProcessed`, `personTagged`, `profilePhotoUpdated`); env var is `LOGANNE_ENDPOINT`. The worker calls Loganne directly after photo processing completes.
 - **lucos_contacts** — provides the contact list used for person identification/linking; env var is `LUCOS_CONTACTS_ORIGIN`
 
