@@ -141,6 +141,19 @@ class TestValidTokenWithScope:
         )
         assert response.status_code == 200
 
+    def test_unrecognised_principal_class_with_scope_allowed(self, client):
+        """principal_class is informational only (§5 redesign,
+        lucas42/lucos_aithne#268) — authorisation is enforced purely by
+        scope (ADR-0001 §6). An unrecognised principal_class must not
+        cause rejection as long as the required scope is present."""
+        token = _make_token(scopes=["photos:use"], principal_class="unknown_class")
+        response = client.get(
+            "/photos",
+            headers={"Accept": "application/json"},
+            cookies={"aithne_session": token},
+        )
+        assert response.status_code == 200
+
 
 # ---------------------------------------------------------------------------
 # Branch 2 — valid token but missing scope → 403 (not a redirect)
@@ -186,17 +199,6 @@ class TestValidTokenMissingScope:
         )
         # A 302 here would be a redirect-loop bug
         assert response.status_code == 403
-
-    def test_unknown_principal_class_treated_as_unauthenticated(self, client):
-        """Unrecognised principal_class → verify_aithne_token returns None → redirect."""
-        token = _make_token(scopes=["photos:use"], principal_class="unknown_class")
-        response = client.get(
-            "/photos",
-            headers={"Accept": "application/json"},
-            cookies={"aithne_session": token},
-            follow_redirects=False,
-        )
-        assert response.status_code == 302
 
 
 # ---------------------------------------------------------------------------

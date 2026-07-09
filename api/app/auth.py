@@ -175,7 +175,10 @@ def verify_aithne_token(token: str) -> "dict | None":
     - Algorithm pinned to ES256 — never trust the token-header ``alg`` (§3 / lucos_arachne#637)
     - ``iss`` == AITHNE_ORIGIN, ``aud`` contains ``l42.eu``, ``exp``/``iat`` with
       30-second clock-skew tolerance (§4)
-    - ``principal_class`` is a recognised value (§5)
+
+    ``principal_class`` is informational only, not an authorisation input —
+    an absent/unrecognised value does not cause rejection (§5 redesign,
+    lucas42/lucos_aithne#268).
 
     Returns None for any validation failure so callers get a uniform "unauthenticated"
     signal.  Sanitises all log output to prevent log injection (§2 / lucos_arachne#646).
@@ -191,10 +194,11 @@ def verify_aithne_token(token: str) -> "dict | None":
             issuer=AITHNE_ORIGIN,  # always AITHNE_ORIGIN, never AITHNE_JWKS_URL (§1 guard-rail)
             leeway=CLOCK_SKEW,
         )
-        principal_class = payload.get("principal_class")
-        if principal_class not in ("human", "agent"):
-            log.warning("JWT has unrecognised principal_class=%s", _sanitize_for_log(str(principal_class)))
-            return None
+        # principal_class is informational only — authorisation is enforced
+        # purely by scope (ADR-0001 §6). Do not reject on an absent or
+        # unrecognised principal_class (§5 redesign, lucas42/lucos_aithne#268).
+        # No other logging site reads it in this repo, so there is nothing
+        # to preserve a read for.
         return payload
     except jwt.exceptions.PyJWKClientError as exc:
         # Covers connection errors (already logged at WARNING by _ResilientJWKSClient)
