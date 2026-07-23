@@ -113,50 +113,50 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
     Jobs are routed correctly: videos go to process_video, photos to process_photo.
 
     Circuit breaker: if the queue already has more than SWEEP_QUEUE_DEPTH_LIMIT jobs waiting
-    (default 0), the sweep is skipped entirely. This prevents a positive-feedback flood where
-    jobs fail (e.g. due to OOM), the sweep re-enqueues them every 60 seconds, and the queue
-    grows unboundedly until Redis itself causes OOM.
+    (default 0), the stuck-item re-enqueue is skipped. This prevents a positive-feedback flood
+    where jobs fail (e.g. due to OOM), the sweep re-enqueues them every 60 seconds, and the
+    queue grows unboundedly until Redis itself causes OOM. Face clustering and contact
+    display-name sync (below) don't feed that re-enqueue loop, so the breaker doesn't gate them.
     """
     queue = Queue("photos", connection=redis_conn)
     queue_depth = queue.count
     if queue_depth > SWEEP_QUEUE_DEPTH_LIMIT:
         logger.warning(
-            "sweep: skipping — queue already has %d jobs waiting (limit=%d). "
+            "sweep: skipping stuck-item re-enqueue — queue already has %d jobs waiting (limit=%d). "
             "Will retry when queue drains.",
             queue_depth,
             SWEEP_QUEUE_DEPTH_LIMIT,
         )
-        return
+    else:
+        pending_threshold = datetime.now(timezone.utc) - timedelta(minutes=PENDING_SWEEP_THRESHOLD_MINUTES)
+        processing_threshold = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_SWEEP_THRESHOLD_MINUTES)
 
-    pending_threshold = datetime.now(timezone.utc) - timedelta(minutes=PENDING_SWEEP_THRESHOLD_MINUTES)
-    processing_threshold = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_SWEEP_THRESHOLD_MINUTES)
-
-    db = SessionLocal()
-    try:
-        stuck = (
-            db.query(ProcessingStatus)
-            .join(ProcessingStatus.media_item)
-            .filter(
-                (
-                    (ProcessingStatus.state == ProcessingState.pending) &
-                    (ProcessingStatus.updated_at < pending_threshold)
-                ) | (
-                    (ProcessingStatus.state == ProcessingState.processing) &
-                    (ProcessingStatus.updated_at < processing_threshold)
+        db = SessionLocal()
+        try:
+            stuck = (
+                db.query(ProcessingStatus)
+                .join(ProcessingStatus.media_item)
+                .filter(
+                    (
+                        (ProcessingStatus.state == ProcessingState.pending) &
+                        (ProcessingStatus.updated_at < pending_threshold)
+                    ) | (
+                        (ProcessingStatus.state == ProcessingState.processing) &
+                        (ProcessingStatus.updated_at < processing_threshold)
+                    )
                 )
+                .all()
             )
-            .all()
-        )
-        if stuck:
-            for status in stuck:
-                _enqueue_for_media_item(queue, status)
-    except Exception:
-        logger.exception("sweep: error during pending photo sweep")
-    finally:
-        db.close()
+            if stuck:
+                for status in stuck:
+                    _enqueue_for_media_item(queue, status)
+        except Exception:
+            logger.exception("sweep: error during pending photo sweep")
+        finally:
+            db.close()
 
-    # Run face clustering after the pending sweep so newly processed photos
-    # get their faces incorporated into clusters.
+    # Run face clustering regardless of the circuit breaker above — it doesn't
+    # feed the re-enqueue loop the breaker guards against.
     try:
         from lucos_photos_common.jobs import cluster_faces
         cluster_faces()
