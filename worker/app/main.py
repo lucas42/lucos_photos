@@ -16,7 +16,7 @@ from rq import Queue, Worker
 from rq.job import Retry
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import MediaItem, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, Person, ProcessingState, ProcessingStatus
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -98,6 +98,42 @@ def _enqueue_for_media_item(queue: Queue, status: ProcessingStatus) -> None:
     )
 
 
+def _enqueue_missing_profile_pictures() -> None:
+    """Enqueue generate_profile_picture for any non-background person who has a face but
+    no profile picture.
+
+    This is the backstop for generate_profile_picture equivalent to the pending/processing
+    sweep above for process_photo/process_video. Enabling the RQ scheduler makes retries
+    actually happen, but a job that exhausts all retries is otherwise lost forever — unlike
+    process_photo/process_video, there is no ProcessingStatus row to detect that by, so this
+    query (person has a face, is not marked background, and has no profile_photo_id) stands
+    in for it.
+    """
+    from lucos_photos_common.jobs import _enqueue_profile_picture_for_persons
+
+    db = SessionLocal()
+    try:
+        person_ids = [
+            str(person_id)
+            for (person_id,) in (
+                db.query(Person.id)
+                .join(Face, Face.person_id == Person.id)
+                .filter(Person.is_background == False, Person.profile_photo_id.is_(None))  # noqa: E712
+                .distinct()
+                .all()
+            )
+        ]
+    finally:
+        db.close()
+
+    if person_ids:
+        logger.info(
+            "sweep: enqueuing profile picture generation for %d person(s) missing one",
+            len(person_ids),
+        )
+        _enqueue_profile_picture_for_persons(person_ids)
+
+
 def sweep_pending_photos(redis_conn: Redis) -> None:
     """Enqueue processing jobs for any media items stuck in 'pending' or 'processing' state.
 
@@ -112,11 +148,15 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
 
     Jobs are routed correctly: videos go to process_video, photos to process_photo.
 
+    Also enqueues generate_profile_picture for any person who has a face but no profile
+    picture — the equivalent backstop for that job type (see _enqueue_missing_profile_pictures).
+
     Circuit breaker: if the queue already has more than SWEEP_QUEUE_DEPTH_LIMIT jobs waiting
-    (default 0), the stuck-item re-enqueue is skipped. This prevents a positive-feedback flood
-    where jobs fail (e.g. due to OOM), the sweep re-enqueues them every 60 seconds, and the
-    queue grows unboundedly until Redis itself causes OOM. Face clustering and contact
-    display-name sync (below) don't feed that re-enqueue loop, so the breaker doesn't gate them.
+    (default 0), the stuck-item re-enqueue and the missing-profile-picture sweep are both
+    skipped. This prevents a positive-feedback flood where jobs fail (e.g. due to OOM), the
+    sweep re-enqueues them every 60 seconds, and the queue grows unboundedly until Redis
+    itself causes OOM. Face clustering and contact display-name sync (below) don't feed that
+    re-enqueue loop, so the breaker doesn't gate them.
     """
     queue = Queue("photos", connection=redis_conn)
     queue_depth = queue.count
@@ -154,6 +194,11 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
             logger.exception("sweep: error during pending photo sweep")
         finally:
             db.close()
+
+        try:
+            _enqueue_missing_profile_pictures()
+        except Exception:
+            logger.exception("sweep: error during missing profile picture sweep")
 
     # Run face clustering regardless of the circuit breaker above — it doesn't
     # feed the re-enqueue loop the breaker guards against.
@@ -198,7 +243,7 @@ def main() -> None:
     queue = Queue("photos", connection=redis_conn)
     worker = Worker([queue], connection=redis_conn)
     logger.info("Starting RQ worker on queue 'photos'")
-    worker.work(with_scheduler=False)
+    worker.work(with_scheduler=True)
 
 
 if __name__ == "__main__":
