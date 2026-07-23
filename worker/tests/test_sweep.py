@@ -310,3 +310,22 @@ class TestSweepCircuitBreaker:
             app_main.SWEEP_QUEUE_DEPTH_LIMIT = original_limit
 
         mock_queue.enqueue.assert_not_called()
+
+    def test_breaker_trip_still_runs_face_clustering_and_contact_sync(self, db_session):
+        """A breaker trip should suppress the stuck-item re-enqueue only — clustering and
+        contact display-name sync don't feed the re-enqueue loop the breaker guards, so they
+        must still run."""
+        item = _make_media_item(db_session, sha256_hash="a1" * 32, media_type="photo")
+        _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=10)
+
+        mock_redis = MagicMock()
+        mock_queue = _make_mock_queue(count=100)
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs.cluster_faces") as mock_cluster_faces, \
+             patch("lucos_photos_common.jobs.sweep_contact_display_names") as mock_sync_names:
+            sweep_pending_photos(mock_redis)
+
+        mock_queue.enqueue.assert_not_called()
+        mock_cluster_faces.assert_called_once()
+        mock_sync_names.assert_called_once()
