@@ -452,14 +452,18 @@
     if (photoGrid) {
         // Clicking anywhere on a tile toggles its checkbox while select-mode is
         // active, rather than navigating to the photo — bigger, easier click target
-        // than the checkbox alone. A click that landed on the checkbox itself has
-        // already toggled it natively by the time this delegated handler runs.
+        // than the checkbox alone. A click landing on the checkbox itself (mouse or
+        // keyboard Space) must NOT call preventDefault(): the checkbox's native
+        // check-toggle is a "pre-click" step that gets reverted if the event ends up
+        // defaultPrevented, regardless of which listener in the bubble chain called
+        // it or when — so calling it here would silently undo the native toggle and
+        // break both direct-checkbox clicks and Space-to-toggle.
         photoGrid.addEventListener('click', (e) => {
             if (!container.classList.contains('select-mode')) return;
             const link = e.target.closest('.media-card-link');
             if (!link) return;
+            if (e.target.closest('.photo-select-checkbox')) return; // let the native toggle proceed
             e.preventDefault();
-            if (e.target.closest('.photo-select-checkbox')) return;
             const checkbox = link.querySelector('.photo-select-checkbox');
             if (!checkbox) return;
             checkbox.checked = !checkbox.checked;
