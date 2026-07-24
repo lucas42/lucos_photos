@@ -40,9 +40,14 @@ def list_people(
     includePhotoCounts: bool = False,
     limit: int = 100,
     offset: int = 0,
+    search: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     base_filter = Person.is_background == False  # noqa: E712
+    if search:
+        # Powers the "move to another person" search-as-you-type lightbox
+        # (lucas42/lucos_photos#471) as well as any other name lookup.
+        base_filter = base_filter & Person.display_name.ilike(f"%{search}%")
     total = db.query(func.count(Person.id)).filter(base_filter).scalar()
 
     if includePhotoCounts:
@@ -83,7 +88,13 @@ async def create_person(
     db: Session = Depends(get_db),
 ):
     name = body.get("name")
-    if not name:
+    face_id_strs = body.get("faceIds")
+    if face_id_strs is not None and not isinstance(face_id_strs, list):
+        raise HTTPException(status_code=422, detail="faceIds must be a list")
+
+    # name is only optional when creating a person from a face selection — the
+    # "move to new group" flow allows an unnamed group ("Create new (unnamed) person").
+    if not name and not face_id_strs:
         raise HTTPException(status_code=422, detail="name is required")
 
     contact_id = body.get("contactId")
@@ -93,10 +104,24 @@ async def create_person(
         if contact_name:
             name = contact_name
 
+    faces = []
+    if face_id_strs:
+        face_uuids = []
+        for fid in face_id_strs:
+            try:
+                face_uuids.append(uuid.UUID(str(fid)))
+            except (ValueError, AttributeError):
+                raise HTTPException(status_code=422, detail=f"Invalid face ID: {fid!r}")
+        faces = db.query(Face).filter(Face.id.in_(face_uuids)).all()
+        if len(faces) != len(set(face_uuids)):
+            found_ids = {f.id for f in faces}
+            missing = [str(u) for u in face_uuids if u not in found_ids]
+            raise HTTPException(status_code=404, detail=f"Face(s) not found: {', '.join(missing)}")
+
     person = Person(display_name=name, contact_id=contact_id)
     db.add(person)
     try:
-        db.commit()
+        db.flush()
     except IntegrityError as e:
         db.rollback()
         # Handle unique constraint for contact_id if it already exists (Postgres code 23505, with SQLite fallback for tests)
@@ -108,9 +133,20 @@ async def create_person(
     except Exception:
         db.rollback()
         raise
+
+    needs_regen = {person.id}
+    if faces:
+        needs_regen = move_faces_to_person(db, faces, person)
+
+    db.commit()
     db.refresh(person)
 
-    await emit_loganne_event("personCreated", f"{person.display_name or person.id} created in lucos_photos")
+    if faces:
+        for pid in needs_regen:
+            _enqueue_profile_picture(str(pid))
+        await emit_loganne_event("peopleSplit", f"{len(faces)} face(s) split into new person {person.display_name or person.id} in lucos_photos")
+    else:
+        await emit_loganne_event("personCreated", f"{person.display_name or person.id} created in lucos_photos")
 
     return person_to_dict(person)
 
@@ -144,9 +180,21 @@ def get_person(
         .all()
     )
 
+    # Map photo_id -> this person's face_id on that photo, so the "select photos to
+    # move" UI can submit a set of face_ids rather than photo_ids (lucas42/lucos_photos#471).
+    # A person could in principle have more than one face on the same photo; any one
+    # of them identifies the same correction, so the first found is used.
+    face_id_by_photo_id = {
+        f.photo_id: str(f.id)
+        for f in db.query(Face).filter(Face.person_id == person_uuid).all()
+    }
+
     data = person_to_dict(person)
     data["faceCount"] = face_count
-    data["photos"] = [photo_to_dict(p) for p in photos]
+    data["photos"] = [
+        {**photo_to_dict(p), "faceId": face_id_by_photo_id.get(p.id)}
+        for p in photos
+    ]
 
     accept_header = request.headers.get("accept", "*/*")
     best_match = mimeparse.best_match(["text/html", "application/json"], accept_header)
@@ -410,6 +458,58 @@ async def unmark_person_background(
     return person_to_dict(person)
 
 
+@router.put("/people/{person_id}/flag", status_code=status.HTTP_200_OK)
+async def flag_person(
+    person_id: str,
+    _: Annotated[None, Depends(verify_session_or_key)],
+    db: Session = Depends(get_db),
+):
+    """Flag a person's grouping as wrong (standing "needs attention" marker). Manual
+    unflag only — nothing auto-resolves this, since correcting some faces doesn't mean
+    the whole grouping is now right."""
+    try:
+        person_uuid = uuid.UUID(person_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person = db.query(Person).filter(Person.id == person_uuid).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person.flagged_at = func.now()
+    db.commit()
+    db.refresh(person)
+
+    await emit_loganne_event("personFlagged", f"{person.display_name or str(person_uuid)} flagged in lucos_photos")
+
+    return person_to_dict(person)
+
+
+@router.delete("/people/{person_id}/flag", status_code=status.HTTP_200_OK)
+async def unflag_person(
+    person_id: str,
+    _: Annotated[None, Depends(verify_session_or_key)],
+    db: Session = Depends(get_db),
+):
+    """Clear a person's flag."""
+    try:
+        person_uuid = uuid.UUID(person_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person = db.query(Person).filter(Person.id == person_uuid).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    person.flagged_at = None
+    db.commit()
+    db.refresh(person)
+
+    await emit_loganne_event("personUnflagged", f"{person.display_name or str(person_uuid)} unflagged in lucos_photos")
+
+    return person_to_dict(person)
+
+
 def _enqueue_profile_picture(person_id: str) -> None:
     """Enqueue generate_profile_picture for a person. Non-fatal on Redis errors."""
     try:
@@ -422,3 +522,48 @@ def _enqueue_profile_picture(person_id: str) -> None:
         queue.enqueue(generate_profile_picture, person_id, retry=Retry(max=3, interval=[10, 30, 60]))
     except Exception as exc:
         print(f"Warning: failed to enqueue generate_profile_picture for {person_id}: {exc}", flush=True)
+
+
+def move_faces_to_person(db: Session, faces: list[Face], destination: Person) -> set:
+    """Reassign a set of faces to `destination`, implementing the transactional
+    contract shared by the bulk face-move endpoint (lucas42/lucos_photos#471) and
+    creating a new person from a face selection:
+
+    1. Mark every moved face as person_confirmed=True — the durable manual-correction
+       signal (detect_and_save_faces only snapshots confirmed assignments before
+       re-detecting; without this, a reprocess would silently lose the move).
+    2. Resync photo_person for every affected photo — covers both the source and
+       destination side, since sync_photo_person recomputes from whichever person_ids
+       currently appear among the photo's faces.
+    3. Emptied-source policy: a source person left with zero faces is deleted if it
+       has no contact link (deleting also drops its flagged_at state, which is
+       correct — no separate flag-cleanup step needed); kept if contact-linked, since
+       deleting would silently destroy the contact link.
+
+    Does not commit and does not enqueue anything — the caller commits, then enqueues
+    profile-picture regeneration for every person_id in the returned set (destination
+    plus any source person that survived).
+    """
+    source_person_ids = {f.person_id for f in faces if f.person_id is not None and f.person_id != destination.id}
+    affected_photo_ids = {f.photo_id for f in faces}
+
+    for face in faces:
+        face.person_id = destination.id
+        face.person_confirmed = True
+    db.flush()
+
+    for photo_id in affected_photo_ids:
+        sync_photo_person(db, photo_id)
+
+    needs_regen = {destination.id}
+    for source_id in source_person_ids:
+        remaining = db.query(Face).filter(Face.person_id == source_id).count()
+        if remaining == 0:
+            source_person = db.query(Person).filter(Person.id == source_id).first()
+            if source_person and source_person.contact_id is None:
+                db.query(PhotoPerson).filter(PhotoPerson.person_id == source_id).delete(synchronize_session="fetch")
+                db.delete(source_person)
+                continue  # deleted — no regen needed
+        needs_regen.add(source_id)
+
+    return needs_regen

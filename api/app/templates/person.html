@@ -14,14 +14,32 @@
         <h1 class="page-title">{{ person.name or ('Person ' + person.id[:8] + '…') }}</h1>
     </div>
 
+    <div class="person-flag" id="person-flag" data-flagged-at="{{ person.flaggedAt or '' }}">
+        <button class="flag-btn" id="flag-btn">
+            {% if person.flaggedAt %}Unflag this grouping{% else %}Flag this grouping{% endif %}
+        </button>
+        <span class="flag-status" id="flag-status"{% if not person.flaggedAt %} hidden{% endif %}></span>
+    </div>
+
     <section class="person-photos">
-        <h2>Photos ({{ person.photos | length }})</h2>
+        <div class="person-photos-header">
+            <h2 id="photos-heading">Photos ({{ person.photos | length }})</h2>
+            {% if person.photos %}
+            <button class="select-mode-btn" id="select-mode-btn">Select photos to move</button>
+            {% endif %}
+        </div>
         {% if person.photos %}
-        <div class="photo-grid">
+        <div class="photo-grid" id="photo-grid">
             {% for photo in person.photos %}
             <a href="/photos/{{ photo.id }}" class="media-card-link">
                 <div class="media-card">
                     <img src="{{ photo.thumbnailUrl }}" alt="Photo{% if photo.takenAtDisplay %} taken {{ photo.takenAtDisplay }}{% endif %}" loading="lazy">
+                    {% if photo.faceId %}
+                    <label class="photo-select-overlay">
+                        <input type="checkbox" class="photo-select-checkbox" data-face-id="{{ photo.faceId }}">
+                        <span class="sr-only">Select this photo to move</span>
+                    </label>
+                    {% endif %}
                 </div>
             </a>
             {% endfor %}
@@ -30,6 +48,11 @@
         <p class="empty-state-text">No photos yet.</p>
         {% endif %}
     </section>
+
+    <div class="bulk-action-bar" id="bulk-action-bar" hidden aria-live="polite">
+        <span id="bulk-action-count"></span>
+        <button class="bulk-move-btn" id="bulk-move-btn">Move to another person</button>
+    </div>
 
     <div class="person-contact" id="person-contact">
         {% if person.contactId %}
@@ -92,6 +115,22 @@
         <p class="merge-prompt-error" id="merge-prompt-error" hidden></p>
     </div>
 </div>
+
+<div class="lightbox" id="move-lightbox" role="dialog" aria-modal="true" aria-labelledby="move-prompt-title">
+    <div class="move-prompt">
+        <h2 id="move-prompt-title">Move selected photos</h2>
+        <label class="move-search-label" for="move-search-input">Search for a person, or type a name to create one</label>
+        <input type="text" id="move-search-input" class="move-search-input" autocomplete="off">
+        <ul class="move-results-list" id="move-results-list" aria-live="polite"></ul>
+        <div class="move-prompt-actions">
+            <button class="move-prompt-cancel" id="move-prompt-cancel">Cancel</button>
+            <button class="move-prompt-confirm" id="move-prompt-confirm" disabled>Move</button>
+        </div>
+        <p class="move-prompt-error" id="move-prompt-error" hidden></p>
+    </div>
+</div>
+
+<p class="move-confirmation" id="move-confirmation" hidden aria-live="polite"></p>
 {% endblock %}
 
 {% block scripts %}
@@ -103,6 +142,8 @@
     const statusEl = document.getElementById('contact-status');
     const unlinkBtn = document.getElementById('unlink-btn');
     const backgroundBtn = document.getElementById('background-btn');
+    const flagBtn = document.getElementById('flag-btn');
+    const flagStatus = document.getElementById('flag-status');
 
     if (select) {
         select.addEventListener('change', () => handleContactChange(select, statusEl));
@@ -113,6 +154,42 @@
     if (backgroundBtn) {
         backgroundBtn.addEventListener('click', () => handleToggleBackground(backgroundBtn));
     }
+
+    // --- Flag toggle ---
+    function formatShortDate(isoString) {
+        if (!isoString) return '';
+        try {
+            return new Date(isoString).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function renderFlagStatus(flaggedAt) {
+        if (flaggedAt) {
+            flagBtn.textContent = 'Unflag this grouping';
+            flagStatus.textContent = `Flagged — ${formatShortDate(flaggedAt)}`;
+            flagStatus.hidden = false;
+        } else {
+            flagBtn.textContent = 'Flag this grouping';
+            flagStatus.hidden = true;
+        }
+    }
+
+    renderFlagStatus(document.getElementById('person-flag').dataset.flaggedAt || null);
+
+    flagBtn.addEventListener('click', async () => {
+        const isFlagged = flagBtn.textContent.trim() === 'Unflag this grouping';
+        const method = isFlagged ? 'DELETE' : 'PUT';
+        try {
+            const response = await fetch(`/people/${personId}/flag`, { method });
+            if (!response.ok) throw new Error(`API responded with ${response.status}`);
+            const data = await response.json();
+            renderFlagStatus(data.flaggedAt);
+        } catch (err) {
+            console.error('Failed to toggle flag status:', err);
+        }
+    });
 
     // --- Merge prompt lightbox ---
     const lightbox = document.getElementById('merge-prompt-lightbox');
@@ -135,12 +212,24 @@
         if (e.target === lightbox) closeMergePrompt();
     });
 
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && lightbox.classList.contains('open')) closeMergePrompt();
+    // Shared keyboard handling (Escape + focus trap) for whichever lightbox is
+    // currently open — only one can be open at a time.
+    const lightboxClosers = new Map(); // lightbox element -> close function
+    lightboxClosers.set(lightbox, () => closeMergePrompt());
 
-        // Focus trapping for merge prompt
-        if (e.key === 'Tab' && lightbox.classList.contains('open')) {
-            var focusable = lightbox.querySelectorAll('button');
+    document.addEventListener('keydown', (e) => {
+        const open = document.querySelector('.lightbox.open');
+        if (!open) return;
+
+        if (e.key === 'Escape') {
+            const closeFn = lightboxClosers.get(open);
+            if (closeFn) closeFn();
+            return;
+        }
+
+        // Focus trapping
+        if (e.key === 'Tab') {
+            var focusable = open.querySelectorAll('button, input:not([disabled])');
             if (focusable.length === 0) return;
             var first = focusable[0];
             var last = focusable[focusable.length - 1];
@@ -323,5 +412,232 @@
             console.error('Failed to toggle background status:', err);
         }
     }
+
+    // --- Select photos to move ---
+    const container = document.querySelector('[data-person-id]');
+    const photoGrid = document.getElementById('photo-grid');
+    const selectModeBtn = document.getElementById('select-mode-btn');
+    const bulkActionBar = document.getElementById('bulk-action-bar');
+    const bulkActionCount = document.getElementById('bulk-action-count');
+    const bulkMoveBtn = document.getElementById('bulk-move-btn');
+    const moveConfirmation = document.getElementById('move-confirmation');
+
+    const selectedFaceIds = new Set();
+
+    function updateBulkActionBar() {
+        const count = selectedFaceIds.size;
+        bulkActionBar.hidden = count === 0;
+        bulkActionCount.textContent = `${count} selected`;
+    }
+
+    function exitSelectMode() {
+        container.classList.remove('select-mode');
+        selectModeBtn.textContent = 'Select photos to move';
+        selectedFaceIds.clear();
+        photoGrid.querySelectorAll('.photo-select-checkbox').forEach((cb) => { cb.checked = false; });
+        updateBulkActionBar();
+    }
+
+    if (selectModeBtn) {
+        selectModeBtn.addEventListener('click', () => {
+            const active = container.classList.toggle('select-mode');
+            if (active) {
+                selectModeBtn.textContent = 'Cancel selecting';
+            } else {
+                exitSelectMode();
+            }
+        });
+    }
+
+    if (photoGrid) {
+        // Clicking anywhere on a tile toggles its checkbox while select-mode is
+        // active, rather than navigating to the photo — bigger, easier click target
+        // than the checkbox alone. A click that landed on the checkbox itself has
+        // already toggled it natively by the time this delegated handler runs.
+        photoGrid.addEventListener('click', (e) => {
+            if (!container.classList.contains('select-mode')) return;
+            const link = e.target.closest('.media-card-link');
+            if (!link) return;
+            e.preventDefault();
+            if (e.target.closest('.photo-select-checkbox')) return;
+            const checkbox = link.querySelector('.photo-select-checkbox');
+            if (!checkbox) return;
+            checkbox.checked = !checkbox.checked;
+            // bubbles: true — the 'change' listener is delegated on photoGrid, not
+            // attached directly to each checkbox.
+            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+
+        photoGrid.addEventListener('change', (e) => {
+            if (!e.target.classList.contains('photo-select-checkbox')) return;
+            const faceId = e.target.dataset.faceId;
+            if (e.target.checked) selectedFaceIds.add(faceId);
+            else selectedFaceIds.delete(faceId);
+            updateBulkActionBar();
+        });
+    }
+
+    // --- Move lightbox ---
+    const moveLightbox = document.getElementById('move-lightbox');
+    const moveSearchInput = document.getElementById('move-search-input');
+    const moveResultsList = document.getElementById('move-results-list');
+    const movePromptCancel = document.getElementById('move-prompt-cancel');
+    const movePromptConfirm = document.getElementById('move-prompt-confirm');
+    const movePromptError = document.getElementById('move-prompt-error');
+
+    let stagedMoveTarget = null; // { type: 'existing', personId, name } | { type: 'new', name }
+    let searchDebounceTimer = null;
+
+    function closeMovePrompt() {
+        moveLightbox.classList.remove('open');
+        stagedMoveTarget = null;
+        moveSearchInput.value = '';
+        moveResultsList.innerHTML = '';
+        movePromptConfirm.disabled = true;
+        movePromptError.hidden = true;
+    }
+    lightboxClosers.set(moveLightbox, closeMovePrompt);
+
+    movePromptCancel.addEventListener('click', closeMovePrompt);
+    moveLightbox.addEventListener('click', (e) => {
+        if (e.target === moveLightbox) closeMovePrompt();
+    });
+
+    if (bulkMoveBtn) {
+        bulkMoveBtn.addEventListener('click', async () => {
+            moveLightbox.classList.add('open');
+            moveSearchInput.focus();
+            await renderMoveResults('');
+        });
+    }
+
+    function stageMoveTarget(target, resultEl) {
+        stagedMoveTarget = target;
+        moveResultsList.querySelectorAll('.move-result-btn').forEach((btn) => btn.classList.remove('selected'));
+        if (resultEl) resultEl.classList.add('selected');
+        movePromptConfirm.disabled = false;
+    }
+
+    async function renderMoveResults(query) {
+        moveResultsList.innerHTML = '';
+
+        if (query) {
+            try {
+                const response = await fetch(`/people?search=${encodeURIComponent(query)}&limit=10`, {
+                    headers: { 'Accept': 'application/json' },
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    for (const person of data.people) {
+                        if (person.id === personId) continue; // can't move to the same group
+                        const li = document.createElement('li');
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'move-result-btn';
+                        if (person.profilePictureUrl) {
+                            const img = document.createElement('img');
+                            img.src = person.profilePictureUrl;
+                            img.alt = '';
+                            btn.appendChild(img);
+                        } else {
+                            const placeholder = document.createElement('span');
+                            placeholder.className = 'move-result-placeholder';
+                            btn.appendChild(placeholder);
+                        }
+                        const nameSpan = document.createElement('span');
+                        nameSpan.textContent = person.name || `Person ${person.id.slice(0, 8)}…`;
+                        btn.appendChild(nameSpan);
+                        btn.addEventListener('click', () => {
+                            stageMoveTarget({ type: 'existing', personId: person.id, name: person.name }, btn);
+                        });
+                        li.appendChild(btn);
+                        moveResultsList.appendChild(li);
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to search people:', err);
+            }
+        }
+
+        // "Create new person" always appears last, visually distinct from search matches.
+        const createLi = document.createElement('li');
+        const createBtn = document.createElement('button');
+        createBtn.type = 'button';
+        createBtn.className = 'move-result-btn move-result-create';
+        createBtn.textContent = query ? `Create new person: "${query}"` : 'Create new (unnamed) person';
+        createBtn.addEventListener('click', () => {
+            stageMoveTarget({ type: 'new', name: query || null }, createBtn);
+        });
+        createLi.appendChild(createBtn);
+        moveResultsList.appendChild(createLi);
+    }
+
+    moveSearchInput.addEventListener('input', () => {
+        stagedMoveTarget = null;
+        movePromptConfirm.disabled = true;
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => renderMoveResults(moveSearchInput.value.trim()), 200);
+    });
+
+    movePromptConfirm.addEventListener('click', async () => {
+        if (!stagedMoveTarget) return;
+
+        movePromptConfirm.disabled = true;
+        movePromptError.hidden = true;
+
+        const faceIds = Array.from(selectedFaceIds);
+
+        try {
+            let response;
+            let destinationName;
+            if (stagedMoveTarget.type === 'existing') {
+                response = await fetch('/faces/person', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ faceIds, personId: stagedMoveTarget.personId }),
+                });
+                destinationName = stagedMoveTarget.name || 'that person';
+            } else {
+                response = await fetch('/people', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ faceIds, name: stagedMoveTarget.name || undefined }),
+                });
+                destinationName = stagedMoveTarget.name || 'a new group';
+            }
+
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                const msg = (data.detail && data.detail.message) || data.detail || `API responded with ${response.status}`;
+                throw new Error(msg);
+            }
+
+            const data = await response.json();
+            const destinationId = stagedMoveTarget.type === 'existing' ? stagedMoveTarget.personId : data.id;
+
+            // Remove moved tiles from the grid.
+            for (const faceId of faceIds) {
+                const checkbox = photoGrid.querySelector(`.photo-select-checkbox[data-face-id="${faceId}"]`);
+                const link = checkbox && checkbox.closest('.media-card-link');
+                if (link) link.remove();
+            }
+            const photosHeading = document.getElementById('photos-heading');
+            if (photosHeading) {
+                photosHeading.textContent = `Photos (${photoGrid.querySelectorAll('.media-card-link').length})`;
+            }
+
+            closeMovePrompt();
+            exitSelectMode();
+
+            moveConfirmation.innerHTML = `Moved ${faceIds.length} photo${faceIds.length === 1 ? '' : 's'} to ` +
+                `<a href="/people/${destinationId}">${destinationName}</a>`;
+            moveConfirmation.hidden = false;
+        } catch (err) {
+            console.error('Failed to move photos:', err);
+            movePromptError.textContent = err.message || 'Failed to move photos. Please try again.';
+            movePromptError.hidden = false;
+            movePromptConfirm.disabled = false;
+        }
+    });
 </script>
 {% endblock %}

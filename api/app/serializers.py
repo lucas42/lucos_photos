@@ -117,6 +117,7 @@ def person_to_dict(person: Person, photo_count: Optional[int] = None) -> dict:
         "name": person.display_name,
         "contactId": person.contact_id,
         "isBackground": person.is_background,
+        "flaggedAt": person.flagged_at.isoformat() if person.flagged_at else None,
         "createdAt": person.created_at.isoformat() if person.created_at else None,
         "profilePictureUrl": person_profile_picture_url(str(person.id)),
     }

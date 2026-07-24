@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -318,6 +319,179 @@ class TestUnassignPerson:
         db_session.commit()
         response = client.delete(
             f"/faces/{face.id}/person",
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+
+
+# ---------------------------------------------------------------------------
+# PUT /faces/person (bulk) — lucas42/lucos_photos#471 "move selected photos"
+# ---------------------------------------------------------------------------
+
+class TestBulkAssignPerson:
+    def test_moves_faces_to_person(self, authenticated_client, db_session):
+        photo1 = make_photo(db_session)
+        photo2 = Photo(sha256_hash="c" * 64, file_extension="jpg")
+        db_session.add(photo2)
+        db_session.flush()
+        source = make_person(db_session, "Source")
+        destination = make_person(db_session, "Destination")
+        face1 = make_face(db_session, photo1, person=source)
+        face2 = make_face(db_session, photo2, person=source)
+        db_session.add(PhotoPerson(photo_id=photo1.id, person_id=source.id))
+        db_session.add(PhotoPerson(photo_id=photo2.id, person_id=source.id))
+        db_session.commit()
+
+        with patch("app.routers.faces.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
+             patch("app.routers.faces._enqueue_profile_picture") as mock_enqueue:
+            response = authenticated_client.put(
+                "/faces/person",
+                json={"faceIds": [str(face1.id), str(face2.id)], "personId": str(destination.id)},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["movedCount"] == 2
+        assert data["personId"] == str(destination.id)
+
+        db_session.refresh(face1)
+        db_session.refresh(face2)
+        assert face1.person_id == destination.id
+        assert face2.person_id == destination.id
+        assert face1.person_confirmed is True
+        assert face2.person_confirmed is True
+
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args[0][0] == "facesMoved"
+        enqueued_ids = {c.args[0] for c in mock_enqueue.call_args_list}
+        assert str(destination.id) in enqueued_ids
+
+    def test_resyncs_photo_person_both_sides(self, authenticated_client, db_session):
+        photo = make_photo(db_session)
+        source = make_person(db_session, "Source")
+        destination = make_person(db_session, "Destination")
+        face = make_face(db_session, photo, person=source)
+        db_session.add(PhotoPerson(photo_id=photo.id, person_id=source.id))
+        db_session.commit()
+
+        with patch("app.routers.faces.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.faces._enqueue_profile_picture"):
+            authenticated_client.put(
+                "/faces/person",
+                json={"faceIds": [str(face.id)], "personId": str(destination.id)},
+            )
+
+        old_pp = db_session.query(PhotoPerson).filter(
+            PhotoPerson.photo_id == photo.id, PhotoPerson.person_id == source.id,
+        ).first()
+        new_pp = db_session.query(PhotoPerson).filter(
+            PhotoPerson.photo_id == photo.id, PhotoPerson.person_id == destination.id,
+        ).first()
+        assert old_pp is None
+        assert new_pp is not None
+
+    def test_deletes_emptied_unlinked_source(self, authenticated_client, db_session):
+        photo = make_photo(db_session)
+        source = make_person(db_session, "Source")
+        destination = make_person(db_session, "Destination")
+        face = make_face(db_session, photo, person=source)
+        db_session.commit()
+        source_id = source.id
+
+        with patch("app.routers.faces.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.faces._enqueue_profile_picture"):
+            authenticated_client.put(
+                "/faces/person",
+                json={"faceIds": [str(face.id)], "personId": str(destination.id)},
+            )
+
+        assert db_session.query(Person).filter(Person.id == source_id).first() is None
+
+    def test_keeps_emptied_contact_linked_source(self, authenticated_client, db_session):
+        photo = make_photo(db_session)
+        source = Person(display_name="Source", contact_id="contact-456")
+        db_session.add(source)
+        db_session.flush()
+        destination = make_person(db_session, "Destination")
+        face = make_face(db_session, photo, person=source)
+        db_session.commit()
+        source_id = source.id
+
+        with patch("app.routers.faces.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.faces._enqueue_profile_picture") as mock_enqueue:
+            authenticated_client.put(
+                "/faces/person",
+                json={"faceIds": [str(face.id)], "personId": str(destination.id)},
+            )
+
+        assert db_session.query(Person).filter(Person.id == source_id).first() is not None
+        # A surviving (contact-linked, now empty) source still gets its profile picture
+        # regenerated, since it may have lost its profile photo in the move.
+        enqueued_ids = {c.args[0] for c in mock_enqueue.call_args_list}
+        assert str(source_id) in enqueued_ids
+
+    def test_keeps_source_with_remaining_faces(self, authenticated_client, db_session):
+        photo1 = make_photo(db_session)
+        photo2 = Photo(sha256_hash="d" * 64, file_extension="jpg")
+        db_session.add(photo2)
+        db_session.flush()
+        source = make_person(db_session, "Source")
+        destination = make_person(db_session, "Destination")
+        face1 = make_face(db_session, photo1, person=source)
+        make_face(db_session, photo2, person=source)  # stays with source
+        db_session.commit()
+        source_id = source.id
+
+        with patch("app.routers.faces.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.faces._enqueue_profile_picture"):
+            authenticated_client.put(
+                "/faces/person",
+                json={"faceIds": [str(face1.id)], "personId": str(destination.id)},
+            )
+
+        assert db_session.query(Person).filter(Person.id == source_id).first() is not None
+
+    def test_returns_422_for_empty_face_ids(self, authenticated_client, db_session):
+        person = make_person(db_session)
+        db_session.commit()
+        response = authenticated_client.put("/faces/person", json={"faceIds": [], "personId": str(person.id)})
+        assert response.status_code == 422
+
+    def test_returns_422_when_person_id_missing(self, authenticated_client, db_session):
+        photo = make_photo(db_session)
+        face = make_face(db_session, photo)
+        db_session.commit()
+        response = authenticated_client.put("/faces/person", json={"faceIds": [str(face.id)]})
+        assert response.status_code == 422
+
+    def test_returns_404_for_unknown_destination(self, authenticated_client, db_session):
+        photo = make_photo(db_session)
+        face = make_face(db_session, photo)
+        db_session.commit()
+        response = authenticated_client.put(
+            "/faces/person",
+            json={"faceIds": [str(face.id)], "personId": str(uuid.uuid4())},
+        )
+        assert response.status_code == 404
+
+    def test_returns_404_for_unknown_face(self, authenticated_client, db_session):
+        destination = make_person(db_session)
+        db_session.commit()
+        response = authenticated_client.put(
+            "/faces/person",
+            json={"faceIds": [str(uuid.uuid4())], "personId": str(destination.id)},
+        )
+        assert response.status_code == 404
+
+    def test_requires_authentication(self, client, db_session):
+        photo = make_photo(db_session)
+        person = make_person(db_session)
+        face = make_face(db_session, photo)
+        db_session.commit()
+        response = client.put(
+            "/faces/person",
+            json={"faceIds": [str(face.id)], "personId": str(person.id)},
             headers={"Origin": "https://photos.l42.eu"},
             follow_redirects=False,
         )
