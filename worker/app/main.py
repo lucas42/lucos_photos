@@ -14,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 from redis import Redis
 from rq import Queue, Worker
 from rq.job import Retry
+from sqlalchemy.orm import contains_eager
 
 from lucos_photos_common.database import SessionLocal
 from lucos_photos_common.models import Face, MediaItem, Person, ProcessingState, ProcessingStatus
@@ -264,6 +265,13 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
     one sequential worker. Instead, each stuck item is gated by its own exponential
     backoff (_apply_reenqueue_backoff) — a flood is bounded at its source (the same item
     looping) rather than inferred from a proxy that also trips on healthy load.
+
+    The DB session is held only for the query itself, not the enqueue loop below it —
+    each loop iteration does Redis I/O (a backoff-state read/write plus the enqueue),
+    not DB work, so there's no reason to keep a pooled connection checked out for it
+    (lucas42/lucos_photos#480). `contains_eager` reuses the existing `.join()` to
+    populate `status.media_item` up front, so it stays accessible after `db.close()`
+    without a second query or a DetachedInstanceError.
     """
     queue = Queue("photos", connection=redis_conn)
     chronic_count = 0
@@ -271,22 +279,27 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
     pending_threshold = datetime.now(timezone.utc) - timedelta(minutes=PENDING_SWEEP_THRESHOLD_MINUTES)
     processing_threshold = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_SWEEP_THRESHOLD_MINUTES)
 
-    db = SessionLocal()
     try:
-        stuck = (
-            db.query(ProcessingStatus)
-            .join(ProcessingStatus.media_item)
-            .filter(
-                (
-                    (ProcessingStatus.state == ProcessingState.pending) &
-                    (ProcessingStatus.updated_at < pending_threshold)
-                ) | (
-                    (ProcessingStatus.state == ProcessingState.processing) &
-                    (ProcessingStatus.updated_at < processing_threshold)
+        db = SessionLocal()
+        try:
+            stuck = (
+                db.query(ProcessingStatus)
+                .join(ProcessingStatus.media_item)
+                .options(contains_eager(ProcessingStatus.media_item))
+                .filter(
+                    (
+                        (ProcessingStatus.state == ProcessingState.pending) &
+                        (ProcessingStatus.updated_at < pending_threshold)
+                    ) | (
+                        (ProcessingStatus.state == ProcessingState.processing) &
+                        (ProcessingStatus.updated_at < processing_threshold)
+                    )
                 )
+                .all()
             )
-            .all()
-        )
+        finally:
+            db.close()
+
         for status in stuck:
             is_chronic = _apply_reenqueue_backoff(
                 redis_conn, "reenqueue", status.photo_id,
@@ -296,8 +309,6 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
                 chronic_count += 1
     except Exception:
         logger.exception("sweep: error during pending photo sweep")
-    finally:
-        db.close()
 
     try:
         chronic_count += _enqueue_missing_profile_pictures(redis_conn)
