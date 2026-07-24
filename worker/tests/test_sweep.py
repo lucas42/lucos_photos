@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 import lucos_photos_common.models  # noqa: F401 - registers all models with Base.metadata
 from lucos_photos_common.database import Base
-from lucos_photos_common.models import MediaItem, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, MediaItem, Person, ProcessingState, ProcessingStatus
 
 from app.main import sweep_pending_photos
 
@@ -74,6 +74,30 @@ def _make_mock_queue(count=0):
     mock_queue = MagicMock()
     mock_queue.count = count
     return mock_queue
+
+
+def _make_person(db_session, *, is_background=False, profile_photo_id=None):
+    """Helper: create and persist a Person."""
+    person = Person(is_background=is_background, profile_photo_id=profile_photo_id)
+    db_session.add(person)
+    db_session.flush()
+    return person
+
+
+def _make_face(db_session, photo, person):
+    """Helper: create and persist a Face linking a photo to a person."""
+    face = Face(
+        photo_id=photo.id,
+        person_id=person.id,
+        person_confirmed=False,
+        bbox_x=0.1,
+        bbox_y=0.1,
+        bbox_width=0.4,
+        bbox_height=0.4,
+    )
+    db_session.add(face)
+    db_session.flush()
+    return face
 
 
 class TestSweepPendingPhotos:
@@ -329,3 +353,105 @@ class TestSweepCircuitBreaker:
         mock_queue.enqueue.assert_not_called()
         mock_cluster_faces.assert_called_once()
         mock_sync_names.assert_called_once()
+
+
+class TestSweepMissingProfilePictures:
+    """Tests for the backstop that enqueues generate_profile_picture for persons who have
+    a face but no profile picture — the equivalent of the pending/processing sweep above,
+    for a job type with no ProcessingStatus row to detect staleness by."""
+
+    def test_enqueues_person_with_face_and_no_profile_picture(self, db_session):
+        item = _make_media_item(db_session, sha256_hash="b1" * 32, media_type="photo")
+        person = _make_person(db_session)
+        _make_face(db_session, item, person)
+        db_session.commit()
+
+        mock_redis = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs._enqueue_profile_picture_for_persons") as mock_enqueue:
+            sweep_pending_photos(mock_redis)
+
+        mock_enqueue.assert_called_once()
+        (person_ids,), _kwargs = mock_enqueue.call_args
+        assert person_ids == [str(person.id)]
+
+    def test_does_not_enqueue_person_with_profile_picture(self, db_session):
+        item = _make_media_item(db_session, sha256_hash="b2" * 32, media_type="photo")
+        person = _make_person(db_session, profile_photo_id=item.id)
+        _make_face(db_session, item, person)
+        db_session.commit()
+
+        mock_redis = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs._enqueue_profile_picture_for_persons") as mock_enqueue:
+            sweep_pending_photos(mock_redis)
+
+        mock_enqueue.assert_not_called()
+
+    def test_does_not_enqueue_background_person(self, db_session):
+        item = _make_media_item(db_session, sha256_hash="b3" * 32, media_type="photo")
+        person = _make_person(db_session, is_background=True)
+        _make_face(db_session, item, person)
+        db_session.commit()
+
+        mock_redis = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs._enqueue_profile_picture_for_persons") as mock_enqueue:
+            sweep_pending_photos(mock_redis)
+
+        mock_enqueue.assert_not_called()
+
+    def test_does_not_enqueue_person_with_no_faces(self, db_session):
+        _make_person(db_session)
+        db_session.commit()
+
+        mock_redis = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs._enqueue_profile_picture_for_persons") as mock_enqueue:
+            sweep_pending_photos(mock_redis)
+
+        mock_enqueue.assert_not_called()
+
+    def test_dedupes_person_with_multiple_faces(self, db_session):
+        photo1 = _make_media_item(db_session, sha256_hash="b4" * 32, media_type="photo")
+        photo2 = _make_media_item(db_session, sha256_hash="b5" * 32, media_type="photo")
+        person = _make_person(db_session)
+        _make_face(db_session, photo1, person)
+        _make_face(db_session, photo2, person)
+        db_session.commit()
+
+        mock_redis = MagicMock()
+        mock_queue = _make_mock_queue(count=0)
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs._enqueue_profile_picture_for_persons") as mock_enqueue:
+            sweep_pending_photos(mock_redis)
+
+        mock_enqueue.assert_called_once()
+        (person_ids,), _kwargs = mock_enqueue.call_args
+        assert person_ids == [str(person.id)]
+
+    def test_skipped_when_circuit_breaker_trips(self, db_session):
+        """The missing-profile-picture sweep shares the same breaker as the stuck-item
+        re-enqueue — a busy queue must skip both."""
+        item = _make_media_item(db_session, sha256_hash="b6" * 32, media_type="photo")
+        person = _make_person(db_session)
+        _make_face(db_session, item, person)
+        db_session.commit()
+
+        mock_redis = MagicMock()
+        mock_queue = _make_mock_queue(count=100)
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs._enqueue_profile_picture_for_persons") as mock_enqueue:
+            sweep_pending_photos(mock_redis)
+
+        mock_enqueue.assert_not_called()
