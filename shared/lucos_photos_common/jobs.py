@@ -404,6 +404,10 @@ def process_photo(photo_id: str) -> None:
                     img = ImageOps.exif_transpose(_raw_img)
                     thumb_height = round(img.height * THUMBNAIL_WIDTH / img.width)
                     thumb = img.resize((THUMBNAIL_WIDTH, thumb_height))
+                    # JPEG can't encode palette (P), alpha (RGBA/LA), or CMYK source
+                    # modes — convert before saving (lucas42/lucos_photos#484).
+                    if thumb.mode != "RGB":
+                        thumb = thumb.convert("RGB")
                     thumb.save(thumb_path, format="JPEG", quality=85)
                 logger.info("process_photo: generated thumbnail for photo %s at %s", photo_id, thumb_path)
             else:
@@ -904,6 +908,10 @@ def generate_profile_picture(person_id: str) -> None:
             cropped = img.crop((left_px, top_px, left_px + crop_side_px, top_px + crop_side_px))
             if cropped.width > MAX_PROFILE_SIZE or cropped.height > MAX_PROFILE_SIZE:
                 cropped = cropped.resize((MAX_PROFILE_SIZE, MAX_PROFILE_SIZE), PILImage.LANCZOS)
+            # JPEG can't encode palette (P), alpha (RGBA/LA), or CMYK source modes —
+            # convert before saving (lucas42/lucos_photos#484).
+            if cropped.mode != "RGB":
+                cropped = cropped.convert("RGB")
             cropped.save(profile_path, format="JPEG", quality=90)
 
         logger.info("generate_profile_picture: saved profile picture for person %s at %s", person_id, profile_path)
