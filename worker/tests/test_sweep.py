@@ -286,6 +286,85 @@ class TestSweepPendingPhotos:
         assert (mock_process_video, str(video.id)) in enqueued
 
 
+class TestSweepSessionLifecycle:
+    """Regression tests for lucas42/lucos_photos#480 — the DB session must be closed
+    before the enqueue loop begins, not held open across it (each iteration does Redis
+    I/O, not DB work), and status.media_item must remain accessible afterward via
+    contains_eager rather than a lazy load that would raise once the session is gone."""
+
+    def _spied_session(self, db_session, on_close):
+        """Build a fresh session bound to the same (in-memory, StaticPool-shared) engine
+        as db_session, with its .close() wrapped to call `on_close` first.
+
+        Needed because the db_session fixture patches SessionLocal to a factory that
+        returns a *new* Session() each call — not the fixture's own db_session object —
+        so spying on db_session.close directly would watch an instance the sweep code
+        never touches.
+        """
+        Session = sessionmaker(bind=db_session.get_bind())
+        session = Session()
+        original_close = session.close
+
+        def spy_close():
+            on_close()
+            original_close()
+
+        session.close = spy_close
+        return session
+
+    def test_db_session_closed_before_enqueue_loop(self, db_session, monkeypatch):
+        item = _make_media_item(db_session, sha256_hash="s1" * 32, media_type="photo")
+        _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=10)
+
+        call_order = []
+        spied_session = self._spied_session(db_session, lambda: call_order.append("db_close"))
+        monkeypatch.setattr(app_main, "SessionLocal", lambda: spied_session)
+
+        fake_redis = _make_fake_redis()
+        mock_queue = _make_mock_queue()
+        mock_queue.enqueue.side_effect = lambda *a, **kw: call_order.append("enqueue")
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs.process_photo", __name__="process_photo"), \
+             patch("lucos_photos_common.jobs.process_video", __name__="process_video"):
+            sweep_pending_photos(fake_redis)
+
+        # SessionLocal is patched globally, so _enqueue_missing_profile_pictures'
+        # unrelated later query/close also shows up in call_order — only the relative
+        # order of the *first* close and the enqueue (from the stuck-item loop this
+        # test is about) matters here.
+        assert call_order.index("db_close") < call_order.index("enqueue"), (
+            f"expected the DB session to close before the enqueue loop runs, got {call_order}"
+        )
+
+    def test_media_item_accessible_after_session_fully_detached(self, db_session, monkeypatch):
+        """Even if the session aggressively expunges everything on close (harsher than
+        the SQLite/StaticPool test fixture would naturally produce), status.media_item
+        set via contains_eager must still be accessible with no DetachedInstanceError
+        and no surprise lazy-load query against the now-closed session."""
+        item = _make_media_item(db_session, sha256_hash="s2" * 32, media_type="video", file_extension="mp4")
+        _make_processing_status(db_session, item.id, ProcessingState.pending, age_minutes=10)
+
+        spied_session = self._spied_session(db_session, lambda: spied_session.expunge_all())
+        monkeypatch.setattr(app_main, "SessionLocal", lambda: spied_session)
+
+        fake_redis = _make_fake_redis()
+        mock_queue = _make_mock_queue()
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs.process_photo", __name__="process_photo"), \
+             patch("lucos_photos_common.jobs.process_video", __name__="process_video") as mock_process_video:
+            sweep_pending_photos(fake_redis)
+
+        # If media_item weren't eagerly loaded, accessing it inside _enqueue_for_media_item
+        # would raise DetachedInstanceError, which the outer except would swallow and log
+        # as "sweep: error during pending photo sweep" — resulting in no enqueue call at all.
+        mock_queue.enqueue.assert_called_once()
+        args, kwargs = mock_queue.enqueue.call_args
+        assert args[0] is mock_process_video
+        assert args[1] == str(item.id)
+
+
 class TestApplyReenqueueBackoff:
     """Unit tests for the per-item backoff helper that replaces the old global
     SWEEP_QUEUE_DEPTH_LIMIT breaker. Tested directly (not via a full sweep pass) for
