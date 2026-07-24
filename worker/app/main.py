@@ -4,9 +4,11 @@ Starts an RQ worker listening on the 'photos' queue, and a background thread
 that periodically sweeps for photos stuck in 'pending' or 'processing' state.
 """
 
+import faulthandler
 import json
 import logging
 import os
+import signal
 import threading
 import time
 from datetime import datetime, timezone, timedelta
@@ -354,6 +356,17 @@ def run_sweep_loop(redis_conn: Redis) -> None:
 
 
 def main() -> None:
+    # Dump all thread stacks to stderr on SIGUSR1, without killing the process — the
+    # only diagnostic available for a hung process on this estate (lucas42/lucos_photos#481):
+    # py-spy/gdb are absent from both the host and the container, and the container has
+    # no CAP_SYS_PTRACE. stderr (not stdout) matters here, since stdout is block-buffered
+    # in containers and routinely swallows diagnostics, while stderr reaches `docker logs`
+    # reliably. Must be registered before Worker.work() forks a work horse per job, so the
+    # handler is inherited by each child (fork duplicates signal dispositions) — trigger
+    # with `docker kill -s USR1 lucos_photos_worker` (or exec'd `kill -USR1 <pid>` for a
+    # specific work-horse child), then `docker logs --tail 100 lucos_photos_worker`.
+    faulthandler.register(signal.SIGUSR1)
+
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
     logger.info("Worker starting, connecting to Redis at %s", redis_url)
 
