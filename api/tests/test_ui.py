@@ -161,6 +161,32 @@ class TestPhotoDetailHtml:
         assert response.status_code == 200
         assert response.headers.get("vary") == "Accept"
 
+    def test_photo_page_tagged_person_picture_has_empty_alt(self, authenticated_client, db_session, tmp_path):
+        """A tagged person's picture sits next to a visible name span — its alt must
+        be empty, or the name gets announced twice (lucas42/lucos_photos#476)."""
+        from unittest.mock import patch
+        from lucos_photos_common.models import Photo, ProcessingStatus, ProcessingState, Person, PhotoPerson
+        photo = Photo(sha256_hash="i" * 64, file_extension="jpg")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        person = Person(display_name="Bob")
+        db_session.add(person)
+        db_session.flush()
+        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
+        db_session.commit()
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        (derivatives_dir / f"{person.id}_profile.jpg").write_bytes(b"fake jpeg")
+
+        with patch("app.serializers.DERIVATIVES_DIR", derivatives_dir):
+            response = authenticated_client.get(f"/photos/{photo.id}", headers={"Accept": "text/html"})
+
+        assert response.status_code == 200
+        assert 'class="person-profile-picture" src=' in response.text
+        assert 'alt="Bob"' not in response.text
+
     def test_photo_page_json_has_vary_accept(self, authenticated_client, db_session):
         """JSON response must include Vary: Accept so caches don't serve it as HTML."""
         from lucos_photos_common.models import Photo, ProcessingStatus, ProcessingState
@@ -382,6 +408,37 @@ class TestPersonDetailHtml:
         assert response.status_code == 200
         assert 'data-is-contact="true"' in response.text
 
+    def test_person_page_placeholder_has_accessible_label_when_no_picture(self, authenticated_client, db_session):
+        """The no-picture placeholder must have an accessible name — an unlabelled
+        empty div gives screen reader users nothing (lucas42/lucos_photos#476)."""
+        from lucos_photos_common.models import Person
+        person = Person(display_name=None)
+        db_session.add(person)
+        db_session.commit()
+
+        response = authenticated_client.get(f"/people/{person.id}", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'role="img" aria-label="No profile picture"' in response.text
+
+    def test_person_page_loaded_picture_alt_is_the_persons_name(self, authenticated_client, db_session, tmp_path):
+        """The hero picture isn't link-wrapped and has no name-bearing sibling, so its
+        own alt must carry the person's name (or fallback ID)."""
+        from unittest.mock import patch
+        from lucos_photos_common.models import Person
+        person = Person(display_name="Alice")
+        db_session.add(person)
+        db_session.commit()
+
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        (derivatives_dir / f"{person.id}_profile.jpg").write_bytes(b"fake jpeg")
+
+        with patch("app.serializers.DERIVATIVES_DIR", derivatives_dir):
+            response = authenticated_client.get(f"/people/{person.id}", headers={"Accept": "text/html"})
+
+        assert response.status_code == 200
+        assert 'alt="Alice"' in response.text
+
 
 # ---------------------------------------------------------------------------
 # Homepage tests
@@ -454,6 +511,31 @@ class TestHomepage:
         response = authenticated_client.get("/")
         assert response.status_code == 200
         assert str(person.id) in response.text
+
+    def test_homepage_no_picture_people_have_distinguishable_labels(self, authenticated_client, db_session):
+        """Two different nameless, pictureless people must get distinct accessible labels.
+
+        Regression guard for lucas42/lucos_photos#476: the homepage link's only other
+        name source is a `title` attribute, which a bare aria-label="No profile
+        picture" on the placeholder would silently override (per the accname
+        algorithm), making every such person announce identically. A test that only
+        checks for the substring "No profile picture" would pass on that regression
+        too, since it's a substring of the correct label — this checks the two
+        people's full labels differ.
+        """
+        from lucos_photos_common.models import Person
+        person_a = Person(display_name=None)
+        person_b = Person(display_name=None)
+        db_session.add_all([person_a, person_b])
+        db_session.commit()
+
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+
+        label_a = f'aria-label="Person {str(person_a.id)[:8]}… — no profile picture"'
+        label_b = f'aria-label="Person {str(person_b.id)[:8]}… — no profile picture"'
+        assert label_a in response.text
+        assert label_b in response.text
 
     def test_homepage_has_all_photos_link(self, authenticated_client):
         """Homepage includes an 'All Photos' link styled as a pagination link."""

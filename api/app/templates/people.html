@@ -12,9 +12,12 @@
             <a href="/people/{{ person.id }}" class="person-grid-card-link">
                 <div class="person-grid-card">
                     {% if person.profilePictureUrl %}
-                    <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="">
+                    <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt=""
+                         onerror="lucosProfilePicturePlaceholderFallback(this)">
                     {% else %}
-                    <div class="person-profile-picture-placeholder"></div>
+                    {% set pfp_extra_class = none %}
+                    {% set pfp_aria_label = none %}
+                    {% include "_profile_picture_placeholder.html" %}
                     {% endif %}
                     <h2 class="person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</h2>
                 </div>

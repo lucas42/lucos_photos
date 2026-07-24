@@ -64,9 +64,12 @@
                     <li class="photo-person{% if person.isBackground %} photo-person-background{% endif %}">
                         <a href="/people/{{ person.id }}" class="photo-person-link">
                             {% if person.profilePictureUrl %}
-                            <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="{{ person.name or ('Person ' + person.id[:8] + '…') }}">
+                            <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt=""
+                                 onerror="lucosProfilePicturePlaceholderFallback(this)">
                             {% else %}
-                            <div class="person-profile-picture-placeholder"></div>
+                            {% set pfp_extra_class = none %}
+                            {% set pfp_aria_label = none %}
+                            {% include "_profile_picture_placeholder.html" %}
                             {% endif %}
                             <span class="photo-person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</span>
                         </a>

@@ -58,11 +58,16 @@
         <div class="people-grid">
             {% if top_people %}
                 {% for person in top_people %}
-                <a href="/people/{{ person.id }}" class="photo-person-link" title="{{ person.name or ('Person ' + person.id[:8] + '…') }}">
+                {% set person_display_name = person.name or ('Person ' + person.id[:8] + '…') %}
+                <a href="/people/{{ person.id }}" class="photo-person-link" title="{{ person_display_name }}">
                     {% if person.profilePictureUrl %}
-                    <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="{{ person.name or ('Person ' + person.id[:8] + '…') }}" loading="lazy">
+                    <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt="{{ person_display_name }}" loading="lazy"
+                         onerror="lucosProfilePicturePlaceholderFallback(this)"
+                         data-pfp-extra-class="person-profile-picture" data-pfp-aria-label="{{ person_display_name }} — no profile picture">
                     {% else %}
-                    <div class="person-profile-picture person-profile-picture-placeholder"></div>
+                    {% set pfp_extra_class = "person-profile-picture" %}
+                    {% set pfp_aria_label = person_display_name + " — no profile picture" %}
+                    {% include "_profile_picture_placeholder.html" %}
                     {% endif %}
                 </a>
                 {% endfor %}

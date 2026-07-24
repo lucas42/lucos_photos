@@ -1,0 +1,22 @@
+{# Shared "no profile picture" placeholder.
+
+   Set these context vars immediately before each include (reset both every
+   time — Jinja set-scoping inside a loop body would otherwise leak a value
+   from a previous iteration or template):
+     pfp_extra_class – additional CSS class for sizing, e.g.
+                       "person-profile-picture-large" (use none/"" if the
+                       base 100px placeholder size is already correct).
+     pfp_aria_label  – accessible name for the placeholder, e.g.
+                       "No profile picture". Set to none when a visible
+                       sibling (a name heading/span) already announces the
+                       person, so the link isn't announced twice.
+
+   The static icon here must stay visually identical to the one built by
+   window.lucosProfilePicturePlaceholderFallback in profile-picture.js,
+   which reproduces this same markup client-side for a failed <img> load.
+#}
+<div class="person-profile-picture-placeholder{% if pfp_extra_class %} {{ pfp_extra_class }}{% endif %}"{% if pfp_aria_label %} role="img" aria-label="{{ pfp_aria_label }}"{% endif %}>
+    <svg class="profile-picture-placeholder-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 2.25c-2.9 0-5.25 2.35-5.25 5.25S9.1 12.75 12 12.75s5.25-2.35 5.25-5.25S14.9 2.25 12 2.25zM12 14.25c-4.14 0-9.75 2.08-9.75 6.19v1.31h19.5v-1.31c0-4.11-5.61-6.19-9.75-6.19z" />
+    </svg>
+</div>
