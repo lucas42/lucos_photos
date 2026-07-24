@@ -254,6 +254,23 @@ async def get_worker_memory_rss_bytes() -> int | None:
     return None
 
 
+async def get_sweep_chronically_stuck_count() -> int | None:
+    """Read the worker's last-published chronically-stuck-item count from Redis, or None
+    if absent (worker hasn't completed a sweep pass yet, or has stopped — the key is TTL'd
+    the same way as the heartbeat, see worker/app/main.py sweep_pending_photos)."""
+    try:
+        redis_conn = get_redis()
+        raw = await asyncio.wait_for(
+            asyncio.to_thread(redis_conn.get, "sweep:chronically_stuck_count"),
+            timeout=CHECK_TIMEOUT,
+        )
+        if raw is not None:
+            return int(raw)
+    except Exception:
+        pass
+    return None
+
+
 async def get_metrics() -> dict:
     """Return live metrics: photo count, video count, pending queue depth, worker RSS."""
     db = SessionLocal()
@@ -290,6 +307,7 @@ async def get_metrics() -> dict:
             log.debug("session.close() skipped in get_metrics: state error during cleanup")
 
     worker_rss = await get_worker_memory_rss_bytes()
+    chronic_count = await get_sweep_chronically_stuck_count()
 
     metrics = {
         "photo-count": {
@@ -309,6 +327,11 @@ async def get_metrics() -> dict:
         metrics["worker-memory-rss-bytes"] = {
             "value": worker_rss,
             "techDetail": "Worker process resident memory (RSS) in bytes",
+        }
+    if chronic_count is not None:
+        metrics["sweep-chronically-stuck-count"] = {
+            "value": chronic_count,
+            "techDetail": "Number of media items/persons the sweep has re-enqueued past the chronic threshold",
         }
     return metrics
 

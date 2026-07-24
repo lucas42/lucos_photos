@@ -160,6 +160,58 @@ class TestWorkerMemoryMetric:
         assert isinstance(metric["value"], int)
 
 
+class TestSweepChronicallyStuckMetric:
+    """Tests for the sweep-chronically-stuck-count metric, surfaced from the Redis gauge
+    the worker's sweep publishes every pass (see lucas42/lucos_photos#479 — this replaced
+    the old 'is the breaker tripped' signal with the more useful chronic-item count)."""
+
+    def _mock_redis_with_chronic_count(self, count=3):
+        mock_redis = MagicMock()
+        mock_redis.get.side_effect = lambda key: (
+            str(count).encode() if key == "sweep:chronically_stuck_count" else None
+        )
+        return mock_redis
+
+    def test_metric_present_when_gauge_available(self, client):
+        mock_redis = self._mock_redis_with_chronic_count(count=3)
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        assert "sweep-chronically-stuck-count" in data["metrics"]
+        assert data["metrics"]["sweep-chronically-stuck-count"]["value"] == 3
+
+    def test_metric_present_and_zero(self, client):
+        """A published value of 0 (nothing currently chronic) must still surface — this
+        is different from the key being entirely absent."""
+        mock_redis = self._mock_redis_with_chronic_count(count=0)
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        assert "sweep-chronically-stuck-count" in data["metrics"]
+        assert data["metrics"]["sweep-chronically-stuck-count"]["value"] == 0
+
+    def test_metric_absent_when_no_gauge_published(self, client):
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = None
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        assert "sweep-chronically-stuck-count" not in data["metrics"]
+
+    def test_metric_absent_when_redis_fails(self, client):
+        mock_redis = MagicMock()
+        mock_redis.get.side_effect = Exception("Redis unreachable")
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        assert "sweep-chronically-stuck-count" not in data["metrics"]
+
+    def test_metric_has_correct_structure(self, client):
+        mock_redis = self._mock_redis_with_chronic_count(count=1)
+        with patch("app.main.get_redis", return_value=mock_redis):
+            data = client.get("/_info").json()
+        metric = data["metrics"]["sweep-chronically-stuck-count"]
+        assert "value" in metric
+        assert "techDetail" in metric
+        assert isinstance(metric["value"], int)
+
+
 class TestHealthChecks:
     """Tests for individual health check behaviour — happy paths and failure paths."""
 
