@@ -61,6 +61,7 @@
             <dd>
                 <ul class="photo-people-list">
                     {% for person in photo.people %}
+                    {% set person_label = person.name or ('Person ' + person.id[:8] + '…') %}
                     <li class="photo-person{% if person.isBackground %} photo-person-background{% endif %}">
                         <a href="/people/{{ person.id }}" class="photo-person-link">
                             {% if person.profilePictureUrl %}
@@ -71,8 +72,15 @@
                             {% set pfp_aria_label = none %}
                             {% include "_profile_picture_placeholder.html" %}
                             {% endif %}
-                            <span class="photo-person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</span>
+                            <span class="photo-person-name">{{ person_label }}</span>
                         </a>
+                        {% if person.isCurrentProfilePicture %}
+                        <span class="profile-picture-status">Current profile picture{% if person.profilePictureIsManual %} (manually set){% endif %}</span>
+                        {% else %}
+                        <button class="set-profile-picture-btn" data-person-id="{{ person.id }}"
+                                aria-label="Set as profile picture for {{ person_label }}">Set as profile picture</button>
+                        {% endif %}
+                        <span class="profile-picture-error" id="profile-picture-error-{{ person.id }}" hidden></span>
                     </li>
                     {% endfor %}
                 </ul>
@@ -105,6 +113,38 @@
     if (uploadedEl) {
         uploadedEl.textContent = formatHumanDate(uploadedEl.getAttribute('datetime'));
     }
+
+    // --- Set as profile picture (lucas42/lucos_photos#473) ---
+    document.querySelectorAll('.set-profile-picture-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const personId = btn.dataset.personId;
+            const errorEl = document.getElementById(`profile-picture-error-${personId}`);
+            btn.disabled = true;
+            errorEl.hidden = true;
+
+            try {
+                const response = await fetch(`/people/${personId}/profile-picture`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ photoId: '{{ photo.id }}' }),
+                });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(data.detail || `API responded with ${response.status}`);
+                }
+
+                const statusEl = document.createElement('span');
+                statusEl.className = 'profile-picture-status';
+                statusEl.textContent = 'Current profile picture (manually set)';
+                btn.replaceWith(statusEl);
+            } catch (err) {
+                console.error('Failed to set profile picture:', err);
+                errorEl.textContent = err.message || 'Failed to set profile picture. Please try again.';
+                errorEl.hidden = false;
+                btn.disabled = false;
+            }
+        });
+    });
 
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;

@@ -540,7 +540,17 @@ def get_photo(
         .order_by(Person.display_name.asc().nullslast())
         .all()
     )
-    data["people"] = [person_to_dict(p) for p in people]
+    # person_to_dict alone can't say whether *this* photo is the person's current
+    # profile picture — it doesn't know which photo it's being rendered next to
+    # (lucas42/lucos_photos#473) — so compare against Person.profile_photo_id here.
+    data["people"] = [
+        {
+            **person_to_dict(p),
+            "isCurrentProfilePicture": p.profile_photo_id == photo_uuid,
+            "profilePictureIsManual": p.profile_photo_id == photo_uuid and p.profile_auto_generated is False,
+        }
+        for p in people
+    ]
 
     # Query adjacent photos for prev/next navigation.
     # Uses the same ordering as list_photos: taken_at DESC NULLS LAST, uploaded_at DESC.
