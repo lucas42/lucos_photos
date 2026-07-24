@@ -17,6 +17,7 @@ from lucos_photos_common.jobs import (
     _score_face,
     cluster_faces,
     detect_and_save_faces,
+    generate_manual_profile_picture,
     generate_profile_picture,
     process_photo,
     process_video,
@@ -2234,3 +2235,166 @@ class TestGenerateProfilePicture:
         with Image.open(profile_path) as result:
             assert result.width < 600, f"Expected width under 600, got {result.width}"
             assert result.width == result.height, "Must still be square"
+
+
+class TestGenerateManualProfilePicture:
+    """Tests for generate_manual_profile_picture() — the crop-only worker job behind
+    the "Set as profile picture" action (lucas42/lucos_photos#473). The API has
+    already validated the person+photo pairing and set profile_photo_id/
+    profile_auto_generated=False before this job runs; it just does the image work."""
+
+    def _make_person(self, db_session, **kwargs):
+        person = Person(**kwargs)
+        db_session.add(person)
+        db_session.flush()
+        return person
+
+    def _make_photo(self, db_session, sha256_hash, width=1000, height=800):
+        photo = MediaItem(sha256_hash=sha256_hash, file_extension="jpg", width=width, height=height)
+        db_session.add(photo)
+        db_session.flush()
+        return photo
+
+    def _make_face(self, db_session, photo, person, bbox_x=0.2, bbox_y=0.2, bbox_width=0.6, bbox_height=0.6):
+        face = Face(
+            photo_id=photo.id,
+            person_id=person.id,
+            person_confirmed=True,
+            bbox_x=bbox_x, bbox_y=bbox_y, bbox_width=bbox_width, bbox_height=bbox_height,
+        )
+        db_session.add(face)
+        db_session.flush()
+        return face
+
+    def test_generates_crop_for_the_specific_chosen_photo(self, db_session, tmp_path):
+        """Should crop the given photo, not run any best-face scoring."""
+        person = self._make_person(db_session)
+        # A second, "better" photo that generate_profile_picture would normally prefer —
+        # generate_manual_profile_picture must ignore it entirely.
+        chosen_photo = self._make_photo(db_session, "m1" * 32, width=200, height=200)
+        other_photo = self._make_photo(db_session, "m2" * 32, width=200, height=200)
+        self._make_face(db_session, chosen_photo, person)
+        self._make_face(db_session, other_photo, person)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        img = Image.new("RGB", (200, 200), color=(10, 20, 30))
+        img.save(originals_dir / f"{'m1' * 32}.jpg", format="JPEG")
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+
+            generate_manual_profile_picture(str(person.id), str(chosen_photo.id))
+
+        profile_path = derivatives_dir / f"{person.id}_profile.jpg"
+        assert profile_path.exists()
+
+    def test_does_not_modify_db(self, db_session, tmp_path):
+        """The API is responsible for profile_photo_id/profile_auto_generated — this
+        job only does the crop, so a person's DB row must be untouched by it."""
+        person = self._make_person(db_session, profile_photo_id=None, profile_auto_generated=False)
+        person_id = person.id
+        photo = self._make_photo(db_session, "m3" * 32, width=200, height=200)
+        self._make_face(db_session, photo, person)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        img = Image.new("RGB", (200, 200), color=(10, 20, 30))
+        img.save(originals_dir / f"{'m3' * 32}.jpg", format="JPEG")
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+
+            generate_manual_profile_picture(str(person_id), str(photo.id))
+
+        # Re-query since the job closes its own session (same underlying session object
+        # here, since SessionLocal is patched to return it — refresh() would fail with
+        # DetachedInstanceError).
+        updated = db_session.query(Person).filter(Person.id == person_id).first()
+        assert updated.profile_photo_id is None
+        assert updated.profile_auto_generated is False
+
+    def test_does_not_raise_when_person_not_found(self, db_session, tmp_path):
+        with patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+            generate_manual_profile_picture(str(uuid.uuid4()), str(uuid.uuid4()))  # must not raise
+
+    def test_does_not_raise_when_face_missing(self, db_session, tmp_path):
+        """person+photo exist but no Face row links them — should log and return,
+        not crash (the API should have already prevented this, but the job must be
+        defensive regardless)."""
+        person = self._make_person(db_session)
+        photo = self._make_photo(db_session, "m4" * 32, width=200, height=200)
+        db_session.commit()
+
+        with patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+            generate_manual_profile_picture(str(person.id), str(photo.id))  # must not raise
+
+        profile_path = tmp_path / "derivatives" / f"{person.id}_profile.jpg"
+        assert not profile_path.exists()
+
+    def test_does_not_raise_when_original_file_missing(self, db_session, tmp_path):
+        person = self._make_person(db_session)
+        photo = self._make_photo(db_session, "m5" * 32, width=200, height=200)
+        self._make_face(db_session, photo, person)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"  # deliberately not created / no file written
+        derivatives_dir = tmp_path / "derivatives"
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+
+            generate_manual_profile_picture(str(person.id), str(photo.id))  # must not raise
+
+        assert not (derivatives_dir / f"{person.id}_profile.jpg").exists()
+
+    def test_crop_matches_generate_profile_picture_geometry(self, db_session, tmp_path):
+        """Same face/photo through both functions must produce an identical crop —
+        proves the shared _crop_and_save_profile_picture helper, not a re-implementation
+        that could drift from the pinned #149 geometry."""
+        person_auto = self._make_person(db_session)
+        person_manual = self._make_person(db_session)
+        person_auto_id = person_auto.id
+        person_manual_id = person_manual.id
+        photo = self._make_photo(db_session, "m6" * 32, width=400, height=400)
+        photo_id = photo.id
+        self._make_face(db_session, photo, person_auto, bbox_x=0.25, bbox_y=0.25, bbox_width=0.3, bbox_height=0.3)
+        self._make_face(db_session, photo, person_manual, bbox_x=0.25, bbox_y=0.25, bbox_width=0.3, bbox_height=0.3)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        img = Image.new("RGB", (400, 400), color=(80, 90, 100))
+        img.save(originals_dir / f"{'m6' * 32}.jpg", format="JPEG")
+
+        # IDs are captured above (not re-accessed via the ORM objects below) because
+        # generate_profile_picture's own db.close() detaches them from the shared
+        # session before the second job call runs.
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne"):
+            mock_session_local.return_value = db_session
+            generate_profile_picture(str(person_auto_id))
+            generate_manual_profile_picture(str(person_manual_id), str(photo_id))
+
+        with Image.open(derivatives_dir / f"{person_auto_id}_profile.jpg") as auto_img, \
+             Image.open(derivatives_dir / f"{person_manual_id}_profile.jpg") as manual_img:
+            assert auto_img.size == manual_img.size
+            assert list(auto_img.getdata()) == list(manual_img.getdata())

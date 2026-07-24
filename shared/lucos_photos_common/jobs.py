@@ -777,6 +777,94 @@ def _score_face(face: "Face", photo: "MediaItem") -> int:
     return score
 
 
+def _crop_and_save_profile_picture(person_id: str, face: "Face", photo: "MediaItem") -> bool:
+    """Crop `photo` to a square centred on `face` (~80% face area) and write the result
+    to /data/photos/derivatives/{person_id}_profile.jpg.
+
+    Shared by the auto-selection path (generate_profile_picture) and the manual-pin
+    path (generate_manual_profile_picture, lucas42/lucos_photos#473) so the crop
+    geometry — pinned in #149 — can't drift between the two.
+
+    Pure image-processing + file I/O: no DB access, so both callers control their own
+    transaction around it. Returns False (logged, not raised) if the original file is
+    missing on disk; True on success.
+    """
+    from PIL import Image as PILImage
+    import math
+
+    original_path = ORIGINALS_DIR / f"{photo.sha256_hash}.{photo.file_extension}"
+    if not original_path.exists():
+        logger.warning(
+            "_crop_and_save_profile_picture: original file not found at %s for photo %s",
+            original_path, photo.id,
+        )
+        return False
+
+    # Compute pixel coordinates of face bounding box
+    img_w = photo.width
+    img_h = photo.height
+    face_x_px = face.bbox_x * img_w
+    face_y_px = face.bbox_y * img_h
+    face_w_px = face.bbox_width * img_w
+    face_h_px = face.bbox_height * img_h
+
+    # Crop: square, face occupies ~60% of area → side = face_side / sqrt(0.6)
+    face_side = max(face_w_px, face_h_px)
+    crop_side = face_side / math.sqrt(0.6)
+
+    # Centre on the bounding box centre
+    cx = face_x_px + face_w_px / 2.0
+    cy = face_y_px + face_h_px / 2.0
+
+    left = cx - crop_side / 2.0
+    top = cy - crop_side / 2.0
+    right = left + crop_side
+    bottom = top + crop_side
+
+    # Shift the crop window to keep it square when near an edge, then hard-clamp
+    # as a final safety net (handles the degenerate case where the face itself is
+    # larger than the image).
+    if left < 0:
+        right -= left  # shift right by the overhang
+        left = 0.0
+    if top < 0:
+        bottom -= top
+        top = 0.0
+    if right > img_w:
+        left -= (right - img_w)  # shift left by the overhang
+        right = float(img_w)
+    if bottom > img_h:
+        top -= (bottom - img_h)
+        bottom = float(img_h)
+    # Final clamp: face genuinely bigger than image
+    left = max(0.0, left)
+    top = max(0.0, top)
+
+    # Write derivative
+    DERIVATIVES_DIR.mkdir(parents=True, exist_ok=True)
+    profile_path = DERIVATIVES_DIR / f"{person_id}_profile.jpg"
+
+    # Convert to integer pixel coords; derive right/bottom from left/top + side
+    # to guarantee a perfectly square crop regardless of floating-point rounding.
+    crop_side_px = round(right - left)
+    left_px = round(left)
+    top_px = round(top)
+
+    MAX_PROFILE_SIZE = 600
+    with PILImage.open(original_path) as img:
+        cropped = img.crop((left_px, top_px, left_px + crop_side_px, top_px + crop_side_px))
+        if cropped.width > MAX_PROFILE_SIZE or cropped.height > MAX_PROFILE_SIZE:
+            cropped = cropped.resize((MAX_PROFILE_SIZE, MAX_PROFILE_SIZE), PILImage.LANCZOS)
+        # JPEG can't encode palette (P), alpha (RGBA/LA), or CMYK source modes —
+        # convert before saving (lucas42/lucos_photos#484).
+        if cropped.mode != "RGB":
+            cropped = cropped.convert("RGB")
+        cropped.save(profile_path, format="JPEG", quality=90)
+
+    logger.info("_crop_and_save_profile_picture: saved profile picture for person %s at %s", person_id, profile_path)
+    return True
+
+
 def generate_profile_picture(person_id: str) -> None:
     """Choose the best profile picture for a person and crop it to a square derivative.
 
@@ -787,9 +875,6 @@ def generate_profile_picture(person_id: str) -> None:
     Also updates person.profile_photo_id and person.profile_auto_generated in the DB.
     Idempotent: re-running overwrites the existing derivative file.
     """
-    from PIL import Image as PILImage
-    import math
-
     person_uuid = UUID(person_id)
     db = SessionLocal()
     try:
@@ -844,77 +929,8 @@ def generate_profile_picture(person_id: str) -> None:
             person_id, best_photo.id, best_score,
         )
 
-        # Locate the original image file
-        original_path = ORIGINALS_DIR / f"{best_photo.sha256_hash}.{best_photo.file_extension}"
-        if not original_path.exists():
-            logger.warning(
-                "generate_profile_picture: original file not found at %s for photo %s",
-                original_path, best_photo.id,
-            )
+        if not _crop_and_save_profile_picture(person_id, best_face, best_photo):
             return
-
-        # Compute pixel coordinates of face bounding box
-        img_w = best_photo.width
-        img_h = best_photo.height
-        face_x_px = best_face.bbox_x * img_w
-        face_y_px = best_face.bbox_y * img_h
-        face_w_px = best_face.bbox_width * img_w
-        face_h_px = best_face.bbox_height * img_h
-
-        # Crop: square, face occupies ~60% of area → side = face_side / sqrt(0.6)
-        face_side = max(face_w_px, face_h_px)
-        crop_side = face_side / math.sqrt(0.6)
-
-        # Centre on the bounding box centre
-        cx = face_x_px + face_w_px / 2.0
-        cy = face_y_px + face_h_px / 2.0
-
-        left = cx - crop_side / 2.0
-        top = cy - crop_side / 2.0
-        right = left + crop_side
-        bottom = top + crop_side
-
-        # Shift the crop window to keep it square when near an edge, then hard-clamp
-        # as a final safety net (handles the degenerate case where the face itself is
-        # larger than the image).
-        if left < 0:
-            right -= left  # shift right by the overhang
-            left = 0.0
-        if top < 0:
-            bottom -= top
-            top = 0.0
-        if right > img_w:
-            left -= (right - img_w)  # shift left by the overhang
-            right = float(img_w)
-        if bottom > img_h:
-            top -= (bottom - img_h)
-            bottom = float(img_h)
-        # Final clamp: face genuinely bigger than image
-        left = max(0.0, left)
-        top = max(0.0, top)
-
-        # Write derivative
-        DERIVATIVES_DIR.mkdir(parents=True, exist_ok=True)
-        profile_path = DERIVATIVES_DIR / f"{person_id}_profile.jpg"
-
-        # Convert to integer pixel coords; derive right/bottom from left/top + side
-        # to guarantee a perfectly square crop regardless of floating-point rounding.
-        crop_side_px = round(right - left)
-        left_px = round(left)
-        top_px = round(top)
-
-        MAX_PROFILE_SIZE = 600
-        with PILImage.open(original_path) as img:
-            cropped = img.crop((left_px, top_px, left_px + crop_side_px, top_px + crop_side_px))
-            if cropped.width > MAX_PROFILE_SIZE or cropped.height > MAX_PROFILE_SIZE:
-                cropped = cropped.resize((MAX_PROFILE_SIZE, MAX_PROFILE_SIZE), PILImage.LANCZOS)
-            # JPEG can't encode palette (P), alpha (RGBA/LA), or CMYK source modes —
-            # convert before saving (lucas42/lucos_photos#484).
-            if cropped.mode != "RGB":
-                cropped = cropped.convert("RGB")
-            cropped.save(profile_path, format="JPEG", quality=90)
-
-        logger.info("generate_profile_picture: saved profile picture for person %s at %s", person_id, profile_path)
 
         # Update DB
         person.profile_photo_id = best_photo.id
@@ -929,6 +945,57 @@ def generate_profile_picture(person_id: str) -> None:
     except Exception:
         logger.exception("generate_profile_picture: error for person %s", person_id)
         db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def generate_manual_profile_picture(person_id: str, photo_id: str) -> None:
+    """Generate the profile-picture derivative for a person from a specific,
+    user-chosen photo (lucas42/lucos_photos#473's "Set as profile picture" action).
+
+    Unlike generate_profile_picture, this doesn't score or select a face — the API
+    has already validated the person+photo pairing (a Face row exists for both) and
+    set profile_photo_id/profile_auto_generated=False before enqueuing this job. This
+    job only does the actual image-processing work (crop + re-encode), which the API
+    process must not do itself per this repo's API/worker boundary.
+
+    Idempotent: re-running overwrites the existing derivative file. Does not emit a
+    Loganne event — the API already emits one synchronously when the user pins the
+    photo, matching the immediate-action pattern used by the flag/background toggles.
+    """
+    person_uuid = UUID(person_id)
+    photo_uuid = UUID(photo_id)
+    db = SessionLocal()
+    try:
+        person = db.query(Person).filter(Person.id == person_uuid).first()
+        if not person:
+            logger.warning("generate_manual_profile_picture: person %s not found", person_id)
+            return
+
+        face = (
+            db.query(Face)
+            .filter(Face.person_id == person_uuid, Face.photo_id == photo_uuid)
+            .first()
+        )
+        if not face:
+            logger.warning(
+                "generate_manual_profile_picture: no face for person %s in photo %s",
+                person_id, photo_id,
+            )
+            return
+
+        photo = face.media_item
+        if photo is None or photo.width is None or photo.height is None:
+            logger.warning("generate_manual_profile_picture: photo %s has no dimensions", photo_id)
+            return
+
+        _crop_and_save_profile_picture(person_id, face, photo)
+
+    except Exception:
+        logger.exception(
+            "generate_manual_profile_picture: error for person %s photo %s", person_id, photo_id,
+        )
         raise
     finally:
         db.close()

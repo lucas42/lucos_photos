@@ -482,6 +482,49 @@ class TestGetPhoto:
         assert response.status_code == 200
         assert response.json()["people"] == []
 
+    def test_is_current_profile_picture_true_when_matching(self, authenticated_client, db_session):
+        """lucas42/lucos_photos#473: per-photo profile-picture status, since
+        person_to_dict alone can't know which photo it's being rendered next to."""
+        photo = make_photo(db_session, "iscurrent")
+        person = Person(display_name="Alice", profile_photo_id=photo.id, profile_auto_generated=True)
+        db_session.add(person)
+        db_session.flush()
+        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
+        assert response.status_code == 200
+        person_data = response.json()["people"][0]
+        assert person_data["isCurrentProfilePicture"] is True
+        assert person_data["profilePictureIsManual"] is False
+
+    def test_profile_picture_is_manual_when_pinned(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "ismanual")
+        person = Person(display_name="Alice", profile_photo_id=photo.id, profile_auto_generated=False)
+        db_session.add(person)
+        db_session.flush()
+        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
+        person_data = response.json()["people"][0]
+        assert person_data["isCurrentProfilePicture"] is True
+        assert person_data["profilePictureIsManual"] is True
+
+    def test_is_current_profile_picture_false_for_other_photo(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "notprofile")
+        other_photo = make_photo(db_session, "theirrealprofilepic")
+        person = Person(display_name="Alice", profile_photo_id=other_photo.id, profile_auto_generated=True)
+        db_session.add(person)
+        db_session.flush()
+        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
+        db_session.commit()
+
+        response = authenticated_client.get(f"/photos/{photo.id}", headers=JSON_ACCEPT)
+        person_data = response.json()["people"][0]
+        assert person_data["isCurrentProfilePicture"] is False
+        assert person_data["profilePictureIsManual"] is False
+
     # -----------------------------------------------------------------------
     # Content negotiation
     # -----------------------------------------------------------------------
