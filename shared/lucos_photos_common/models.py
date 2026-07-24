@@ -94,6 +94,8 @@ class Person(Base):
     profile_auto_generated: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     # Background face: person was detected in a crowd and user does not want to identify them
     is_background: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # User has flagged this grouping as wrong but not yet corrected it (manually set/cleared, no auto-resolve)
+    flagged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     faces: Mapped[list["Face"]] = relationship(back_populates="person")
     photo_people: Mapped[list["PhotoPerson"]] = relationship(back_populates="person")

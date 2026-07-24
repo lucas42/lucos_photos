@@ -1061,13 +1061,15 @@ a:hover {
 	padding-bottom: 2rem;
 }
 
-.merge-prompt-actions {
+.merge-prompt-actions,
+.move-prompt-actions {
 	display: flex;
 	justify-content: center;
 	gap: 1rem;
 }
 
-.merge-prompt-cancel {
+.merge-prompt-cancel,
+.move-prompt-cancel {
 	background: none;
 	border: 1px solid rgba(255, 255, 255, 0.2);
 	color: var(--text-color);
@@ -1078,12 +1080,14 @@ a:hover {
 	transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.merge-prompt-cancel:hover {
+.merge-prompt-cancel:hover,
+.move-prompt-cancel:hover {
 	background: rgba(255, 255, 255, 0.1);
 	border-color: rgba(255, 255, 255, 0.4);
 }
 
-.merge-prompt-confirm {
+.merge-prompt-confirm,
+.move-prompt-confirm {
 	background: var(--accent-color);
 	color: var(--bg-color);
 	border: none;
@@ -1095,19 +1099,242 @@ a:hover {
 	transition: opacity 0.15s ease;
 }
 
-.merge-prompt-confirm:hover {
+.merge-prompt-confirm:hover,
+.move-prompt-confirm:hover {
 	opacity: 0.85;
 }
 
-.merge-prompt-confirm:disabled {
+.merge-prompt-confirm:disabled,
+.move-prompt-confirm:disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
 }
 
-.merge-prompt-error {
+.merge-prompt-error,
+.move-prompt-error {
 	margin: 0.75rem 0 0;
 	font-size: 0.85rem;
 	color: #f87171;
+}
+
+/* ------------------------------------------------------------------ */
+/* Flag toggle                                                          */
+/* ------------------------------------------------------------------ */
+
+.person-flag {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	margin-bottom: 1.5rem;
+}
+
+.flag-btn {
+	display: inline-block;
+	background: none;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	color: var(--text-color);
+	border-radius: 6px;
+	padding: 0.35rem 0.75rem;
+	font-size: 0.85rem;
+	cursor: pointer;
+	transition: background 0.15s ease, border-color 0.15s ease;
+	width: fit-content;
+}
+
+.flag-btn:hover {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: rgba(255, 255, 255, 0.4);
+}
+
+.flag-status {
+	font-size: 0.85rem;
+	opacity: 0.8;
+}
+
+/* ------------------------------------------------------------------ */
+/* Select photos to move                                                */
+/* ------------------------------------------------------------------ */
+
+.person-photos-header {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 1rem;
+	flex-wrap: wrap;
+}
+
+.select-mode-btn {
+	background: none;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	color: var(--text-color);
+	border-radius: 6px;
+	padding: 0.35rem 0.75rem;
+	font-size: 0.85rem;
+	cursor: pointer;
+	transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.select-mode-btn:hover {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: rgba(255, 255, 255, 0.4);
+}
+
+.photo-select-overlay {
+	position: absolute;
+	top: 0.5rem;
+	left: 0.5rem;
+	display: none;
+	width: 1.5rem;
+	height: 1.5rem;
+	z-index: 1;
+}
+
+.container.select-mode .photo-select-overlay {
+	display: block;
+}
+
+.photo-select-checkbox {
+	width: 1.5rem;
+	height: 1.5rem;
+	cursor: pointer;
+	accent-color: var(--accent-color);
+}
+
+.container.select-mode .media-card-link {
+	cursor: pointer;
+}
+
+.bulk-action-bar {
+	position: sticky;
+	bottom: 1.5rem;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 1rem;
+	margin: 1.5rem auto 0;
+	width: fit-content;
+	background: var(--card-bg);
+	border-radius: 999px;
+	padding: 0.6rem 1.5rem;
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+	font-size: 0.9rem;
+}
+
+/* The [hidden] attribute's default `display: none` loses to the class rule above
+   (author styles beat the UA stylesheet) unless restated explicitly here. */
+.bulk-action-bar[hidden] {
+	display: none;
+}
+
+.bulk-move-btn {
+	background: var(--accent-color);
+	color: var(--bg-color);
+	border: none;
+	border-radius: 6px;
+	padding: 0.4rem 1rem;
+	font-size: 0.9rem;
+	font-weight: 600;
+	cursor: pointer;
+	transition: opacity 0.15s ease;
+}
+
+.bulk-move-btn:hover {
+	opacity: 0.85;
+}
+
+.move-confirmation {
+	margin-top: 1.5rem;
+	font-size: 0.9rem;
+	opacity: 0.9;
+}
+
+/* ------------------------------------------------------------------ */
+/* Move-to-another-person lightbox                                     */
+/* ------------------------------------------------------------------ */
+
+.move-prompt {
+	background: var(--card-bg);
+	border-radius: 12px;
+	padding: 2rem;
+	max-width: 420px;
+	width: 90vw;
+	text-align: left;
+}
+
+.move-prompt h2 {
+	margin: 0 0 1rem;
+	font-size: 1.2rem;
+	text-align: center;
+}
+
+.move-search-label {
+	display: block;
+	font-size: 0.9rem;
+	margin-bottom: 0.4rem;
+}
+
+.move-search-input {
+	width: 100%;
+	box-sizing: border-box;
+	background: var(--bg-color);
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	color: var(--text-color);
+	border-radius: 6px;
+	padding: 0.5rem 0.75rem;
+	font-size: 0.95rem;
+	margin-bottom: 0.75rem;
+}
+
+.move-results-list {
+	list-style: none;
+	margin: 0 0 1.25rem;
+	padding: 0;
+	max-height: 240px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+}
+
+.move-result-btn {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	width: 100%;
+	background: none;
+	border: 1px solid rgba(255, 255, 255, 0.15);
+	color: var(--text-color);
+	border-radius: 6px;
+	padding: 0.4rem 0.6rem;
+	font-size: 0.9rem;
+	cursor: pointer;
+	text-align: left;
+	transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.move-result-btn:hover {
+	background: rgba(255, 255, 255, 0.1);
+}
+
+.move-result-btn.selected {
+	border-color: var(--accent-color);
+	background: rgba(255, 255, 255, 0.08);
+}
+
+.move-result-btn img,
+.move-result-placeholder {
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	object-fit: cover;
+	flex-shrink: 0;
+	background: var(--bg-color);
+}
+
+.move-result-create {
+	opacity: 0.85;
+	font-style: italic;
+	border-style: dashed;
 }
 
 /* ------------------------------------------------------------------ */

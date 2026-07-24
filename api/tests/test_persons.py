@@ -38,6 +38,31 @@ class TestListpeople:
         names = {p["name"] for p in body["people"]}
         assert names == {"Alice", "Bob"}
 
+    def test_list_people_search_filters_by_name(self, authenticated_client, db_session):
+        make_person(db_session, "Alice")
+        make_person(db_session, "Bob")
+        db_session.commit()
+
+        response = authenticated_client.get("/people", params={"search": "ali"})
+        assert response.status_code == 200
+        body = response.json()
+        names = {p["name"] for p in body["people"]}
+        assert names == {"Alice"}
+
+    def test_list_people_search_is_case_insensitive(self, authenticated_client, db_session):
+        make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.get("/people", params={"search": "ALICE"})
+        assert response.json()["total"] == 1
+
+    def test_list_people_search_no_match(self, authenticated_client, db_session):
+        make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.get("/people", params={"search": "nobody"})
+        assert response.json()["total"] == 0
+
     def test_list_people_pagination(self, authenticated_client, db_session):
         for i in range(5):
             make_person(db_session, f"Person {i}")
@@ -384,6 +409,7 @@ class TestGetPerson:
         assert data["faceCount"] == 1
         assert len(data["photos"]) == 1
         assert data["photos"][0]["id"] == str(photo.id)
+        assert data["photos"][0]["faceId"] == str(face.id)
 
     def test_get_person_not_found(self, authenticated_client):
         response = authenticated_client.get(f"/people/{uuid.uuid4()}")
@@ -802,3 +828,183 @@ class TestMarkBackgroundFace:
         assert response.status_code == 200
         person_data = response.json()["people"][0]
         assert "isBackground" in person_data
+
+
+class TestFlagPerson:
+    """Tests for the flag/unflag endpoints (lucas42/lucos_photos#471) — a standing
+    "this grouping needs attention" marker, manually set and cleared, mirroring the
+    is_background toggle pair exactly."""
+
+    def test_flag_person(self, authenticated_client, db_session):
+        person = make_person(db_session, "Wrongly Grouped")
+        db_session.commit()
+
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+            response = authenticated_client.put(f"/people/{person.id}/flag")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["flaggedAt"] is not None
+        db_session.refresh(person)
+        assert person.flagged_at is not None
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args[0][0] == "personFlagged"
+
+    def test_flag_person_not_found(self, authenticated_client):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+            response = authenticated_client.put(f"/people/{uuid.uuid4()}/flag")
+        assert response.status_code == 404
+
+    def test_flag_person_invalid_uuid(self, authenticated_client):
+        response = authenticated_client.put("/people/not-a-uuid/flag")
+        assert response.status_code == 404
+
+    def test_flag_person_requires_authentication(self, client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+        response = client.put(
+            f"/people/{person.id}/flag",
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+
+    def test_unflag_person(self, authenticated_client, db_session):
+        from datetime import datetime, timezone
+        person = Person(display_name="Bob", flagged_at=datetime.now(timezone.utc))
+        db_session.add(person)
+        db_session.commit()
+
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+            response = authenticated_client.delete(f"/people/{person.id}/flag")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["flaggedAt"] is None
+        db_session.refresh(person)
+        assert person.flagged_at is None
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args[0][0] == "personUnflagged"
+
+    def test_unflag_person_not_found(self, authenticated_client):
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+            response = authenticated_client.delete(f"/people/{uuid.uuid4()}/flag")
+        assert response.status_code == 404
+
+    def test_unflag_person_requires_authentication(self, client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+        response = client.delete(
+            f"/people/{person.id}/flag",
+            headers={"Origin": "https://photos.l42.eu"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+
+    def test_serializer_includes_flagged_at(self, authenticated_client, db_session):
+        make_person(db_session, "Alice")
+        db_session.commit()
+
+        response = authenticated_client.get("/people")
+        assert response.status_code == 200
+        person_data = response.json()["people"][0]
+        assert "flaggedAt" in person_data
+        assert person_data["flaggedAt"] is None
+
+
+class TestCreatePersonFromFaces:
+    """Tests for POST /people extended with an optional faceIds seed — the "move to
+    new group" path of lucas42/lucos_photos#471."""
+
+    def _make_face(self, db, photo, person=None):
+        face = Face(
+            photo_id=photo.id,
+            person_id=person.id if person else None,
+            person_confirmed=False,
+            bbox_x=0.1, bbox_y=0.1, bbox_width=0.4, bbox_height=0.4,
+        )
+        db.add(face)
+        db.flush()
+        return face
+
+    def test_creates_person_from_faces_with_name(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "e1" * 32)
+        other_photo = Photo(sha256_hash="e5" * 32, file_extension="jpg")
+        db_session.add(other_photo)
+        db_session.flush()
+        source = make_person(db_session, "Source")
+        face = self._make_face(db_session, photo, source)
+        self._make_face(db_session, other_photo, source)  # keeps source non-empty after the move
+        db_session.commit()
+
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
+             patch("app.routers.people._enqueue_profile_picture") as mock_enqueue:
+            response = authenticated_client.post("/people", json={"name": "New Group", "faceIds": [str(face.id)]})
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["name"] == "New Group"
+
+        db_session.refresh(face)
+        assert str(face.person_id) == data["id"]
+        assert face.person_confirmed is True
+
+        mock_emit.assert_called_once()
+        assert mock_emit.call_args[0][0] == "peopleSplit"
+        # Regen enqueued for both the new person and the (surviving) source
+        enqueued_ids = {c.args[0] for c in mock_enqueue.call_args_list}
+        assert data["id"] in enqueued_ids
+        assert str(source.id) in enqueued_ids
+
+    def test_creates_unnamed_person_from_faces(self, authenticated_client, db_session):
+        """An unnamed group is allowed specifically when faceIds are provided —
+        "Create new (unnamed) person" in the move-lightbox."""
+        photo = make_photo(db_session, "e2" * 32)
+        face = self._make_face(db_session, photo)
+        db_session.commit()
+
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.people._enqueue_profile_picture"):
+            response = authenticated_client.post("/people", json={"faceIds": [str(face.id)]})
+
+        assert response.status_code == 201
+        assert response.json()["name"] is None
+
+    def test_still_requires_name_without_face_ids(self, authenticated_client):
+        response = authenticated_client.post("/people", json={})
+        assert response.status_code == 422
+
+    def test_deletes_emptied_unlinked_source(self, authenticated_client, db_session):
+        """If the source person is left with zero faces and has no contact link, it's
+        deleted as part of the move (lucas42/lucos_photos#471's emptied-source policy)."""
+        photo = make_photo(db_session, "e3" * 32)
+        source = make_person(db_session, "Source")
+        face = self._make_face(db_session, photo, source)
+        db_session.commit()
+        source_id = source.id
+
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.people._enqueue_profile_picture"):
+            response = authenticated_client.post("/people", json={"name": "New Group", "faceIds": [str(face.id)]})
+
+        assert response.status_code == 201
+        assert db_session.query(Person).filter(Person.id == source_id).first() is None
+
+    def test_keeps_emptied_contact_linked_source(self, authenticated_client, db_session):
+        photo = make_photo(db_session, "e4" * 32)
+        source = make_person(db_session, "Source", contact_id="contact-123")
+        face = self._make_face(db_session, photo, source)
+        db_session.commit()
+        source_id = source.id
+
+        with patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock), \
+             patch("app.routers.people._enqueue_profile_picture"):
+            response = authenticated_client.post("/people", json={"name": "New Group", "faceIds": [str(face.id)]})
+
+        assert response.status_code == 201
+        surviving = db_session.query(Person).filter(Person.id == source_id).first()
+        assert surviving is not None
+
+    def test_face_not_found(self, authenticated_client):
+        response = authenticated_client.post("/people", json={"name": "New Group", "faceIds": [str(uuid.uuid4())]})
+        assert response.status_code == 404
