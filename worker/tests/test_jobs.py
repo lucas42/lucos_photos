@@ -387,6 +387,44 @@ class TestProcessPhoto:
             assert thumb.width == 400
             assert thumb.height == 300
 
+    def test_generates_thumbnail_from_palette_mode_gif(self, db_session, tmp_path):
+        """A palette-mode (mode 'P') source — as any GIF or indexed PNG opens as in
+        Pillow — must not crash thumbnail generation. Regression test for
+        lucas42/lucos_photos#484: OSError: cannot write mode P as JPEG, which happened
+        because the thumbnail was saved as JPEG without converting to RGB first."""
+        uploads_dir = tmp_path / "uploads"
+        originals_dir = tmp_path / "originals"
+        derivatives_dir = tmp_path / "derivatives"
+        uploads_dir.mkdir()
+
+        photo = MediaItem(sha256_hash="g" * 64, file_extension="gif", media_type="photo")
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.pending))
+        db_session.commit()
+
+        # A real GIF, which Pillow opens in palette ('P') mode — not just a JPEG
+        # mislabelled with a .gif extension.
+        img = Image.new("P", (400, 600))
+        img.putpalette([i for _ in range(86) for i in (10, 20, 30)])
+        buf = io.BytesIO()
+        img.save(buf, format="GIF")
+        src = uploads_dir / f"{photo.sha256_hash}.{photo.file_extension}"
+        src.write_bytes(buf.getvalue())
+
+        with patch("lucos_photos_common.jobs.UPLOADS_DIR", uploads_dir), \
+             patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir):
+            process_photo(str(photo.id))  # must not raise
+
+        thumb_path = derivatives_dir / f"{photo.sha256_hash}_thumb.jpg"
+        assert thumb_path.exists(), "Thumbnail file should have been created"
+        with Image.open(thumb_path) as thumb:
+            assert thumb.mode == "RGB"
+
+        db_session.refresh(photo)
+        assert photo.processing_status.state == ProcessingState.complete
+
     def test_thumbnail_path_uses_sha256(self, db_session, pending_photo, tmp_path):
         """Thumbnail should be named {sha256}_thumb.jpg for predictable path construction."""
         uploads_dir = tmp_path / "uploads"
@@ -1906,6 +1944,41 @@ class TestGenerateProfilePicture:
             url=mock_update.call_args[1]["url"],
         )
         assert f"/people/{person_id}" in mock_update.call_args[1]["url"]
+
+    def test_generates_profile_picture_from_palette_mode_gif(self, db_session, tmp_path):
+        """A palette-mode ('P') source photo must not crash the profile-picture crop.
+        Regression test for lucas42/lucos_photos#484 (same root cause as the
+        process_photo thumbnail bug: JPEG save without converting to RGB first)."""
+        person = self._make_person(db_session)
+        photo = MediaItem(sha256_hash="p" * 64, file_extension="gif", width=200, height=200)
+        db_session.add(photo)
+        db_session.flush()
+        self._make_face(db_session, photo, person, bbox_x=0.2, bbox_y=0.2, bbox_width=0.6, bbox_height=0.6)
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        img_path = originals_dir / f"{'p' * 64}.gif"
+        img = Image.new("P", (200, 200))
+        img.putpalette([i for _ in range(86) for i in (128, 64, 32)])
+        img.save(img_path, format="GIF")
+
+        person_id = person.id
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne"):
+            mock_session_local.return_value = db_session
+
+            generate_profile_picture(str(person_id))  # must not raise
+
+        profile_path = derivatives_dir / f"{person_id}_profile.jpg"
+        assert profile_path.exists(), "Profile picture file should be created"
+        with Image.open(profile_path) as saved:
+            assert saved.mode == "RGB"
 
     def test_emits_loganne_event_on_success(self, db_session, tmp_path):
         """Should emit profilePhotoUpdated to Loganne after a successful profile picture write."""
