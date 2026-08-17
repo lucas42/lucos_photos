@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "lucos-photos-common"
 version = "0.1.0"
 dependencies = [
-    "sqlalchemy>=2.0.51",
+    "sqlalchemy>=2.0.52",
     "psycopg2-binary",
     "httpx",
     "redis",
