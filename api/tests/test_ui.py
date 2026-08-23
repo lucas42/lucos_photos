@@ -379,6 +379,28 @@ class TestPeoplePageHtml:
         assert response.status_code == 200
         assert response.headers.get("vary") == "Accept"
 
+    def test_people_page_shows_ignore_button_for_unlinked_person(self, authenticated_client, db_session):
+        """A person not linked to a contact gets an Ignore button on their card (lucas42/lucos_photos#494)."""
+        from lucos_photos_common.models import Person
+        person = Person(display_name="Unlinked Person")
+        db_session.add(person)
+        db_session.commit()
+
+        response = authenticated_client.get("/people", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert f'class="ignore-person-btn" data-person-id="{person.id}"' in response.text
+
+    def test_people_page_hides_ignore_button_for_contact_linked_person(self, authenticated_client, db_session):
+        """A person already linked to a contact has no Ignore button — merging via contact link is the intended flow."""
+        from lucos_photos_common.models import Person
+        person = Person(display_name="Linked Person", contact_id="some-contact-id")
+        db_session.add(person)
+        db_session.commit()
+
+        response = authenticated_client.get("/people", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert 'class="ignore-person-btn"' not in response.text
+
     def test_people_json_has_vary_accept(self, authenticated_client):
         """JSON response must include Vary: Accept so caches don't serve it as HTML."""
         response = authenticated_client.get("/people", headers={"Accept": "application/json"})

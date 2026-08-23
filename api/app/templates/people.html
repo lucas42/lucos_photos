@@ -4,24 +4,32 @@
 
 {% block content %}
 <div class="container">
-    <h1 class="page-title">People <span class="page-count">{{ total }}</span></h1>
+    <h1 class="page-title">People <span class="page-count" id="page-count">{{ total }}</span></h1>
 
     <div id="people-list" class="people-grid-list">
         {% if people %}
             {% for person in people %}
-            <a href="/people/{{ person.id }}" class="person-grid-card-link">
-                <div class="person-grid-card">
-                    {% if person.profilePictureUrl %}
-                    <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt=""
-                         onerror="lucosProfilePicturePlaceholderFallback(this)">
-                    {% else %}
-                    {% set pfp_extra_class = none %}
-                    {% set pfp_aria_label = none %}
-                    {% include "_profile_picture_placeholder.html" %}
-                    {% endif %}
-                    <h2 class="person-name">{{ person.name or ('Person ' + person.id[:8] + '…') }}</h2>
-                </div>
-            </a>
+            {% set person_label = person.name or ('Person ' + person.id[:8] + '…') %}
+            <div class="person-grid-card-wrap"{% if not person.contactId %} aria-live="polite" aria-atomic="true"{% endif %}>
+                <a href="/people/{{ person.id }}" class="person-grid-card-link">
+                    <div class="person-grid-card">
+                        {% if person.profilePictureUrl %}
+                        <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt=""
+                             onerror="lucosProfilePicturePlaceholderFallback(this)">
+                        {% else %}
+                        {% set pfp_extra_class = none %}
+                        {% set pfp_aria_label = none %}
+                        {% include "_profile_picture_placeholder.html" %}
+                        {% endif %}
+                        <h2 class="person-name">{{ person_label }}</h2>
+                    </div>
+                </a>
+                {% if not person.contactId %}
+                <button type="button" class="ignore-person-btn" data-person-id="{{ person.id }}">
+                    Ignore<span class="sr-only"> {{ person_label }}</span>
+                </button>
+                {% endif %}
+            </div>
             {% endfor %}
         {% else %}
             <p class="empty-state-text">No people detected yet.</p>
@@ -40,4 +48,80 @@
     {% include "_pagination.html" %}
 </div>
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const UNDO_WINDOW_MS = 6000;
+    const peopleList = document.getElementById('people-list');
+    const pageCount = document.getElementById('page-count');
+
+    function adjustPageCount(delta) {
+        if (!pageCount) return;
+        const n = parseInt(pageCount.textContent, 10);
+        if (!isNaN(n)) pageCount.textContent = n + delta;
+    }
+
+    async function handleIgnore(btn) {
+        const wrap = btn.closest('.person-grid-card-wrap');
+        const personId = btn.dataset.personId;
+        // Captured before disabling the button, so undo restores a live,
+        // clickable "Ignore" button rather than a permanently-disabled one.
+        const originalContent = wrap.innerHTML;
+        btn.disabled = true;
+        try {
+            const response = await fetch(`/people/${personId}/background`, { method: 'PUT' });
+            if (!response.ok) throw new Error(`API responded with ${response.status}`);
+            showIgnoredPlaceholder(wrap, personId, originalContent);
+        } catch (err) {
+            console.error('Failed to ignore person:', err);
+            btn.disabled = false;
+        }
+    }
+
+    function showIgnoredPlaceholder(wrap, personId, originalContent) {
+        // Stashed on the element rather than a closure variable, so the undo
+        // handler (bound later via delegation on the freshly-created button)
+        // can get back to it without any extra plumbing.
+        wrap._originalContent = originalContent;
+        adjustPageCount(-1);
+
+        wrap.classList.add('person-grid-card-ignored');
+        wrap.innerHTML = `<p class="person-grid-card-ignored-status">Ignored.
+            <button type="button" class="undo-ignore-btn" data-person-id="${personId}">Undo</button></p>`;
+        wrap.querySelector('.undo-ignore-btn').focus();
+
+        wrap._removeTimer = setTimeout(() => wrap.remove(), UNDO_WINDOW_MS);
+    }
+
+    async function handleUndo(btn) {
+        const wrap = btn.closest('.person-grid-card-wrap');
+        const personId = btn.dataset.personId;
+        clearTimeout(wrap._removeTimer);
+        btn.disabled = true;
+        try {
+            const response = await fetch(`/people/${personId}/background`, { method: 'DELETE' });
+            if (!response.ok) throw new Error(`API responded with ${response.status}`);
+            wrap.classList.remove('person-grid-card-ignored');
+            wrap.innerHTML = wrap._originalContent;
+            adjustPageCount(1);
+            wrap.querySelector('.ignore-person-btn')?.focus();
+        } catch (err) {
+            console.error('Failed to undo ignore:', err);
+            btn.disabled = false;
+        }
+    }
+
+    // Delegated on the list container (not the individual buttons) because
+    // the Ignore/Undo buttons are swapped in and out of the DOM as cards are
+    // ignored and un-ignored.
+    if (peopleList) {
+        peopleList.addEventListener('click', (e) => {
+            const ignoreBtn = e.target.closest('.ignore-person-btn');
+            if (ignoreBtn) { handleIgnore(ignoreBtn); return; }
+            const undoBtn = e.target.closest('.undo-ignore-btn');
+            if (undoBtn) handleUndo(undoBtn);
+        });
+    }
+</script>
 {% endblock %}
