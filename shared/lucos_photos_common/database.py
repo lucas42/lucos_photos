@@ -38,6 +38,12 @@ def get_engine():
             # Postgres idle connection timeout.
             pool_recycle=3600,
         )
+        # A forked child (RQ's scheduler process, and a work horse per job)
+        # inherits the parent's pooled sockets. Drop them in the child (without
+        # closing the parent's fds — close=False) so it opens its own
+        # connections on first use, instead of racing the parent on the same
+        # TCP socket. See lucas42/lucos_photos#500.
+        os.register_at_fork(after_in_child=lambda: _engine.dispose(close=False))
     return _engine
 
 
