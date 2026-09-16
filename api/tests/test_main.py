@@ -1,6 +1,9 @@
 import asyncio
 import hashlib
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from lucos_photos_common.models import ProcessingState
 
 AUTH_HEADER = {"Authorization": "Bearer validkey"}
 VALID_IMAGE_CONTENT = bytes.fromhex(
@@ -596,6 +599,145 @@ class TestUpload:
             except Exception:
                 pass
             assert not (tmp_path / f"{sha}.jpg").exists()
+
+
+class TestUploadRepairsMissingFile:
+    """A matching sha256_hash row is not proof the file is actually stored — the
+    database can survive a volume loss that takes the file with it (#525). These
+    tests simulate that: a photo whose row (and processing_status=complete) exists,
+    but whose file is gone from both originals and staging.
+    """
+
+    def test_missing_file_is_repaired_and_returns_201(self, client, db_session, tmp_path, monkeypatch):
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path / "photos")
+
+        content = VALID_IMAGE_CONTENT
+        sha = hashlib.sha256(content).hexdigest()
+        first = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+        assert first.status_code == 201
+
+        # Simulate the worker having already moved the file to originals and marked
+        # the item complete, then the volume holding both uploads and originals
+        # being lost — the row (and its complete status) survives, the file doesn't.
+        staged_path = tmp_path / f"{sha}.jpg"  # UPLOADS_DIR == tmp_path in the client fixture
+        assert staged_path.exists()
+        staged_path.unlink()
+
+        media_item_id = first.json()["id"]
+        proc_status = db_session.query(photos_module.MediaItem).filter(photos_module.MediaItem.id == uuid.UUID(media_item_id)).first().processing_status
+        proc_status.state = ProcessingState.complete
+        db_session.commit()
+
+        second = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+        assert second.status_code == 201
+        assert second.json()["id"] == media_item_id
+        # The file has been re-staged for the worker to pick up.
+        assert staged_path.exists()
+
+    def test_missing_file_repair_resets_processing_status_to_pending(self, client, db_session, tmp_path, monkeypatch):
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path / "photos")
+
+        content = VALID_IMAGE_CONTENT
+        sha = hashlib.sha256(content).hexdigest()
+        first = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+        media_item_id = first.json()["id"]
+
+        staged_path = tmp_path / f"{sha}.jpg"
+        staged_path.unlink()
+        proc_status = db_session.query(photos_module.MediaItem).filter(photos_module.MediaItem.id == uuid.UUID(media_item_id)).first().processing_status
+        proc_status.state = ProcessingState.complete
+        db_session.commit()
+
+        client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+
+        db_session.expire_all()
+        proc_status = db_session.query(photos_module.MediaItem).filter(photos_module.MediaItem.id == uuid.UUID(media_item_id)).first().processing_status
+        assert proc_status.state == ProcessingState.pending
+
+    def test_missing_file_repair_preserves_existing_metadata(self, client, db_session, tmp_path, monkeypatch):
+        """A repair must not lose description/taken_at accrued since the original upload —
+        that's the whole point of repairing in place rather than recreating the row."""
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path / "photos")
+
+        content = VALID_IMAGE_CONTENT
+        sha = hashlib.sha256(content).hexdigest()
+        first = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", content, "image/jpeg")},
+            headers={**AUTH_HEADER, "X-Description": "A lovely sunset"},
+        )
+        media_item_id = first.json()["id"]
+
+        staged_path = tmp_path / f"{sha}.jpg"
+        staged_path.unlink()
+        item = db_session.query(photos_module.MediaItem).filter(photos_module.MediaItem.id == uuid.UUID(media_item_id)).first()
+        item.processing_status.state = ProcessingState.complete
+        db_session.commit()
+
+        second = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+        assert second.json()["id"] == media_item_id
+        assert second.json()["description"] == "A lovely sunset"
+
+    def test_file_present_in_originals_is_a_cheap_no_op(self, client, db_session, tmp_path, monkeypatch):
+        """When the file genuinely is present (in originals), a duplicate upload must
+        stay a plain no-op — not trigger a repair/rewrite."""
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path / "photos")
+
+        content = VALID_IMAGE_CONTENT
+        sha = hashlib.sha256(content).hexdigest()
+        first = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+        media_item_id = first.json()["id"]
+
+        # Move the staged file into originals, as the worker would, and remove it
+        # from staging — this is the normal "already fully stored" state.
+        staged_path = tmp_path / f"{sha}.jpg"
+        originals_dir = tmp_path / "photos" / "originals"
+        originals_dir.mkdir(parents=True)
+        staged_path.rename(originals_dir / f"{sha}.jpg")
+
+        item = db_session.query(photos_module.MediaItem).filter(photos_module.MediaItem.id == uuid.UUID(media_item_id)).first()
+        item.processing_status.state = ProcessingState.complete
+        db_session.commit()
+
+        second = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+        assert second.status_code == 200
+        assert second.json()["id"] == media_item_id
+
+        db_session.expire_all()
+        proc_status = db_session.query(photos_module.MediaItem).filter(photos_module.MediaItem.id == uuid.UUID(media_item_id)).first().processing_status
+        assert proc_status.state == ProcessingState.complete, "must not reset a genuinely present file's status"
+
+    def test_repair_does_not_strand_staged_file_on_db_error(self, client, db_session, tmp_path, monkeypatch):
+        """If the repair's commit fails, the just-restaged file must not be left
+        behind — otherwise a retry would see it present and treat this as a plain
+        duplicate (200 no-op) instead of re-attempting the repair, reproducing the
+        exact silent-loss shape #525 describes via a DB hiccup instead of a lost
+        volume."""
+        import app.routers.photos as photos_module
+        monkeypatch.setattr(photos_module, "PHOTOS_DIR", tmp_path / "photos")
+
+        content = VALID_IMAGE_CONTENT
+        sha = hashlib.sha256(content).hexdigest()
+        first = client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+        media_item_id = first.json()["id"]
+
+        staged_path = tmp_path / f"{sha}.jpg"
+        staged_path.unlink()
+        item = db_session.query(photos_module.MediaItem).filter(photos_module.MediaItem.id == uuid.UUID(media_item_id)).first()
+        item.processing_status.state = ProcessingState.complete
+        db_session.commit()
+
+        with patch.object(db_session, "commit", side_effect=Exception("Database error")):
+            try:
+                client.post("/photos", files={"file": ("photo.jpg", content, "image/jpeg")}, headers=AUTH_HEADER)
+            except Exception:
+                pass
+
+        assert not staged_path.exists(), "staged file must be cleaned up, not stranded, when the repair commit fails"
 
 
 class TestUploadLimits:

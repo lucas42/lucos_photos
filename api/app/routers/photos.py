@@ -338,6 +338,49 @@ async def upload_photo(
         # update the record — the first upload may have been sent without the header.
         existing = db.query(MediaItem).filter(MediaItem.sha256_hash == sha256_hash).first()
         if existing:
+            # A matching row is not proof the file is actually stored — the database
+            # can survive a volume loss that takes the file with it (see #525). Check
+            # both the final location and staging (a fresh upload sits there briefly
+            # before the worker moves it) before treating this as a genuine no-op.
+            existing_original_path = PHOTOS_DIR / "originals" / f"{sha256_hash}.{existing.file_extension}"
+            existing_staged_path = UPLOADS_DIR / f"{sha256_hash}.{existing.file_extension}"
+            if not existing_original_path.exists() and not existing_staged_path.exists():
+                # Repair: keep the existing row and its metadata, write the bytes we
+                # just streamed, and put the item back through normal processing —
+                # the missing file is the only thing wrong here.
+                tmp_path.rename(existing_staged_path)
+                tmp_path = None  # moved; the outer finally block must not delete it
+
+                try:
+                    proc_status = existing.processing_status
+                    if proc_status is not None:
+                        proc_status.state = ProcessingState.pending
+                        proc_status.error_message = None
+                    else:
+                        db.add(ProcessingStatus(photo_id=existing.id, state=ProcessingState.pending))
+                    if client_taken_at is not None and existing.taken_at is None:
+                        existing.taken_at = client_taken_at
+                    if x_description is not None and existing.description is None:
+                        existing.description = x_description
+                    db.commit()
+                    db.refresh(existing)
+                except Exception:
+                    # Mirror the new-upload branch below: if the commit fails, the
+                    # staged file must not be left stranded — otherwise a retry would
+                    # see it present and treat this as a plain duplicate (200 no-op)
+                    # with processing_status never flipped to pending, reproducing
+                    # exactly the silent-loss shape this fix exists to close.
+                    db.rollback()
+                    if existing_staged_path.exists():
+                        existing_staged_path.unlink()
+                    raise
+
+                enqueue_process_media(str(existing.id), media_type=existing.media_type)
+                print(f"upload_photo: repairing missing file for existing photo {sha256_hash}", flush=True)
+                # 201 (not 200) — real bytes were written and reprocessing was kicked
+                # off, so this should count as an upload happening, not a no-op.
+                return JSONResponse(status_code=201, content=photo_to_dict(existing))
+
             updated = False
             if client_taken_at is not None and existing.taken_at is None:
                 existing.taken_at = client_taken_at
