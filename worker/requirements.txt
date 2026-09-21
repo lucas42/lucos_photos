@@ -1,4 +1,4 @@
-sqlalchemy>=2.0.53
+sqlalchemy>=2.0.54
 psycopg2-binary
 redis
 rq
