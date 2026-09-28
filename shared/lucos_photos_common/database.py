@@ -17,7 +17,7 @@ def get_engine():
     global _engine
     if _engine is None:
         database_url = URL.create(
-            drivername="postgresql",
+            drivername="postgresql+psycopg2",
             username=os.environ["POSTGRES_USER"],
             password=os.environ["POSTGRES_PASSWORD"],
             host="postgres",
