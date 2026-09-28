@@ -28,6 +28,7 @@ jobs:
     docker:
       - image: cimg/python:3.14
       - image: pgvector/pgvector:pg16
+        name: postgres
         environment:
           POSTGRES_USER: photos
           POSTGRES_PASSWORD: test
