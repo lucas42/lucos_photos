@@ -24,12 +24,36 @@ jobs:
       - run:
           name: Run tests
           command: cd worker && pytest
+  test-db-integration:
+    docker:
+      - image: cimg/python:3.14
+      - image: pgvector/pgvector:pg16
+        name: postgres
+        environment:
+          POSTGRES_USER: photos
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: photos
+    environment:
+      POSTGRES_USER: photos
+      POSTGRES_PASSWORD: test
+    steps:
+      - checkout
+      - run:
+          name: Install dependencies
+          command: pip install -e shared/ -r api/requirements.txt -r api/requirements-test.txt
+      - run:
+          name: Run startup migrations against real Postgres
+          command: cd api && alembic upgrade head
+      - run:
+          name: Confirm the shared engine connects (worker's DB path)
+          command: python -c "from lucos_photos_common.database import get_engine; get_engine().connect(); print('DB connection OK')"
 workflows:
   version: 2
   build-deploy:
     jobs:
       - test-api
       - test-worker
+      - test-db-integration
       - lucos/build:
           serial-group: << pipeline.project.slug >>/build/<< pipeline.git.branch >>
       - lucos/deploy-avalon:
@@ -37,6 +61,7 @@ workflows:
           requires:
             - test-api
             - test-worker
+            - test-db-integration
             - lucos/build
           filters:
             branches:
