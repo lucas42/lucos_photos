@@ -65,6 +65,22 @@ To refresh the `.env` file from lucos_creds (the `localcreds` alias is not avail
 scp -P 2202 "creds.l42.eu:${PWD##*/}/development/.env" .
 ```
 
+## Diagnosing a Stalled Process
+
+py-spy and gdb aren't available, so `faulthandler` (registered for `SIGUSR1` in both `worker/app/main.py` and `api/app/main.py`) is the way to see what a stalled process is doing. It dumps every thread's stack to stderr without stopping the process.
+
+```bash
+docker kill -s USR1 lucos_photos_worker   # or lucos_photos_api
+docker logs --tail 200 lucos_photos_worker
+```
+
+`docker kill -s` signals PID 1 only. The worker also has child processes: the RQ scheduler, and a separate work-horse process forked per job, so if the stall is inside a job, signal the work horse instead. Their command lines look identical, so list the pids, then signal them one at a time (simultaneous dumps interleave); the work horse's dump contains `main_work_horse`:
+
+```bash
+docker exec lucos_photos_worker python -c "import os;[print(p) for p in os.listdir('/proc') if p.isdigit()]"
+docker exec lucos_photos_worker python -c "import os,signal;os.kill(<pid>, signal.SIGUSR1)"
+```
+
 ## Repository Layout
 
 ```

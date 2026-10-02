@@ -1,7 +1,9 @@
 import asyncio
+import faulthandler
 import json
 import logging
 import os
+import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -29,6 +31,9 @@ from app.serializers import person_to_dict, photo_to_dict
 from lucos_photos_common.models import MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 log = logging.getLogger(__name__)
+
+# Dump every thread's stack to stderr on SIGUSR1 without stopping the process (lucas42/lucos_photos#529).
+faulthandler.register(signal.SIGUSR1)
 
 
 @asynccontextmanager
