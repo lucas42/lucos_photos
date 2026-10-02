@@ -72,7 +72,7 @@ services:
       - postgres
       - redis
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import redis, os; r = redis.from_url(os.environ['REDIS_URL']); r.ping()\""]
+      test: ["CMD-SHELL", "python -c \"import redis, os; r = redis.from_url(os.environ['REDIS_URL']); r.ping(); from lucos_photos_common.database import get_engine; get_engine().connect().close()\""]
       interval: 10s
       timeout: 5s
       retries: 3
