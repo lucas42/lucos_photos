@@ -652,6 +652,34 @@ class TestSweepMissingProfilePictures:
     for a job type with no ProcessingStatus row to detect staleness by. Gated by the same
     per-item backoff, keyed per person."""
 
+    @pytest.fixture(autouse=True)
+    def derivatives_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("lucos_photos_common.jobs.DERIVATIVES_DIR", tmp_path)
+        return tmp_path
+
+    def _sweep_enqueued_ids(self, db_session):
+        with patch("app.main.Queue", return_value=_make_mock_queue()), \
+             patch("lucos_photos_common.jobs._enqueue_profile_picture_for_persons") as mock_enqueue:
+            sweep_pending_photos(_make_fake_redis())
+        return [c.args[0][0] for c in mock_enqueue.call_args_list]
+
+    @pytest.mark.parametrize("column_set", [False, True])
+    @pytest.mark.parametrize("file_present", [False, True])
+    def test_enqueue_depends_on_column_and_file(self, db_session, derivatives_dir, column_set, file_present):
+        item = _make_media_item(db_session, sha256_hash="d1" * 32, media_type="photo")
+        person = _make_person(db_session, profile_photo_id=item.id if column_set else None)
+        _make_face(db_session, item, person)
+        db_session.commit()
+        if file_present:
+            (derivatives_dir / f"{person.id}_profile.jpg").write_bytes(b"x")
+
+        enqueued = self._sweep_enqueued_ids(db_session)
+
+        # Healthy only when the column is set AND the file exists; otherwise it needs (re)generating.
+        # A file without the column still enqueues: the column records which photo the crop came from.
+        assert (enqueued == [str(person.id)]) == (not (column_set and file_present))
+        assert len(enqueued) <= 1
+
     def test_enqueues_person_with_face_and_no_profile_picture(self, db_session):
         item = _make_media_item(db_session, sha256_hash="b1" * 32, media_type="photo")
         person = _make_person(db_session)
@@ -669,11 +697,12 @@ class TestSweepMissingProfilePictures:
         (person_ids,), _kwargs = mock_enqueue.call_args
         assert person_ids == [str(person.id)]
 
-    def test_does_not_enqueue_person_with_profile_picture(self, db_session):
+    def test_does_not_enqueue_person_with_profile_picture(self, db_session, derivatives_dir):
         item = _make_media_item(db_session, sha256_hash="b2" * 32, media_type="photo")
         person = _make_person(db_session, profile_photo_id=item.id)
         _make_face(db_session, item, person)
         db_session.commit()
+        (derivatives_dir / f"{person.id}_profile.jpg").write_bytes(b"x")
 
         fake_redis = _make_fake_redis()
         mock_queue = _make_mock_queue()
