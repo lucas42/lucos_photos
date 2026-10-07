@@ -4,7 +4,7 @@ redis
 rq
 pgvector
 pillow
-insightface==2.0
+insightface==2.1
 onnxruntime==1.30.0
 opencv-python-headless==5.0.0.93
 scikit-learn==1.9.1
