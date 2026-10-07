@@ -213,30 +213,38 @@ def _enqueue_missing_profile_pictures(redis_conn: Redis) -> int:
     person rather than per photo.
     """
     from lucos_photos_common import jobs
-    from lucos_photos_common.jobs import _enqueue_profile_picture_for_persons
+    from lucos_photos_common.jobs import _enqueue_profile_picture_for_persons, generate_manual_profile_picture
 
     db = SessionLocal()
     try:
-        person_ids = [
-            str(person_id)
-            for (person_id, profile_photo_id) in (
-                db.query(Person.id, Person.profile_photo_id)
+        # person_id -> pinned photo id for manually pinned persons (generate_profile_picture skips them)
+        candidates = {
+            str(person_id): str(profile_photo_id) if profile_auto_generated is False and profile_photo_id else None
+            for (person_id, profile_photo_id, profile_auto_generated) in (
+                db.query(Person.id, Person.profile_photo_id, Person.profile_auto_generated)
                 .join(Face, Face.person_id == Person.id)
                 .filter(Person.is_background == False)  # noqa: E712
                 .distinct()
                 .all()
             )
             if profile_photo_id is None or not (jobs.DERIVATIVES_DIR / f"{person_id}_profile.jpg").exists()
-        ]
+        }
     finally:
         db.close()
 
     def _enqueue_one(person_id: str) -> None:
         logger.info("sweep: enqueuing profile picture generation for person %s", person_id)
-        _enqueue_profile_picture_for_persons([person_id])
+        pinned_photo_id = candidates[person_id]
+        if pinned_photo_id:
+            Queue("photos", connection=redis_conn).enqueue(
+                generate_manual_profile_picture, person_id, pinned_photo_id,
+                retry=Retry(max=3, interval=[10, 30, 60]),
+            )
+        else:
+            _enqueue_profile_picture_for_persons([person_id])
 
     chronic_count = 0
-    for person_id in person_ids:
+    for person_id in candidates:
         is_chronic = _apply_reenqueue_backoff(
             redis_conn, "profilepic", person_id, lambda pid=person_id: _enqueue_one(pid)
         )

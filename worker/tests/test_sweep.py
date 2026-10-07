@@ -680,6 +680,40 @@ class TestSweepMissingProfilePictures:
         assert (enqueued == [str(person.id)]) == (not (column_set and file_present))
         assert len(enqueued) <= 1
 
+    def test_manually_pinned_person_with_missing_file_routed_to_manual_job(self, db_session):
+        item = _make_media_item(db_session, sha256_hash="d2" * 32, media_type="photo")
+        person = _make_person(db_session, profile_photo_id=item.id)
+        person.profile_auto_generated = False
+        _make_face(db_session, item, person)
+        db_session.commit()
+
+        mock_queue = _make_mock_queue()
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs._enqueue_profile_picture_for_persons") as mock_auto, \
+             patch("lucos_photos_common.jobs.generate_manual_profile_picture", __name__="generate_manual_profile_picture") as mock_manual:
+            sweep_pending_photos(_make_fake_redis())
+
+        mock_auto.assert_not_called()
+        mock_queue.enqueue.assert_called_once()
+        args, _ = mock_queue.enqueue.call_args
+        assert args == (mock_manual, str(person.id), str(item.id))
+
+    def test_manually_pinned_person_with_file_present_not_enqueued(self, db_session, derivatives_dir):
+        item = _make_media_item(db_session, sha256_hash="d3" * 32, media_type="photo")
+        person = _make_person(db_session, profile_photo_id=item.id)
+        person.profile_auto_generated = False
+        _make_face(db_session, item, person)
+        db_session.commit()
+        (derivatives_dir / f"{person.id}_profile.jpg").write_bytes(b"x")
+
+        mock_queue = _make_mock_queue()
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs._enqueue_profile_picture_for_persons") as mock_auto:
+            sweep_pending_photos(_make_fake_redis())
+
+        mock_auto.assert_not_called()
+        mock_queue.enqueue.assert_not_called()
+
     def test_enqueues_person_with_face_and_no_profile_picture(self, db_session):
         item = _make_media_item(db_session, sha256_hash="b1" * 32, media_type="photo")
         person = _make_person(db_session)
