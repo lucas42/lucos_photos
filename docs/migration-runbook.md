@@ -52,13 +52,13 @@ run_detached() {  # run_detached import <dir> [options]   |   run_detached prena
 
 - **This is not the backgrounding the rule above forbids.** That rule is about anonymous children of an `ssh` session that nobody can see or stop. This container has a fixed name, so it shows in `docker ps -a`, stops with `docker stop`, and logs to `docker logs`. The fixed name also guards the ledger: `docker run` refuses a second container with the same name, so two imports can't run against one ledger by accident. For the same reason, never run `import` in the foreground while the container exists.
 - **No `--rm`.** A stopped container keeps its exit code and logs until someone has read them (`docker inspect -f '{{.State.ExitCode}}' lucos_photos_migration_import`, `docker logs -t --tail 50 …`). Remove it with `docker rm` before the next run.
-- **`--restart no`, on purpose.** The script already retries connection errors, 5xx (including 507) and 429 with backoff, so any exit means something a person should read first. For `import`: 0 is done; 1 is usually "some files failed, rerun" (the last log lines say so); 2 means it stopped on purpose for a human to look (the key was rejected, or the queue depth couldn't be read for five minutes). For `prename`: 0 is done, and **any** non-zero exit means it stopped on an unexpected HTTP status or error (the last log line says which), so it's a look-first, never a plain resume. Docker can't tell those cases apart, and an automatic restart would override the deliberate stops. A reboot of avalon also stops the run, and it won't come back by itself; the daily check below catches that. (`live-restore` is on, so a dockerd restart alone doesn't stop it.)
+- **`--restart no`, on purpose.** The script already retries connection errors, 5xx (including 507) and 429 with backoff, so any exit means something a person should read first. For `import`: 0 is done; 1 is usually "some files failed, rerun" (the last log lines say so); 2 means it stopped on purpose for a human to look (the key was rejected, or the queue depth couldn't be read for five minutes). For `prename`: 0 is done, and **any** non-zero exit means it stopped on an unexpected HTTP status or error (the last log line says which), so it's a look-first, never a plain resume. Docker can't tell those cases apart, and an automatic restart would override the deliberate stops. A reboot of avalon also stops the run, and it won't come back by itself; the check below catches that. (`live-restore` is on, so a dockerd restart alone doesn't stop it.)
 - **To pause** (e.g. after a failed backup): `docker stop lucos_photos_migration_import`. Stopping mid-upload is safe, because a file is only recorded in the ledger after a confirmed 2xx.
 - **To resume**, once you know why it stopped: `docker rm lucos_photos_migration_import && run_detached import <dir>`. The ledger skips everything already confirmed. Run it from the same checkout, so `$PWD/migration` resolves.
 
-### Daily check, until `prename` finishes
+### Checking on the run
 
-**Nothing alerts on this run.** lucos_monitoring doesn't watch the container. Its backups check stays green for up to 72 hours after the last successful backup. So a stalled import, or a backup it has pushed over the edge, is found by this check or not at all. The operator owns it, along with the key dates above.
+Run this whenever a session is working on the migration, until `prename` finishes. **Nothing alerts on the import itself:** lucos_monitoring doesn't watch the container, so a stopped run is only found by this check. A stopped run is safe and just costs time; the ledger means nothing is lost. The backups check in lucos_monitoring goes red after 72 hours without a successful backup, so a backup failure is eventually alerted, but this check finds it sooner.
 
 1. **The run is alive:**
 
@@ -68,14 +68,7 @@ run_detached() {  # run_detached import <dir> [options]   |   run_detached prena
    ```
 
    It's fine if the status is `Up` and the newest line is recent. `-t` adds the date, because the script's own timestamps are time-only. At about 200 photos an hour there's a `progress:` line roughly every 30 minutes; `queue depth … pausing 30s` lines mean it's waiting for the worker, which is normal. **Look now** if it has `Exited`, if no line is newer than an hour, or if there's a `FAILED` or `ABORTED` line.
-2. **Last night's backup completed:** loganne has a `backups` event from `lucos_backups` ("… archives successfully backed up") since the previous check. Don't use the monitoring dashboard for this, because of the 72-hour window above. If there's no event, pause the import (step 6) before the next night.
-
-**How this meets the key rules.** The 3-day stall rule counts from the last log line, not from when someone noticed. A daily check finds a stall within about a day, which leaves time to resume before the rule makes you revoke. If a day's check is missed, the stall rule is the backstop.
-
-The 21-day backstop counts from the deletion, and the import itself is estimated at 12–16 days. Add the trial import, its confirmation night and `prename`, and the margin is a few days at best. So:
-
-- start the trial import as soon as the deletion is done;
-- if `dry-run`'s final count puts the estimate past about 18 days, record the extension decision on #577 **before** the deletion, not on day 21.
+2. **Last night's backup completed:** loganne has a `backups` event from `lucos_backups` ("… archives successfully backed up") within the past day. Don't treat a green monitoring dashboard as proof, because of the 72-hour window above. If there's no event, pause the import (step 6) until the backup has caught up.
 
 ## Handing the key to avalon
 
@@ -94,14 +87,7 @@ Rules for everyone afterwards: don't `cat` the file, run `env`, enable `set -x`,
 
 The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry). `import` and `prename` contain no delete call; the only delete path is the explicit `delete` subcommand, which needs a frozen id file and a matching `--expected-count`.
 
-**Lifetime** (lucos-security). The limit is tied to the migration, not the calendar:
-
-- **Primary:** revoke within 48 hours of the import being verified complete (step 9).
-- **Backstop:** a hard limit of 21 days from first use (the deletion, step 4, is its first use). If the import isn't done by then, extending is a deliberate decision recorded on #577, not a default.
-- **Stall rule:** if the import is stopped or stalled for more than 3 days, revoke rather than leaving a deletion-capable key idle on a host, and re-mint when it restarts.
-- Revocation is the real cleanup; deleting the file is secondary (`shred` means little on a journaling filesystem). Delete `import.env` right after the last run finishes, not at the end of the migration.
-
-**Owner:** whoever runs the import (SRE/sysadmin) owns revocation and the dates above, and prompts lucas42 for the creds command, which only he can run.
+**Lifetime.** The key lives until the migration is complete, then lucas42 revokes it (step 9); only he can change production credentials. Revocation is the real cleanup. Deleting the file is secondary (`shred` means little on a journaling filesystem), but still delete `import.env` right after the last run finishes.
 
 ## Steps
 
@@ -147,17 +133,17 @@ The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry).
 
    After his go-ahead on the count: `delete "$W/ids.txt" --expected-count <wc -l>`.
 5. **Trial import.** Before it, **lucas42 checks aurora's free space** (agents can't see it; the last figure, 954GB, is from June). The pre-cutoff originals stay linked from older snapshots for up to about 52 weeks, so deleting them frees nothing there, and the photos volume will grow to roughly 200GB+ (more if the export is video-heavy). Then `run_detached import <dir> --limit 200` (and `docker rm lucos_photos_migration_import` once it exits 0), watching `docker stats`, `free -h` and `df -h /` on avalon (the API's `MIN_FREE_DISK_SPACE` guard is effectively off at this scale, so watch disk by hand). **Confirm that night's backup completes and publishes** before going on.
-6. **Full import.** `run_detached import <dir>`, then the daily check until it exits. If it is interrupted, or exits 1 (some files failed), resume it as described under "Long runs": the ledger skips everything already confirmed. Exit 2 means it stopped for a human: read its log before resuming.
+6. **Full import.** `run_detached import <dir>`, then use the check under "Long runs" whenever a session is working on it, until it exits. If it is interrupted, or exits 1 (some files failed), resume it as described under "Long runs": the ledger skips everything already confirmed. Exit 2 means it stopped for a human: read its log before resuming.
    - **Don't raise `--max-pending` (200) or `--concurrency` (2, never above 4)** without redoing this arithmetic: the nightly backup delta is set by the worker's throughput (about 200 photos an hour, roughly 14GB a day), not by upload speed, and one 2-hour rsync attempt moves roughly 79GB at the ~11MB/s ceiling. Big videos are the way an item's size could break that, which is what `dry-run`'s video count is for.
-   - **Confirm the nightly backup completed after the first full day at steady rate**, then keep checking it daily ("Daily check" above). If a night's backup fails, pause the import (`docker stop lucos_photos_migration_import`; it resumes from the ledger) and run `seed-volume` by hand before continuing.
+   - **Confirm the nightly backup completed after the first full day at steady rate**, then keep checking it with the check under "Long runs". If a night's backup fails, pause the import (`docker stop lucos_photos_migration_import`; it resumes from the ledger) and run `seed-volume` by hand before continuing.
    - If `import` aborts because it can't read the queue depth, `/_info` is unhealthy: stop and look before resuming.
-7. **Pre-naming.** Once `import` exits 0, `docker rm lucos_photos_migration_import && run_detached prename`, and keep the daily check going (with `lucos_photos_migration_prename` in the `docker logs` line). It waits for each photo to finish processing (the API answers 409 until then), runs Tier 1 across the whole batch, and only then Tier 2. It is also resumable, but any non-zero exit means it stopped on an unexpected response: read its last log line before resuming (`docker rm lucos_photos_migration_prename && run_detached prename`). Don't run it on a partial import: Tier 2 depends on Tier 1 having assigned confirmed faces across the whole batch.
+7. **Pre-naming.** Once `import` exits 0, `docker rm lucos_photos_migration_import && run_detached prename`, and keep using the check (with `lucos_photos_migration_prename` in the `docker logs` line). It waits for each photo to finish processing (the API answers 409 until then), runs Tier 1 across the whole batch, and only then Tier 2. It is also resumable, but any non-zero exit means it stopped on an unexpected response: read its last log line before resuming (`docker rm lucos_photos_migration_prename && run_detached prename`). Don't run it on a partial import: Tier 2 depends on Tier 1 having assigned confirmed faces across the whole batch.
 8. **Post-import checks.**
    - photo count roughly equals the `after_cutoff`-excluded total from `dry-run`, plus the photos taken on/after the cutoff already in lucos_photos;
    - spot-check a few photos in `.photo-metadata`: taken date and description match the sidecars;
    - a few named people have photos and sensible face assignments; remaining duplicates (spelling variants) are merged with `POST /people/merge`;
    - `/_info` is healthy and the worker queue has drained.
-9. **Revoke the import key** (owner: the operator, within 48 hours of step 8 passing). Delete `import.env` from avalon, ask lucas42 to run `ssh -p 2202 creds.l42.eu "rm lucos_photos_import/production => lucos_photos/production"`, then redeploy lucos_photos and confirm the key name is gone from the api's `CLIENT_KEYS` (names only, never values). Record the date on #577. Finally, once everything is verified complete, remove the whole `/srv/photos-migration` directory (export, ledger, id file): agents empty it, then lucas42 removes the root-owned directory itself (`ssh avalon.s.l42.eu 'sudo rmdir /srv/photos-migration'`).
+9. **Revoke the import key** once step 8 passes. The operator deletes `import.env` from avalon and asks lucas42 to run `ssh -p 2202 creds.l42.eu "rm lucos_photos_import/production => lucos_photos/production"`, then redeploy lucos_photos and confirm the key name is gone from the api's `CLIENT_KEYS` (names only, never values). Record the date on #577. Finally, once everything is verified complete, remove the whole `/srv/photos-migration` directory (export, ledger, id file): agents empty it, then lucas42 removes the root-owned directory itself (`ssh avalon.s.l42.eu 'sudo rmdir /srv/photos-migration'`).
 
 ## Resume and failure handling
 
