@@ -12,7 +12,7 @@ No separate trial restore is required beforehand. lucas42 decided this in chat o
 | Step | Who |
 |---|---|
 | Request the Takeout export, authorise its transfer to avalon (e.g. one-off `rclone authorize drive` token) | lucas42 |
-| Create the import key: `ssh -p 2202 creds.l42.eu "lucos_photos_import/production => lucos_photos/production"` (no `|scope`), then the team redeploys lucos_photos. Fetch it with `scp -P 2202 creds.l42.eu:lucos_photos_import/production/.env .` (it's `KEY_LUCOS_PHOTOS`) | lucas42 |
+| Create the import key (done), and put it on avalon with the two commands under "Handing the key to avalon" below | lucas42 |
 | Go-ahead on the deletion count (step 5) | lucas42 |
 | Everything else (backup check, trial, deletion, import, pre-naming, resume, checks) | SRE / sysadmin via prod SSH + docker |
 
@@ -21,10 +21,11 @@ No separate trial restore is required beforehand. lucas42 decided this in chat o
 Standard library only. Run it from a stock python image on avalon, with the export, the ledger and the id file on a disk-backed directory (not `/tmp`, which is RAM-backed):
 
 ```bash
-W=/srv/photos-migration        # holds takeout/, migration-ledger.sqlite, ids.txt
-run() { docker run --rm -e PHOTOS_API_KEY -v "$W":/work -v "$PWD/migration":/app:ro -w /work python:3.14-slim python /app/google_takeout_import.py "$@"; }
-export PHOTOS_API_KEY=...      # KEY_LUCOS_PHOTOS from the lucos_photos_import creds; never put it on a command line
+W=/srv/photos-migration        # holds takeout/, import.env, migration-ledger.sqlite, ids.txt
+run() { docker run --rm -e PHOTOS_API_KEY_FILE=/work/import.env -v "$W":/work -v "$PWD/migration":/app:ro -w /work python:3.14-slim python /app/google_takeout_import.py "$@"; }
 ```
+
+The script reads `KEY_LUCOS_PHOTOS` from `import.env` itself (quotes stripped), so the key never appears in the environment, on a command line or in `docker inspect`.
 
 Run long commands under `Monitor`/`nohup` so they can be stopped part-way. Subcommands:
 
@@ -34,6 +35,29 @@ Run long commands under `Monitor`/`nohup` so they can be stopped part-way. Subco
 - `delete <ids-file> --expected-count N` deletes from a frozen list of ids.
 
 The ledger (`migration-ledger.sqlite`) records a file only after a confirmed 2xx. Files the server permanently rejects (4xx, e.g. an invalid image) are recorded too and listed in `migration-skipped.tsv`, so a resume doesn't resend them.
+
+## Handing the key to avalon
+
+Production credentials can't be read by agents and the value must never go through chat, GitHub or a log. lucas42 puts it straight onto avalon with one sudo account, in two commands run from his laptop (the `ssh` host is avalon):
+
+```bash
+# 1. Once: the working directory, owned by the operator, not readable by anyone else (this is also where the Takeout zips go)
+ssh avalon.s.l42.eu 'sudo install -d -o lucos-agent -g docker -m 700 /srv/photos-migration'
+
+# 2. Before the trial import: the key, copied in one pipe so it never lands on his laptop's disk or in a shell variable
+scp -P 2202 creds.l42.eu:lucos_photos_import/production/.env /dev/stdout \
+  | ssh avalon.s.l42.eu 'sudo install -o lucos-agent -g docker -m 600 /dev/stdin /srv/photos-migration/import.env'
+```
+
+Rules for everyone afterwards: don't `cat` the file, run `env`, enable `set -x`, or paste `docker inspect` output or request logs into chat or GitHub. The script never logs the key or request headers. Before the first run, the system administrator confirms `/srv/photos-migration` isn't in any backup scope (it holds a credential and 78GB of export).
+
+The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry). `import` and `prename` contain no delete call; the only delete path is the explicit `delete` subcommand, which needs a frozen id file and a matching `--expected-count`.
+
+**Lifetime.** Revocation is the real cleanup, deleting the file is secondary (`shred` means little on a journaling filesystem):
+
+1. Delete `import.env` as soon as the last run has finished, not at the end of the whole migration.
+2. Revoke the key once the import is verified complete: `ssh -p 2202 creds.l42.eu "rm lucos_photos_import/production => lucos_photos/production"`, then redeploy lucos_photos.
+3. Outer limit: seven days after the first use of the key. If the migration isn't finished by then, revoke it anyway and mint a new one for the next stretch.
 
 ## Steps
 
