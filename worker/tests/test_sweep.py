@@ -685,12 +685,14 @@ class TestSweepPerItemBackoffIntegration:
 
         with patch("app.main.Queue", return_value=mock_queue), \
              patch("lucos_photos_common.jobs.cluster_faces") as mock_cluster_faces, \
-             patch("lucos_photos_common.jobs.sweep_contact_display_names", side_effect=[RuntimeError("boom"), None]) as mock_sync_names:
-            sweep_pending_photos(fake_redis)  # sync fails; must not stop the rest of the sweep
-            sweep_pending_photos(fake_redis)
+             patch("lucos_photos_common.jobs.sweep_contact_display_names", side_effect=[RuntimeError("boom"), False, True]) as mock_sync_names:
+            sweep_pending_photos(fake_redis)  # raises; must not stop the rest of the sweep
+            sweep_pending_photos(fake_redis)  # incomplete (returns False)
+            sweep_pending_photos(fake_redis)  # completes -> gate set
+            sweep_pending_photos(fake_redis)  # gated
 
-        assert mock_sync_names.call_count == 2
-        assert mock_cluster_faces.call_count == 2
+        assert mock_sync_names.call_count == 3
+        assert mock_cluster_faces.call_count == 4
 
 
 class TestSweepMissingProfilePictures:

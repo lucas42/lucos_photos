@@ -348,8 +348,8 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
     try:
         if redis_conn.get(CONTACT_NAME_SYNC_GATE_KEY) is None:
             from lucos_photos_common.jobs import sweep_contact_display_names
-            sweep_contact_display_names()
-            redis_conn.set(CONTACT_NAME_SYNC_GATE_KEY, "1", ex=CONTACT_NAME_SYNC_INTERVAL_SECONDS)
+            if sweep_contact_display_names():
+                redis_conn.set(CONTACT_NAME_SYNC_GATE_KEY, "1", ex=CONTACT_NAME_SYNC_INTERVAL_SECONDS)
     except Exception:
         logger.exception("sweep: error during contact display name sync")
 

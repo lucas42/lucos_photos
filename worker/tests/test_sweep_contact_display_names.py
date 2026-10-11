@@ -53,6 +53,46 @@ class TestSweepContactDisplayNames:
 
         assert mock_get.call_args.kwargs["headers"]["User-Agent"] == "lucos_photos"
 
+    def test_returns_false_when_not_configured(self, db_session, monkeypatch):
+        monkeypatch.delenv("LUCOS_CONTACTS_ORIGIN", raising=False)
+        assert sweep_contact_display_names() is False
+
+    def test_returns_false_on_transient_fetch_failure(self, db_session, monkeypatch):
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.l42.eu")
+        monkeypatch.setenv("KEY_LUCOS_CONTACTS", "testkey")
+        _make_person(db_session, contact_id="42", display_name="Name")
+
+        with patch("httpx.get", side_effect=httpx.ConnectError("down")):
+            assert sweep_contact_display_names() is False
+
+    def test_returns_false_on_5xx(self, db_session, monkeypatch):
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.l42.eu")
+        monkeypatch.setenv("KEY_LUCOS_CONTACTS", "testkey")
+        _make_person(db_session, contact_id="42", display_name="Name")
+
+        resp = httpx.Response(503, request=httpx.Request("GET", "https://contacts.l42.eu/people/42"))
+        with patch("httpx.get", return_value=resp):
+            assert sweep_contact_display_names() is False
+
+    def test_returns_true_despite_permanent_404(self, db_session, monkeypatch):
+        """One permanently-404ing contact must not keep the sweep 'incomplete' forever."""
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.l42.eu")
+        monkeypatch.setenv("KEY_LUCOS_CONTACTS", "testkey")
+        _make_person(db_session, contact_id="42", display_name="Name")
+
+        resp = httpx.Response(404, request=httpx.Request("GET", "https://contacts.l42.eu/people/42"))
+        with patch("httpx.get", return_value=resp):
+            assert sweep_contact_display_names() is True
+
+    def test_returns_true_on_success(self, db_session, monkeypatch):
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.l42.eu")
+        monkeypatch.setenv("KEY_LUCOS_CONTACTS", "testkey")
+        _make_person(db_session, contact_id="42", display_name="Name")
+
+        with patch("httpx.get") as mock_get:
+            mock_get.return_value.json.return_value = {"name": "Name"}
+            assert sweep_contact_display_names() is True
+
     def test_updates_display_name_when_different(self, db_session, monkeypatch):
         """display_name is updated when the contacts API returns a different name."""
         monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.l42.eu/")

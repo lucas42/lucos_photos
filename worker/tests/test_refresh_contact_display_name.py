@@ -39,6 +39,17 @@ class TestRefreshContactDisplayName:
         db_session.refresh(person)
         assert person.display_name == "New Name"
 
+    def test_sends_system_user_agent(self, db_session, monkeypatch):
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.example.com")
+        monkeypatch.setenv("KEY_LUCOS_CONTACTS", "testkey")
+        monkeypatch.setenv("SYSTEM", "lucos_photos")
+        _make_person(db_session, contact_id="contact-42", display_name="Name")
+
+        with patch("httpx.get", side_effect=_mock_httpx_get("Name")) as mock_get:
+            refresh_contact_display_name("contact-42")
+
+        assert mock_get.call_args.kwargs["headers"]["User-Agent"] == "lucos_photos"
+
     def test_no_update_when_name_unchanged(self, db_session, monkeypatch):
         """Does not commit when the name is already current."""
         monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.example.com")
