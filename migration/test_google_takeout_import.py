@@ -69,6 +69,57 @@ class ParseSidecar(unittest.TestCase):
                 self.parse(json.dumps({"photoTakenTime": {"timestamp": "1"}, "people": people}))
 
 
+class Throttle(unittest.TestCase):
+    class Args:
+        max_pending = 200
+
+    def setUp(self):
+        self.sleeps = []
+        self._sleep, imp.time.sleep = imp.time.sleep, self.sleeps.append
+
+    def tearDown(self):
+        imp.time.sleep = self._sleep
+
+    def api(self, *readings):
+        readings = iter(readings)
+        return type("Api", (), {"pending_count": lambda self: next(readings)})()
+
+    def test_returns_once_the_queue_is_short_enough(self):
+        imp.throttle(self.api(500, 300, 100), self.Args)
+        self.assertEqual(len(self.sleeps), 2)
+
+    def test_fails_closed_when_queue_depth_stays_unreadable(self):
+        with self.assertRaises(imp.Fatal):
+            imp.throttle(self.api(*[None] * 50), self.Args)
+        self.assertEqual(len(self.sleeps), imp.UNKNOWN_QUEUE_LIMIT - 1)
+
+    def test_a_single_blip_is_tolerated(self):
+        imp.throttle(self.api(None, 5), self.Args)
+
+
+class PendingCountAttempts(unittest.TestCase):
+    def test_makes_a_single_attempt_per_reading(self):
+        attempts = []
+
+        class Broken:
+            def request(self, *args, **kwargs):
+                attempts.append(1)
+                raise OSError("refused")
+
+            def getresponse(self):
+                raise OSError("refused")
+
+        api = imp.Api("http://127.0.0.1:1", "k")
+        api._conn = lambda: Broken()
+        sleeps = []
+        original, imp.time.sleep = imp.time.sleep, sleeps.append
+        try:
+            self.assertIsNone(api.pending_count())
+        finally:
+            imp.time.sleep = original
+        self.assertEqual((len(attempts), sleeps), (1, []))
+
+
 class LoadKey(unittest.TestCase):
     def test_reads_key_from_creds_env_file_without_other_vars(self):
         with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
