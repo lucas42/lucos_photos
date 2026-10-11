@@ -1181,7 +1181,7 @@ def refresh_contact_display_name(contact_id: str) -> None:
             try:
                 response = httpx.get(
                     f"{contacts_url}/people/{person.contact_id}",
-                    headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}"},
+                    headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}", "User-Agent": os.environ.get("SYSTEM", "")},
                     timeout=5.0,
                 )
                 response.raise_for_status()
@@ -1211,7 +1211,7 @@ def refresh_contact_display_name(contact_id: str) -> None:
         db.close()
 
 
-def sweep_contact_display_names() -> None:
+def sweep_contact_display_names() -> bool:
     """Check all persons linked to contacts and sync display_name with lucos_contacts.
 
     Fetches the canonical name from lucos_contacts for every person with a non-null
@@ -1219,6 +1219,10 @@ def sweep_contact_display_names() -> None:
 
     Acts as a safety net to correct any drift — the Loganne webhook provides
     near-real-time sync; this sweep catches anything the webhook missed.
+
+    Returns True if the sweep completed, False if it did nothing (not configured) or hit a
+    transient fetch failure (network error / 5xx), so the caller can retry sooner. A 4xx for
+    one contact is permanent, so it is logged but doesn't count as incomplete.
     """
     import httpx
 
@@ -1226,7 +1230,7 @@ def sweep_contact_display_names() -> None:
     contacts_key = os.environ.get("KEY_LUCOS_CONTACTS", "")
     if not contacts_url or not contacts_key:
         logger.warning("sweep_contact_display_names: LUCOS_CONTACTS_ORIGIN or KEY_LUCOS_CONTACTS not set, skipping")
-        return
+        return False
 
     db = SessionLocal()
     try:
@@ -1234,11 +1238,12 @@ def sweep_contact_display_names() -> None:
         logger.info("sweep_contact_display_names: checking %d person(s) with a contact_id", len(persons))
 
         updated = 0
+        transient_failures = 0
         for person in persons:
             try:
                 response = httpx.get(
                     f"{contacts_url}/people/{person.contact_id}",
-                    headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}"},
+                    headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}", "User-Agent": os.environ.get("SYSTEM", "")},
                     timeout=5.0,
                 )
                 response.raise_for_status()
@@ -1248,6 +1253,8 @@ def sweep_contact_display_names() -> None:
                     "sweep_contact_display_names: failed to fetch name for contact %s: %s",
                     person.contact_id, e,
                 )
+                if not (isinstance(e, httpx.HTTPStatusError) and e.response.status_code < 500):
+                    transient_failures += 1
                 continue
 
             if canonical_name and person.display_name != canonical_name:
@@ -1262,6 +1269,7 @@ def sweep_contact_display_names() -> None:
             db.commit()
 
         logger.info("sweep_contact_display_names: updated %d person(s)", updated)
+        return transient_failures == 0
     except Exception:
         logger.exception("sweep_contact_display_names: error during sweep")
         db.rollback()
