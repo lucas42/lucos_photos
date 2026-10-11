@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import verify_session_or_key
 from app.database import get_db
-from app.routers.people import _enqueue_profile_picture, move_faces_to_person
+from app.routers.people import _enqueue_profile_picture, delete_person_if_emptied, move_faces_to_person
 from app.serializers import face_to_dict, photo_url
 from app.services import emit_loganne_event
 from lucos_photos_common.jobs import sync_photo_person
@@ -65,9 +65,13 @@ async def assign_person(
     if not person:
         raise HTTPException(status_code=404, detail="Person not found")
 
+    previous_person_id = face.person_id
     face.person_id = person_uuid
     face.person_confirmed = True
+    db.flush()
     sync_photo_person(db, face.photo_id)
+    if previous_person_id is not None and previous_person_id != person_uuid:
+        delete_person_if_emptied(db, previous_person_id)
     db.commit()
     db.refresh(face)
 
@@ -91,9 +95,13 @@ def unassign_person(
     if not face:
         raise HTTPException(status_code=404, detail="Face not found")
 
+    previous_person_id = face.person_id
     face.person_id = None
     face.person_confirmed = False
+    db.flush()
     sync_photo_person(db, face.photo_id)
+    if previous_person_id is not None:
+        delete_person_if_emptied(db, previous_person_id)
     db.commit()
 
 

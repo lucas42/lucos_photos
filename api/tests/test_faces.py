@@ -326,6 +326,70 @@ class TestUnassignPerson:
 
 
 # ---------------------------------------------------------------------------
+# Emptied-source person cleanup (lucas42/lucos_photos#530)
+# ---------------------------------------------------------------------------
+
+def _exists(db, person):
+    return db.query(Person).filter(Person.id == person.id).first() is not None
+
+
+class TestEmptiedSourcePersonCleanup:
+    def _move(self, client, face, dest, route):
+        if route == "assign":
+            return client.put(f"/faces/{face.id}/person", json={"personId": str(dest.id)})
+        return client.delete(f"/faces/{face.id}/person")
+
+    @pytest.mark.parametrize("route", ["assign", "unassign"])
+    def test_emptied_unlinked_source_is_deleted(self, authenticated_client, db_session, route):
+        photo = make_photo(db_session)
+        source, dest = make_person(db_session, "Source"), make_person(db_session, "Dest")
+        face = make_face(db_session, photo, person=source)
+        db_session.add(PhotoPerson(photo_id=photo.id, person_id=source.id))
+        db_session.commit()
+        source_id = source.id
+
+        assert self._move(authenticated_client, face, dest, route).status_code in (200, 204)
+
+        assert db_session.query(Person).filter(Person.id == source_id).first() is None
+        assert db_session.query(PhotoPerson).filter(PhotoPerson.person_id == source_id).count() == 0
+        assert _exists(db_session, dest)
+
+    @pytest.mark.parametrize("route", ["assign", "unassign"])
+    def test_emptied_contact_linked_source_is_kept(self, authenticated_client, db_session, route):
+        photo = make_photo(db_session)
+        source, dest = make_person(db_session, "Source"), make_person(db_session, "Dest")
+        source.contact_id = "42"
+        face = make_face(db_session, photo, person=source)
+        db_session.commit()
+
+        assert self._move(authenticated_client, face, dest, route).status_code in (200, 204)
+
+        assert _exists(db_session, source)
+
+    @pytest.mark.parametrize("route", ["assign", "unassign"])
+    def test_source_with_other_faces_is_kept(self, authenticated_client, db_session, route):
+        photo = make_photo(db_session)
+        source, dest = make_person(db_session, "Source"), make_person(db_session, "Dest")
+        face = make_face(db_session, photo, person=source)
+        make_face(db_session, photo, person=source)
+        db_session.commit()
+
+        assert self._move(authenticated_client, face, dest, route).status_code in (200, 204)
+
+        assert _exists(db_session, source)
+
+    def test_reassigning_to_same_person_keeps_it(self, authenticated_client, db_session):
+        photo = make_photo(db_session)
+        person = make_person(db_session)
+        face = make_face(db_session, photo, person=person)
+        db_session.commit()
+
+        assert self._move(authenticated_client, face, person, "assign").status_code == 200
+
+        assert _exists(db_session, person)
+
+
+# ---------------------------------------------------------------------------
 # PUT /faces/person (bulk) — lucas42/lucos_photos#471 "move selected photos"
 # ---------------------------------------------------------------------------
 
