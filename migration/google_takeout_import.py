@@ -206,11 +206,12 @@ class Api:
         cls = http.client.HTTPSConnection if self.https else http.client.HTTPConnection
         return cls(self.host, self.port, timeout=300)
 
-    def request(self, method, path, body=None, headers=None, content_length=None):
+    def request(self, method, path, body=None, headers=None, retries=None):
         """Send one request, retrying connection errors, 5xx (incl. 507 disk-full) and 429 with backoff.
         `body` may be bytes or a callable returning an iterable of bytes (re-invoked per attempt)."""
         hdrs = {"Authorization": f"Bearer {self.key}", **(headers or {})}
-        for attempt in range(self.retries + 1):
+        retries = self.retries if retries is None else retries
+        for attempt in range(retries + 1):
             try:
                 conn = self._conn()
                 conn.request(method, self.prefix + path, body=body() if callable(body) else body, headers=hdrs)
@@ -222,15 +223,15 @@ class Api:
                 err = f"HTTP {resp.status}"
             except (OSError, http.client.HTTPException) as exc:
                 err = repr(exc)
-            if attempt == self.retries:
-                raise RuntimeError(f"{method} {path} failed after {self.retries + 1} attempts: {err}")
+            if attempt == retries:
+                raise RuntimeError(f"{method} {path} failed after {retries + 1} attempts: {err}")
             delay = min(2 ** attempt * 5, 300)
             log(f"{method} {path}: {err}; retrying in {delay}s")
             time.sleep(delay)
 
     def pending_count(self):
         try:
-            status, data = self.request("GET", "/_info")
+            status, data = self.request("GET", "/_info", retries=0)  # one attempt: throttle() does the waiting
         except RuntimeError:
             return None
         if status != 200:

@@ -97,6 +97,29 @@ class Throttle(unittest.TestCase):
         imp.throttle(self.api(None, 5), self.Args)
 
 
+class PendingCountAttempts(unittest.TestCase):
+    def test_makes_a_single_attempt_per_reading(self):
+        attempts = []
+
+        class Broken:
+            def request(self, *args, **kwargs):
+                attempts.append(1)
+                raise OSError("refused")
+
+            def getresponse(self):
+                raise OSError("refused")
+
+        api = imp.Api("http://127.0.0.1:1", "k")
+        api._conn = lambda: Broken()
+        sleeps = []
+        original, imp.time.sleep = imp.time.sleep, sleeps.append
+        try:
+            self.assertIsNone(api.pending_count())
+        finally:
+            imp.time.sleep = original
+        self.assertEqual((len(attempts), sleeps), (1, []))
+
+
 class LoadKey(unittest.TestCase):
     def test_reads_key_from_creds_env_file_without_other_vars(self):
         with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
