@@ -65,9 +65,12 @@ The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry).
 ## Steps
 
 1. **First look at the export.** As soon as any Takeout export exists (even a small one), run `dry-run` on it and check the sample output: the `people` values must be plain names, `no_sidecar` should be near zero, and `bad_people_shape` must be zero. If not, stop and tell the developer — the sidecar parsing was written from documentation, not a real export (acceptance criterion on #469).
-2. **Confirm the backup.** The photos volume already has an incremental chain, so no fresh seed is expected. Check that the latest snapshot under `/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/` on aurora is complete and recent (and, if unsure, read lucos_backups `scripts/seed-volume.py` before seeding anything). Do not run any large backup operation during the nightly backup window.
+2. **Confirm the backup** (the gate before the deletion; no trial restore is needed). Confirm a *current* incremental backup of both things the deletion touches: the photos volume (files) and the postgres data (rows).
+   - *Current* means by timestamp: taken after the last legitimate data change (the phone's last upload) and before the deletion starts. Take a fresh one right before the deletion if in doubt.
+   - Look under `volume-snapshots/<volume>/<date>/` on aurora (`/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/`, and the postgres equivalent). A top-level listing of the backup directory can wrongly show nothing (the lucas42/lucos#294 lesson).
+   - **This needs read access to aurora, which agents don't currently have:** the operator asks lucas42 to run the check, or to arrange access. The photos volume already has an incremental chain, so no fresh seed is expected; read lucos_backups `scripts/seed-volume.py` before seeding anything, and keep large backup operations out of the nightly window.
 3. *(No trial restore — see above.)*
-4. **Deletion — on the 7th of a month.** Retention keeps only the 6th-of-month snapshots for a year, so deleting on the 7th keeps a restore point from the day before. Confirm the 6th's snapshot completed first (step 2), then freeze the ids:
+4. **Deletion — on the 7th of a month.** Retention keeps only the 6th-of-month snapshots for a year, so deleting on the 7th keeps a restore point from the day before. Confirm the 6th's snapshot completed first (step 2), and that the step 2 snapshot postdates the last data change, then freeze the ids:
 
    ```bash
    docker exec lucos_photos_postgres psql -U photos -d photos -Atc \
