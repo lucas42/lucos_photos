@@ -22,10 +22,10 @@ Standard library only. Run it from a stock python image on avalon, with the expo
 
 ```bash
 W=/srv/photos-migration        # holds takeout/, import.env, migration-ledger.sqlite, ids.txt
-run() { docker run --rm -e PHOTOS_API_KEY_FILE=/work/import.env -v "$W":/work -v "$PWD/migration":/app:ro -w /work python:3.14-slim python /app/google_takeout_import.py "$@"; }
+run() { docker run --rm --user "$(id -u):$(id -g)" -e PHOTOS_API_KEY_FILE=/work/import.env -v "$W":/work -v "$PWD/migration":/app:ro -w /work python:3.14-slim python /app/google_takeout_import.py "$@"; }
 ```
 
-The script reads `KEY_LUCOS_PHOTOS` from `import.env` itself (quotes stripped), so the key never appears in the environment, on a command line or in `docker inspect`.
+`--user` makes the container write the ledger and skipped logs as the operator, not root (otherwise the final clean-up needs `sudo` for them). The script reads `KEY_LUCOS_PHOTOS` from `import.env` itself (quotes stripped), so the key never appears in the environment, on a command line or in `docker inspect`.
 
 Run long commands under `Monitor`/`nohup` so they can be stopped part-way. Subcommands:
 
