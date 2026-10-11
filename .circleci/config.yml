@@ -64,7 +64,7 @@ workflows:
           requires:
             - test-api
             - test-worker
-                  - test-db-integration
+            - test-db-integration
             - lucos/build
           filters:
             branches:
