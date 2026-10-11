@@ -591,11 +591,10 @@ def _enqueue_profile_picture(person_id: str) -> None:
     try:
         from app.redis_client import get_redis
         from rq import Queue
-        from rq.job import Retry
-        from lucos_photos_common.jobs import generate_profile_picture
+        from lucos_photos_common.jobs import enqueue_profile_picture
         redis_conn = get_redis()
         queue = Queue("photos", connection=redis_conn)
-        queue.enqueue(generate_profile_picture, person_id, retry=Retry(max=3, interval=[10, 30, 60]))
+        enqueue_profile_picture(queue, person_id)
     except Exception as exc:
         print(f"Warning: failed to enqueue generate_profile_picture for {person_id}: {exc}", flush=True)
 

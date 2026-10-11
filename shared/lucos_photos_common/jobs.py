@@ -16,7 +16,8 @@ from uuid import UUID
 from loganne import updateLoganne
 from redis import Redis
 from rq import Queue
-from rq.job import Retry
+from rq.exceptions import NoSuchJobError
+from rq.job import Job, JobStatus, Retry
 
 from lucos_photos_common.database import SessionLocal
 from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus, photo_date_label
@@ -256,6 +257,49 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
 
 
 
+_PROFILE_PIC_WAITING = (JobStatus.QUEUED, JobStatus.SCHEDULED, JobStatus.DEFERRED)
+
+
+def _profile_picture_job_status(queue: Queue, job_id: str):
+    """Status of a profile-picture slot's job, or None if the slot is free."""
+    try:
+        return Job.fetch(job_id, connection=queue.connection).get_status()
+    except NoSuchJobError:
+        return None
+
+
+def enqueue_profile_picture(queue: Queue, person_id) -> None:
+    """Enqueue generate_profile_picture for a person, deduplicated across callers.
+
+    Two deterministic slots per person: `profilepic-<id>` and `profilepic-<id>-rerun`.
+    If either holds a job that hasn't started (queued/scheduled/deferred) nothing is
+    enqueued — it will read the DB after this change. Otherwise the primary slot is used
+    unless it's running, in which case the rerun slot picks up faces committed mid-run.
+    RQ doesn't dedupe by id itself (re-enqueueing an id overwrites the job and queues it
+    again), hence the explicit status checks. Non-fatal: errors are logged, not raised.
+    """
+    try:
+        primary_id = f"profilepic-{person_id}"
+        rerun_id = f"{primary_id}-rerun"
+        primary = _profile_picture_job_status(queue, primary_id)
+        rerun = _profile_picture_job_status(queue, rerun_id)
+
+        if primary in _PROFILE_PIC_WAITING or rerun in _PROFILE_PIC_WAITING:
+            logger.debug("enqueue_profile_picture: job already waiting for person %s", person_id)
+            return
+        if primary != JobStatus.STARTED:
+            job_id = primary_id
+        elif rerun != JobStatus.STARTED:
+            job_id = rerun_id
+        else:
+            logger.info("enqueue_profile_picture: both slots busy for person %s, skipping", person_id)
+            return
+        queue.enqueue(generate_profile_picture, str(person_id), job_id=job_id, retry=Retry(max=3, interval=[10, 30, 60]))
+        logger.info("enqueue_profile_picture: enqueued %s", job_id)
+    except Exception:
+        logger.exception("enqueue_profile_picture: failed to enqueue for person %s", person_id)
+
+
 def _enqueue_profile_picture_for_photo(photo_uuid) -> None:
     """Enqueue generate_profile_picture for each person detected in a photo.
 
@@ -279,8 +323,7 @@ def _enqueue_profile_picture_for_photo(photo_uuid) -> None:
             db.close()
 
         for pid in set(person_ids):
-            queue.enqueue(generate_profile_picture, pid, retry=Retry(max=3, interval=[10, 30, 60]))
-            logger.info("_enqueue_profile_picture_for_photo: enqueued profile picture generation for person %s", pid)
+            enqueue_profile_picture(queue, pid)
 
     except Exception:
         logger.exception("_enqueue_profile_picture_for_photo: failed to enqueue profile picture jobs for photo %s", photo_uuid)
@@ -298,8 +341,7 @@ def _enqueue_profile_picture_for_persons(person_ids) -> None:
         redis_conn = Redis.from_url(redis_url)
         queue = Queue("photos", connection=redis_conn)
         for pid in person_ids:
-            queue.enqueue(generate_profile_picture, pid, retry=Retry(max=3, interval=[10, 30, 60]))
-            logger.info("_enqueue_profile_picture_for_persons: enqueued profile picture generation for person %s", pid)
+            enqueue_profile_picture(queue, pid)
     except Exception:
         logger.exception("_enqueue_profile_picture_for_persons: failed to enqueue profile picture jobs")
 
