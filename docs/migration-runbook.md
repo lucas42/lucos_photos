@@ -87,12 +87,20 @@ The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry).
    **Coverage and presence check (lucas42, one command, no manual comparison).** A photo uploaded after 2026-10-06 (e.g. by a phone resync) wouldn't be in the 10-06 snapshot, so every frozen original must be in it. From a machine that can reach both avalon and aurora, this prints the number of frozen originals **missing** from the snapshot (expected `0`) and checks both backups exist:
 
    ```bash
-   S=/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/2026-10-06
-   ssh aurora "ls -d $S /share/backups/host/avalon/volume/lucos_photos_postgres_data.2026-10-06.tar.gz" \
-     && comm -13 <(ssh aurora "ls $S/originals" | sort) <(ssh avalon.s.l42.eu 'sudo cat /srv/photos-migration/original-names.txt') | wc -l
+   (
+     set -eo pipefail   # any failed ssh/sudo aborts the check instead of printing a clean-looking 0
+     S=/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/2026-10-06
+     ssh aurora "ls -d $S /share/backups/host/avalon/volume/lucos_photos_postgres_data.2026-10-06.tar.gz" > /dev/null
+     snap=$(ssh aurora "ls $S/originals" | sort)
+     want=$(ssh avalon.s.l42.eu 'sudo cat /srv/photos-migration/original-names.txt' | sort)
+     test -n "$snap" && test -n "$want"
+     echo "frozen originals:     $(printf '%s\n' "$want" | wc -l)   (must equal the id count the operator showed you)"
+     echo "originals in snapshot: $(printf '%s\n' "$snap" | wc -l)"
+     echo "frozen but missing:    $(comm -13 <(printf '%s\n' "$snap") <(printf '%s\n' "$want") | wc -l)   (must be 0)"
+   )
    ```
 
-   If `ls` reports a missing path, step 2 fails. If the number isn't `0`, send the team the output of the same `comm` with `| head -20` instead of `| wc -l` (the names are file hashes, safe to share); those photos are covered by the nightly backup for a week, so re-run the check after the next backup or exclude them from `ids.txt`. This command is untested (it assumes `aurora` is an ssh alias you can reach, a snapshot layout of `<snapshot>/originals/<sha>.<ext>`, and that listing ~78k names over ssh is fine); if it doesn't work, tell the team rather than comparing by hand.
+   If any command errors, the check has not passed (it stops at the first failure and prints no counts). If a path is missing, step 2 fails. If "frozen originals" differs from the id count, or "frozen but missing" isn't `0`, send the team the output of the same `comm` with `| head -20` instead of `| wc -l` (the names are file hashes, safe to share); those photos are covered by the nightly backup for a week, so re-run the check after the next backup or exclude them from `ids.txt`. The shell logic was tested with stubbed `ssh` (clean pass, detects a missing original, aborts on a failed `sudo`/`ssh`), but it hasn't run against the real hosts (it assumes `aurora` is an ssh alias you can reach, a snapshot layout of `<snapshot>/originals/<sha>.<ext>`, and that listing ~78k names over ssh is fine); if it doesn't work, tell the team rather than comparing by hand.
 
    After his go-ahead on the count: `delete "$W/ids.txt" --expected-count <wc -l>`.
 5. **Trial import.** With the key in place, `import <dir> --limit 200`, watching `docker stats` and `free -h` on avalon. Tune `--concurrency` (start at 2, never above 4) and check the backup run that night still finishes in its window.
