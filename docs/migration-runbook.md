@@ -13,7 +13,7 @@ No separate trial restore is required beforehand. lucas42 decided this in chat o
 |---|---|
 | Request the Takeout export, authorise its transfer to avalon (e.g. one-off `rclone authorize drive` token) | lucas42 |
 | Create the import key (done), and put it on avalon with the two commands under "Handing the key to avalon" below | lucas42 |
-| Go-ahead on the deletion count (step 4) | lucas42 |
+| Run the backup coverage check (step 4's one command) and give the go-ahead on the deletion count | lucas42 |
 | Everything else (backup check, trial, deletion, import, pre-naming, resume, checks) | SRE / sysadmin via prod SSH + docker |
 
 ## The script
@@ -65,22 +65,44 @@ The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry).
 ## Steps
 
 1. **First look at the export.** As soon as any Takeout export exists (even a small one), run `dry-run` on it and check the sample output: the `people` values must be plain names, `no_sidecar` should be near zero, and `bad_people_shape` must be zero. If not, stop and tell the developer — the sidecar parsing was written from documentation, not a real export (acceptance criterion on #469).
-2. **Confirm the backup** (the gate before the deletion; no trial restore is needed). Confirm a *current* incremental backup of both things the deletion touches: the photos volume (files) and the postgres data (rows).
-   - *Current* means by timestamp: taken after the last legitimate data change (the phone's last upload) and before the deletion starts. Take a fresh one right before the deletion if in doubt.
-   - Look under `volume-snapshots/<volume>/<date>/` on aurora (`/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/`, and the postgres equivalent). A top-level listing of the backup directory can wrongly show nothing (the lucas42/lucos#294 lesson).
-   - **This needs read access to aurora, which agents don't currently have:** the operator asks lucas42 to run the check, or to arrange access. The photos volume already has an incremental chain, so no fresh seed is expected; read lucos_backups `scripts/seed-volume.py` before seeding anything, and keep large backup operations out of the nightly window.
+2. **Confirm the backups exist** (first half of the gate before the deletion; no trial restore is needed). Everything the deletion removes was taken before 2026-02-01 and originals are immutable (stored by SHA-256), so any pre-deletion backup that contains those files is as good as the day before's, and the date of the deletion doesn't matter. Use the 2026-10-06 backups: they sit on the long retention track (kept until about 2027-10-06, the 6th of each month for a year, for both volumes). Confirm both are present on aurora:
+   - the photos snapshot directory `/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/2026-10-06/` (a top-level listing of the backup directory can wrongly show nothing: the lucas42/lucos#294 lesson);
+   - the postgres tarball `lucos_photos_postgres_data.2026-10-06.tar.gz` under `host/avalon/volume/` on aurora. Postgres uses the default daily tarball strategy, *not* `volume-snapshots/`. The copy under `/srv/backups/local/volume/` on avalon does **not** count for this gate: it sits on avalon's single disk, so it would be lost in exactly the host failure a long-lived restore point exists to survive (avalon's disk already died once, lucas42/lucos#294).
+
+   **Nobody on the team can see aurora, so for now lucas42 performs these checks** (or arranges read access for the operator). They are in the one command in step 4.
 3. *(No trial restore — see above.)*
-4. **Deletion — on the 7th of a month.** Retention keeps only the 6th-of-month snapshots for a year, so deleting on the 7th keeps a restore point from the day before. Confirm the 6th's snapshot completed first (step 2), and that the step 2 snapshot postdates the last data change, then freeze the ids:
+4. **Deletion.** The date doesn't matter; run it once the checks below pass. First freeze the ids and the matching original filenames in one query, and show lucas42 the counts:
 
    ```bash
    docker exec lucos_photos_postgres psql -U photos -d photos -Atc \
-     "SELECT id FROM media_item WHERE taken_at < '2026-02-01T00:00:00Z' ORDER BY id" > "$W/ids.txt"
+     "SELECT id, sha256_hash || '.' || file_extension FROM media_item WHERE taken_at < '2026-02-01T00:00:00Z' ORDER BY id" > "$W/frozen.txt"
+   cut -d'|' -f1 "$W/frozen.txt" > "$W/ids.txt"; cut -d'|' -f2 "$W/frozen.txt" | sort > "$W/original-names.txt"
    wc -l "$W/ids.txt"
    docker exec lucos_photos_postgres psql -U photos -d photos -Atc \
      "SELECT count(*) FROM media_item WHERE taken_at IS NULL"
    ```
 
-   Show lucas42 both counts. Rows with a null `taken_at` are *not* in the list; decide about them explicitly before deleting. After his go-ahead: `delete "$W/ids.txt" --expected-count <wc -l>`.
+   Rows with a null `taken_at` are *not* in the list; decide about them explicitly before deleting.
+
+   **Coverage and presence check (lucas42, one command, no manual comparison).** A photo uploaded after 2026-10-06 (e.g. by a phone resync) wouldn't be in the 10-06 snapshot, so every frozen original must be in it. From a machine that can reach both avalon and aurora, this prints the number of frozen originals **missing** from the snapshot (expected `0`) and checks both backups exist:
+
+   ```bash
+   (
+     set -eo pipefail   # any failed ssh/sudo aborts the check instead of printing a clean-looking 0
+     S=/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/2026-10-06
+     ssh aurora "ls -d $S /share/backups/host/avalon/volume/lucos_photos_postgres_data.2026-10-06.tar.gz" > /dev/null
+     snap=$(ssh aurora "ls $S/originals" | sort)
+     want=$(ssh avalon.s.l42.eu 'sudo cat /srv/photos-migration/original-names.txt' | sort)
+     test -n "$snap" && test -n "$want"
+     echo "frozen originals:     $(printf '%s\n' "$want" | wc -l)   (must equal the id count the operator showed you)"
+     echo "originals in snapshot: $(printf '%s\n' "$snap" | wc -l)"
+     echo "frozen but missing:    $(comm -13 <(printf '%s\n' "$snap") <(printf '%s\n' "$want") | wc -l)   (must be 0)"
+   )
+   ```
+
+   If any command errors, the check has not passed (it stops at the first failure and prints no counts). If a path is missing, step 2 fails. If "frozen originals" differs from the id count, or "frozen but missing" isn't `0`, send the team the output of the same `comm` with `| head -20` instead of `| wc -l` (the names are file hashes, safe to share); those photos are covered by the nightly backup for a week, so re-run the check after the next backup or exclude them from `ids.txt`. The shell logic was tested with stubbed `ssh` (clean pass, detects a missing original, aborts on a failed `sudo`/`ssh`), but it hasn't run against the real hosts (it assumes `aurora` is an ssh alias you can reach, a snapshot layout of `<snapshot>/originals/<sha>.<ext>`, and that listing ~78k names over ssh is fine); if it doesn't work, tell the team rather than comparing by hand.
+
+   After his go-ahead on the count: `delete "$W/ids.txt" --expected-count <wc -l>`.
 5. **Trial import.** With the key in place, `import <dir> --limit 200`, watching `docker stats` and `free -h` on avalon. Tune `--concurrency` (start at 2, never above 4) and check the backup run that night still finishes in its window.
 6. **Full import.** `import <dir>`. If it is interrupted, or reports failures, run the exact same command again: the ledger skips everything already confirmed. Throttle to what the nightly backup copy can absorb (about 11MB/s over the home WAN leg); a full-speed import makes every night a large incremental.
 7. **Pre-naming.** Once `import` finishes with no failures, run `prename`. It waits for each photo to finish processing (the API answers 409 until then), runs Tier 1 across the whole batch, and only then Tier 2. It is also resumable. Don't run it on a partial import: Tier 2 depends on Tier 1 having assigned confirmed faces across the whole batch.
@@ -89,7 +111,7 @@ The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry).
    - spot-check a few photos in `.photo-metadata`: taken date and description match the sidecars;
    - a few named people have photos and sensible face assignments; remaining duplicates (spelling variants) are merged with `POST /people/merge`;
    - `/_info` is healthy and the worker queue has drained.
-9. **Revoke the import key** (owner: the operator, within 48 hours of step 8 passing). Delete `import.env` from avalon, ask lucas42 to run `ssh -p 2202 creds.l42.eu "rm lucos_photos_import/production => lucos_photos/production"`, then redeploy lucos_photos and confirm the key name is gone from the api's `CLIENT_KEYS` (names only, never values). Record the date on #577.
+9. **Revoke the import key** (owner: the operator, within 48 hours of step 8 passing). Delete `import.env` from avalon, ask lucas42 to run `ssh -p 2202 creds.l42.eu "rm lucos_photos_import/production => lucos_photos/production"`, then redeploy lucos_photos and confirm the key name is gone from the api's `CLIENT_KEYS` (names only, never values). Record the date on #577. Finally, once everything is verified complete, remove the whole `/srv/photos-migration` directory (export, ledger, id file): agents empty it, then lucas42 removes the root-owned directory itself (`ssh avalon.s.l42.eu 'sudo rmdir /srv/photos-migration'`).
 
 ## Resume and failure handling
 
