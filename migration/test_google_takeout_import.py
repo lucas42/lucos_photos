@@ -40,6 +40,20 @@ class SidecarMatching(unittest.TestCase):
     def test_edited_copy_uses_original_sidecar(self):
         self.assertEqual(self.match("IMG-edited.jpg", "IMG.jpg.json"), "IMG.jpg.json")
 
+    def test_edited_copy_with_counter(self):
+        self.assertEqual(self.match("DSC_000008-edited(8).JPG", "DSC_000008.JPG.supplemental-metadata(8).json"),
+                         "DSC_000008.JPG.supplemental-metadata(8).json")
+
+    def test_duplicate_without_its_own_counter_sidecar_is_not_matched_to_the_plain_one(self):
+        # a different photo can share the filename, so its date/people must not be borrowed
+        self.assertIsNone(self.match("DSC_2513(1).JPG", "DSC_2513.JPG.supplemental-metadata.json"))
+        self.assertIsNone(self.match("DSC_000008-edited(10).JPG", "DSC_000008.JPG.supplemental-metadata.json"))
+
+    def test_counter_sidecar_preferred_over_the_plain_one_and_plain_edited(self):
+        self.assertEqual(self.match("DSC(2).JPG", "DSC.JPG.supplemental-metadata.json", "DSC.JPG.supplemental-metadata(2).json"),
+                         "DSC.JPG.supplemental-metadata(2).json")
+        self.assertEqual(self.match("DSC-edited.JPG", "DSC.JPG.supplemental-metadata.json"), "DSC.JPG.supplemental-metadata.json")
+
     def test_no_sidecar(self):
         self.assertIsNone(self.match("a.jpg", "b.jpg.json"))
 
