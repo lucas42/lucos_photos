@@ -53,11 +53,14 @@ Rules for everyone afterwards: don't `cat` the file, run `env`, enable `set -x`,
 
 The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry). `import` and `prename` contain no delete call; the only delete path is the explicit `delete` subcommand, which needs a frozen id file and a matching `--expected-count`.
 
-**Lifetime.** Revocation is the real cleanup, deleting the file is secondary (`shred` means little on a journaling filesystem):
+**Lifetime** (lucos-security). The limit is tied to the migration, not the calendar:
 
-1. Delete `import.env` as soon as the last run has finished, not at the end of the whole migration.
-2. Revoke the key once the import is verified complete: `ssh -p 2202 creds.l42.eu "rm lucos_photos_import/production => lucos_photos/production"`, then redeploy lucos_photos.
-3. Outer limit: seven days after the first use of the key (the deletion, step 4, is its first use). A full import may take longer than that (about 200 photos an hour at the worker's measured ceiling is over two weeks for 78k), so expect to revoke and mint a fresh key partway; that is intended, not a failure.
+- **Primary:** revoke within 48 hours of the import being verified complete (step 9).
+- **Backstop:** a hard limit of 21 days from first use (the deletion, step 4, is its first use). If the import isn't done by then, extending is a deliberate decision recorded on #577, not a default.
+- **Stall rule:** if the import is stopped or stalled for more than 3 days, revoke rather than leaving a deletion-capable key idle on a host, and re-mint when it restarts.
+- Revocation is the real cleanup; deleting the file is secondary (`shred` means little on a journaling filesystem). Delete `import.env` right after the last run finishes, not at the end of the migration.
+
+**Owner:** whoever runs the import (SRE/sysadmin) owns revocation and the dates above, and prompts lucas42 for the creds command, which only he can run.
 
 ## Steps
 
@@ -83,6 +86,7 @@ The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry).
    - spot-check a few photos in `.photo-metadata`: taken date and description match the sidecars;
    - a few named people have photos and sensible face assignments; remaining duplicates (spelling variants) are merged with `POST /people/merge`;
    - `/_info` is healthy and the worker queue has drained.
+9. **Revoke the import key** (owner: the operator, within 48 hours of step 8 passing). Delete `import.env` from avalon, ask lucas42 to run `ssh -p 2202 creds.l42.eu "rm lucos_photos_import/production => lucos_photos/production"`, then redeploy lucos_photos and confirm the key name is gone from the api's `CLIENT_KEYS` (names only, never values). Record the date on #577.
 
 ## Resume and failure handling
 
