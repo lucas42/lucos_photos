@@ -79,6 +79,14 @@ class SidecarShapeError(Exception):
     pass
 
 
+class Fatal(Exception):
+    """Something is wrong with the whole run (bad key, wrong URL), not one file."""
+
+
+REJECTED_STATUSES = (400, 413, 415, 422)  # per-file refusals: the server will never accept this file
+FATAL_STATUSES = (401, 403, 404)
+
+
 def parse_sidecar(path):
     """Return (taken_seconds | None, description | None, [people names]). Raises SidecarShapeError
     if `people` isn't the documented list of {"name": str} objects."""
@@ -127,6 +135,10 @@ class Ledger:
     def uploaded(self, path):
         with self.lock:
             return self.db.execute("SELECT 1 FROM uploaded WHERE path=?", (path,)).fetchone() is not None
+
+    def uploaded_ids(self):
+        with self.lock:
+            return {r[0] for r in self.db.execute("SELECT photo_id FROM uploaded")}
 
     def record_upload(self, path, photo_id, names):
         with self.lock:
@@ -318,10 +330,13 @@ def prename_pass(api, ledger, tier, args):
                 done += 1
             elif status == 409 and json.loads(data).get("processingStatus") != "failed":
                 waiting += 1
-            else:
+            elif status in (404, 409, 422):
+                # photo gone, or failed processing, or unusable names: nothing more to do for this one
                 ledger.mark_prenamed(path, tier)
                 failed += 1
                 log(f"WARNING tier {tier} {path}: HTTP {status} {data[:200]!r}")
+            else:
+                sys.exit(f"prename: HTTP {status} {data[:200]!r}; stopping (check the key and --base-url, then re-run to resume)")
         if waiting:
             log(f"tier {tier}: {waiting} photo(s) still processing; waiting 60s")
             time.sleep(60)
@@ -338,7 +353,9 @@ def cmd_import(args):
     def upload(item):
         rel, full, taken, description, names = item
         status, data = multipart_upload(api, full, taken * 1000, description)
-        if 400 <= status < 500:
+        if status in FATAL_STATUSES:
+            raise Fatal(f"HTTP {status} from POST /photos; check the key and --base-url")
+        if status in REJECTED_STATUSES:
             # The server won't ever accept this file (e.g. invalid image); record it so a resume doesn't resend it.
             ledger.record_upload(rel, f"rejected-{status}", [])
             unmatched.write(f"rejected-{status}\t{rel}\t{data[:200]!r}\n")
@@ -350,7 +367,7 @@ def cmd_import(args):
         return rel
 
     with unmatched, ThreadPoolExecutor(args.concurrency) as pool:
-        inflight = {}
+        inflight, fatal = {}, []
 
         def drain(block):
             if not inflight:
@@ -363,11 +380,15 @@ def cmd_import(args):
                     stats["uploaded"] += 1
                     if stats["uploaded"] % 100 == 0:
                         log("progress: " + json.dumps(stats))
+                except Fatal as exc:
+                    fatal.append(exc)
                 except Exception as exc:
                     stats["failed"] += 1
                     log(f"FAILED {rel}: {exc}")
 
         for item in scan(args.takeout_dir, stats, unmatched):
+            if fatal:
+                break
             stats["to_import"] += 1
             if ledger.uploaded(item[0]):
                 stats["already_uploaded"] += 1
@@ -383,6 +404,9 @@ def cmd_import(args):
         while inflight:
             drain(True)
     log("upload phase finished: " + json.dumps(stats))
+    if fatal:
+        log(f"ABORTED: {fatal[0]}")
+        return 2
     if stats["failed"]:
         log("Some uploads failed; re-run the same command to retry them (the ledger skips the rest).")
     return 1 if stats["failed"] else 0
@@ -412,6 +436,11 @@ def cmd_delete(args):
     for photo_id in ids:
         uuid.UUID(photo_id)
     api, ledger = Api(args.base_url, key), Ledger(args.ledger)
+    imported = ledger.uploaded_ids() & set(ids)
+    if imported:
+        sys.exit(f"{len(imported)} id(s) in {args.ids_file} were uploaded by this import (see the ledger); "
+                 "deleting them would leave the ledger skipping photos that no longer exist. "
+                 "Run the deletion before any import, or rebuild the id list.")
     done = skipped = missing = 0
     for photo_id in ids:
         if ledger.deleted(photo_id):

@@ -91,7 +91,7 @@ class FakePhotos(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         self._record(body)
         if self.path == "/photos":
-            status = 422 if b"rejectme" in body else 201
+            status = 422 if b"rejectme" in body else 401 if self.headers["Authorization"] == "Bearer wrong" else 201
             self._reply(status, json.dumps({"id": f"id-{len(self.log)}"}).encode())
         else:
             self._reply(200, b"{}")
@@ -166,6 +166,19 @@ class EndToEnd(unittest.TestCase):
         self.run_import()
         self.assertEqual(len(self.uploads()), 1)
 
+    def test_bad_key_aborts_and_records_nothing(self):
+        for i in range(5):
+            self.add(f"{i}.jpg", i + 1)
+        os.environ["PHOTOS_API_KEY"] = "wrong"
+
+        self.assertEqual(self.run_import(), 2)
+
+        os.environ["PHOTOS_API_KEY"] = "secret"
+        self.assertEqual(self.run_import(), 0)
+        ids = imp.Ledger(self.ledger).uploaded_ids()
+        self.assertEqual(len(ids), 5)
+        self.assertFalse(any(i.startswith("rejected") for i in ids))
+
     def test_limit_stops_early(self):
         for i in range(5):
             self.add(f"{i}.jpg", i + 1)
@@ -184,6 +197,16 @@ class EndToEnd(unittest.TestCase):
 
         imp.main(["prename", "--base-url", self.base, "--ledger", self.ledger])
         self.assertEqual(len([e for e in FakePhotos.log if e[1].endswith("/prename")]), 2)
+
+    def test_delete_refuses_ids_this_import_uploaded(self):
+        uploaded = "00000000-0000-0000-0000-000000000009"
+        imp.Ledger(self.ledger).record_upload("a.jpg", uploaded, [])
+        ids_file = Path(self.tmp.name) / "ids.txt"
+        ids_file.write_text(f"00000000-0000-0000-0000-000000000001\n{uploaded}\n")
+
+        with self.assertRaises(SystemExit):
+            imp.main(["delete", str(ids_file), "--base-url", self.base, "--ledger", self.ledger, "--expected-count", "2"])
+        self.assertEqual([e for e in FakePhotos.log if e[0] == "DELETE"], [])
 
     def test_delete_requires_matching_count_and_resumes(self):
         ids = [f"00000000-0000-0000-0000-00000000000{i}" for i in range(3)]
