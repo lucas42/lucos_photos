@@ -12,7 +12,7 @@ from typing import Annotated
 from urllib.parse import urlencode
 
 import mimeparse
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse, Response
 from fastapi.templating import Jinja2Templates
 from PIL import Image
@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import verify_key, verify_session_or_key
 from app.database import get_db
+from app.routers.people import _enqueue_profile_picture, delete_person_if_emptied
 from app.redis_client import enqueue_process_media
 from app.serializers import face_to_dict_simple, person_to_dict, photo_to_dict, photo_url
 from app.services import emit_loganne_event
@@ -260,7 +261,11 @@ async def upload_photo(
     db: Session = Depends(get_db),
     x_taken_at: Annotated[str | None, Header()] = None,
     x_description: Annotated[str | None, Header()] = None,
+    description: Annotated[str | None, Form()] = None,
 ):
+    # A description form field takes precedence over the X-Description header: headers can't
+    # carry newlines or non-ASCII text, which Google Takeout descriptions routinely contain.
+    x_description = description if description is not None else x_description
     content_type = file.content_type or ""
     filename = file.filename or ""
 
@@ -633,11 +638,23 @@ async def delete_photo(
     media_type = photo.media_type
 
     # Delete dependent rows manually (no cascade defined on the models)
+    person_ids = {pid for (pid,) in db.query(Face.person_id).filter(Face.photo_id == photo.id, Face.person_id.isnot(None))}
+    # A person's profile picture can point at this photo; release it (FK) and regenerate afterwards.
+    profile_person_ids = [pid for (pid,) in db.query(Person.id).filter(Person.profile_photo_id == photo.id)]
+    db.query(Person).filter(Person.profile_photo_id == photo.id).update(
+        {Person.profile_photo_id: None, Person.profile_auto_generated: None}, synchronize_session=False
+    )
     db.query(Face).filter(Face.photo_id == photo.id).delete()
     db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).delete()
     db.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo.id).delete()
     db.delete(photo)
+    db.flush()
+    for person_id in person_ids:
+        delete_person_if_emptied(db, person_id)
     db.commit()
+    for person_id in profile_person_ids:
+        if db.query(Person.id).filter(Person.id == person_id).first() is not None:
+            _enqueue_profile_picture(str(person_id))
 
     # Remove physical files after the DB commit so a failed file deletion doesn't
     # leave an orphaned DB row. Missing files are silently ignored.
