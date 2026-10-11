@@ -667,6 +667,32 @@ class TestSweepPerItemBackoffIntegration:
         mock_sync_names.assert_called_once()
 
 
+    def test_contact_name_sync_runs_once_per_gate_interval(self, db_session):
+        fake_redis = _make_fake_redis()
+        mock_queue = _make_mock_queue()
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs.cluster_faces"), \
+             patch("lucos_photos_common.jobs.sweep_contact_display_names") as mock_sync_names:
+            sweep_pending_photos(fake_redis)
+            sweep_pending_photos(fake_redis)
+
+        mock_sync_names.assert_called_once()
+
+    def test_contact_name_sync_retries_next_pass_after_failure(self, db_session):
+        fake_redis = _make_fake_redis()
+        mock_queue = _make_mock_queue()
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs.cluster_faces") as mock_cluster_faces, \
+             patch("lucos_photos_common.jobs.sweep_contact_display_names", side_effect=[RuntimeError("boom"), None]) as mock_sync_names:
+            sweep_pending_photos(fake_redis)  # sync fails; must not stop the rest of the sweep
+            sweep_pending_photos(fake_redis)
+
+        assert mock_sync_names.call_count == 2
+        assert mock_cluster_faces.call_count == 2
+
+
 class TestSweepMissingProfilePictures:
     """Tests for the backstop that enqueues generate_profile_picture for persons who have
     a face but no profile picture — the equivalent of the pending/processing sweep above,

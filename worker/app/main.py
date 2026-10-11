@@ -46,6 +46,8 @@ REENQUEUE_KEY_TTL_SECONDS = BACKOFF_CEILING_SECONDS * 2
 SWEEP_CHRONIC_THRESHOLD = int(os.environ.get("SWEEP_CHRONIC_THRESHOLD", 5))
 
 
+CONTACT_NAME_SYNC_GATE_KEY = "sweep:contact_name_sync_gate"
+CONTACT_NAME_SYNC_INTERVAL_SECONDS = int(os.environ.get("CONTACT_NAME_SYNC_INTERVAL_SECONDS", 3600))
 WORKER_HEARTBEAT_KEY = "worker:heartbeat"
 # Gauges of currently chronically-stuck items, recomputed from scratch every sweep pass
 # (see sweep_pending_photos) — never a SCAN over sweep:* keys.
@@ -341,10 +343,13 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
     except Exception:
         logger.exception("sweep: error during face clustering")
 
-    # Sync person display_names with lucos_contacts to catch any drift.
+    # Sync person display_names with lucos_contacts to catch drift (the Loganne webhook is the
+    # primary path). Time-gated: the key is only set after a successful run, so failures retry next pass.
     try:
-        from lucos_photos_common.jobs import sweep_contact_display_names
-        sweep_contact_display_names()
+        if redis_conn.get(CONTACT_NAME_SYNC_GATE_KEY) is None:
+            from lucos_photos_common.jobs import sweep_contact_display_names
+            sweep_contact_display_names()
+            redis_conn.set(CONTACT_NAME_SYNC_GATE_KEY, "1", ex=CONTACT_NAME_SYNC_INTERVAL_SECONDS)
     except Exception:
         logger.exception("sweep: error during contact display name sync")
 

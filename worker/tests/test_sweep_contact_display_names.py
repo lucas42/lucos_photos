@@ -41,6 +41,18 @@ class TestSweepContactDisplayNames:
         assert len(captured_urls) == 1
         assert "//" not in captured_urls[0].replace("https://", "")
 
+    def test_sends_system_user_agent(self, db_session, monkeypatch):
+        monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.l42.eu")
+        monkeypatch.setenv("KEY_LUCOS_CONTACTS", "testkey")
+        monkeypatch.setenv("SYSTEM", "lucos_photos")
+        _make_person(db_session, contact_id="42", display_name="Name")
+
+        with patch("httpx.get") as mock_get:
+            mock_get.return_value.json.return_value = {"name": "Name"}
+            sweep_contact_display_names()
+
+        assert mock_get.call_args.kwargs["headers"]["User-Agent"] == "lucos_photos"
+
     def test_updates_display_name_when_different(self, db_session, monkeypatch):
         """display_name is updated when the contacts API returns a different name."""
         monkeypatch.setenv("LUCOS_CONTACTS_ORIGIN", "https://contacts.l42.eu/")

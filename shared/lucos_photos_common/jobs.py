@@ -1181,7 +1181,7 @@ def refresh_contact_display_name(contact_id: str) -> None:
             try:
                 response = httpx.get(
                     f"{contacts_url}/people/{person.contact_id}",
-                    headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}"},
+                    headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}", "User-Agent": os.environ.get("SYSTEM", "")},
                     timeout=5.0,
                 )
                 response.raise_for_status()
@@ -1238,7 +1238,7 @@ def sweep_contact_display_names() -> None:
             try:
                 response = httpx.get(
                     f"{contacts_url}/people/{person.contact_id}",
-                    headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}"},
+                    headers={"Accept": "application/json", "Authorization": f"Bearer {contacts_key}", "User-Agent": os.environ.get("SYSTEM", "")},
                     timeout=5.0,
                 )
                 response.raise_for_status()
