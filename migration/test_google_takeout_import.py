@@ -69,6 +69,34 @@ class ParseSidecar(unittest.TestCase):
                 self.parse(json.dumps({"photoTakenTime": {"timestamp": "1"}, "people": people}))
 
 
+class Throttle(unittest.TestCase):
+    class Args:
+        max_pending = 200
+
+    def setUp(self):
+        self.sleeps = []
+        self._sleep, imp.time.sleep = imp.time.sleep, self.sleeps.append
+
+    def tearDown(self):
+        imp.time.sleep = self._sleep
+
+    def api(self, *readings):
+        readings = iter(readings)
+        return type("Api", (), {"pending_count": lambda self: next(readings)})()
+
+    def test_returns_once_the_queue_is_short_enough(self):
+        imp.throttle(self.api(500, 300, 100), self.Args)
+        self.assertEqual(len(self.sleeps), 2)
+
+    def test_fails_closed_when_queue_depth_stays_unreadable(self):
+        with self.assertRaises(imp.Fatal):
+            imp.throttle(self.api(*[None] * 50), self.Args)
+        self.assertEqual(len(self.sleeps), imp.UNKNOWN_QUEUE_LIMIT - 1)
+
+    def test_a_single_blip_is_tolerated(self):
+        imp.throttle(self.api(None, 5), self.Args)
+
+
 class LoadKey(unittest.TestCase):
     def test_reads_key_from_creds_env_file_without_other_vars(self):
         with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:

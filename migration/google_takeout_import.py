@@ -229,7 +229,10 @@ class Api:
             time.sleep(delay)
 
     def pending_count(self):
-        status, data = self.request("GET", "/_info")
+        try:
+            status, data = self.request("GET", "/_info")
+        except RuntimeError:
+            return None
         if status != 200:
             return None
         try:
@@ -307,10 +310,13 @@ def new_stats():
 
 def cmd_dry_run(args):
     stats = new_stats()
+    stats.update(videos=0, bytes_to_import=0)
     shown = 0
     with open(args.unmatched_log, "a") as unmatched:
-        for rel, _, taken, description, names in scan(args.takeout_dir, stats, unmatched):
+        for rel, full, taken, description, names in scan(args.takeout_dir, stats, unmatched):
             stats["to_import"] += 1
+            stats["bytes_to_import"] += os.path.getsize(full)
+            stats["videos"] += CONTENT_TYPES[full.rsplit(".", 1)[-1].lower()].startswith("video/")
             if names:
                 stats["named_photos"] += 1
                 if shown < 5:
@@ -319,13 +325,25 @@ def cmd_dry_run(args):
     log("dry run (nothing uploaded): " + json.dumps(stats))
 
 
+UNKNOWN_QUEUE_LIMIT = 10  # consecutive unreadable queue depths (about 5 minutes) before giving up
+
+
 def throttle(api, args):
-    """Block while the worker's pending queue is above the limit."""
+    """Block while the worker's pending queue is above the limit. Fails closed: if the queue depth
+    can't be read for UNKNOWN_QUEUE_LIMIT checks in a row, abort rather than upload unthrottled."""
+    unknown = 0
     while True:
         pending = api.pending_count()
-        if pending is None or pending <= args.max_pending:
+        if pending is None:
+            unknown += 1
+            if unknown >= UNKNOWN_QUEUE_LIMIT:
+                raise Fatal("can't read the worker queue depth from /_info; stop and look before resuming")
+            log(f"queue depth unreadable ({unknown}/{UNKNOWN_QUEUE_LIMIT}); pausing 30s")
+        elif pending <= args.max_pending:
             return
-        log(f"queue depth {pending} > {args.max_pending}; pausing 30s")
+        else:
+            unknown = 0
+            log(f"queue depth {pending} > {args.max_pending}; pausing 30s")
         time.sleep(30)
 
 
@@ -410,7 +428,11 @@ def cmd_import(args):
             if args.limit and stats["uploaded"] + len(inflight) >= args.limit:
                 break
             if stats["to_import"] % 20 == 0:
-                throttle(api, args)
+                try:
+                    throttle(api, args)
+                except Fatal as exc:
+                    fatal.append(exc)
+                    break
             while len(inflight) >= args.concurrency:
                 drain(True)
             inflight[pool.submit(upload, item)] = item[0]
