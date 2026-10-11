@@ -69,6 +69,29 @@ class ParseSidecar(unittest.TestCase):
                 self.parse(json.dumps({"photoTakenTime": {"timestamp": "1"}, "people": people}))
 
 
+class LoadKey(unittest.TestCase):
+    def test_reads_key_from_creds_env_file_without_other_vars(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
+            f.write('SYSTEM="lucos_photos_import"\nKEY_LUCOS_PHOTOS="abc123"\n')
+        os.environ["PHOTOS_API_KEY_FILE"] = f.name
+        try:
+            self.assertEqual(imp.load_key(), "abc123")
+        finally:
+            del os.environ["PHOTOS_API_KEY_FILE"]
+            os.unlink(f.name)
+
+    def test_exits_when_file_has_no_key(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
+            f.write("SYSTEM=x\n")
+        os.environ["PHOTOS_API_KEY_FILE"] = f.name
+        try:
+            with self.assertRaises(SystemExit):
+                imp.load_key()
+        finally:
+            del os.environ["PHOTOS_API_KEY_FILE"]
+            os.unlink(f.name)
+
+
 class FakePhotos(BaseHTTPRequestHandler):
     log = []
     lock = threading.Lock()

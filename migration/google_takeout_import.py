@@ -32,6 +32,22 @@ SIDECAR_STEM_LIMIT = 46  # Takeout truncates sidecar names to this many chars be
 CHUNK = 64 * 1024
 
 
+def load_key():
+    """The API key, from the env file named by PHOTOS_API_KEY_FILE (preferred: it stays out of container
+    metadata) or from PHOTOS_API_KEY. Never logged."""
+    path = os.environ.get("PHOTOS_API_KEY_FILE")
+    if path:
+        for line in open(path, encoding="utf-8"):
+            name, _, value = line.strip().partition("=")
+            if name == "KEY_LUCOS_PHOTOS" and value.strip("\"'"):
+                return value.strip("\"'")
+        sys.exit(f"no KEY_LUCOS_PHOTOS entry in {path}")
+    key = os.environ.get("PHOTOS_API_KEY")
+    if not key:
+        sys.exit("set PHOTOS_API_KEY_FILE (path to the creds .env) or PHOTOS_API_KEY")
+    return key
+
+
 def log(msg):
     print(f"{datetime.now(timezone.utc).strftime('%H:%M:%S')} {msg}", flush=True)
 
@@ -344,9 +360,7 @@ def prename_pass(api, ledger, tier, args):
 
 
 def cmd_import(args):
-    key = os.environ.get("PHOTOS_API_KEY")
-    if not key:
-        sys.exit("PHOTOS_API_KEY must be set")
+    key = load_key()
     api, ledger, stats = Api(args.base_url, key), Ledger(args.ledger), new_stats()
     unmatched = open(args.unmatched_log, "a")
 
@@ -413,9 +427,7 @@ def cmd_import(args):
 
 
 def cmd_prename(args):
-    key = os.environ.get("PHOTOS_API_KEY")
-    if not key:
-        sys.exit("PHOTOS_API_KEY must be set")
+    key = load_key()
     api, ledger = Api(args.base_url, key), Ledger(args.ledger)
     prename_pass(api, ledger, 1, args)  # Tier 2 needs Tier 1's confirmed faces across the whole batch
     prename_pass(api, ledger, 2, args)
@@ -427,9 +439,7 @@ def cmd_prename(args):
 # ---------------------------------------------------------------------------
 
 def cmd_delete(args):
-    key = os.environ.get("PHOTOS_API_KEY")
-    if not key:
-        sys.exit("PHOTOS_API_KEY must be set")
+    key = load_key()
     ids = [line.strip() for line in open(args.ids_file) if line.strip()]
     if len(ids) != args.expected_count:
         sys.exit(f"{args.ids_file} has {len(ids)} ids but --expected-count is {args.expected_count}; refusing to delete")
