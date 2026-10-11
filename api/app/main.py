@@ -259,14 +259,14 @@ async def get_worker_memory_rss_bytes() -> int | None:
     return None
 
 
-async def get_sweep_chronically_stuck_count() -> int | None:
-    """Read the worker's last-published chronically-stuck-item count from Redis, or None
-    if absent (worker hasn't completed a sweep pass yet, or has stopped — the key is TTL'd
-    the same way as the heartbeat, see worker/app/main.py sweep_pending_photos)."""
+async def get_sweep_chronically_stuck_count(kind: str) -> int | None:
+    """Read the worker's last-published chronically-stuck count for `kind` ("media" or
+    "persons") from Redis, or None if absent (worker hasn't completed a sweep pass yet, or
+    has stopped — the key is TTL'd, see worker/app/main.py sweep_pending_photos)."""
     try:
         redis_conn = get_redis()
         raw = await asyncio.wait_for(
-            asyncio.to_thread(redis_conn.get, "sweep:chronically_stuck_count"),
+            asyncio.to_thread(redis_conn.get, f"sweep:chronically_stuck_{kind}_count"),
             timeout=CHECK_TIMEOUT,
         )
         if raw is not None:
@@ -312,7 +312,8 @@ async def get_metrics() -> dict:
             log.debug("session.close() skipped in get_metrics: state error during cleanup")
 
     worker_rss = await get_worker_memory_rss_bytes()
-    chronic_count = await get_sweep_chronically_stuck_count()
+    chronic_media_count = await get_sweep_chronically_stuck_count("media")
+    chronic_persons_count = await get_sweep_chronically_stuck_count("persons")
 
     metrics = {
         "photo-count": {
@@ -333,10 +334,16 @@ async def get_metrics() -> dict:
             "value": worker_rss,
             "techDetail": "Worker process resident memory (RSS) in bytes",
         }
-    if chronic_count is not None:
-        metrics["sweep-chronically-stuck-count"] = {
-            "value": chronic_count,
-            "techDetail": "Number of media items/persons the sweep has re-enqueued past the chronic threshold",
+    caveat = "re-enqueued past the chronic threshold or stuck over an hour; a long queue during a bulk import can raise this without anything being wrong"
+    if chronic_media_count is not None:
+        metrics["sweep-chronically-stuck-media-count"] = {
+            "value": chronic_media_count,
+            "techDetail": f"Number of media items the sweep has {caveat}",
+        }
+    if chronic_persons_count is not None:
+        metrics["sweep-chronically-stuck-persons-count"] = {
+            "value": chronic_persons_count,
+            "techDetail": f"Number of persons (face but no profile picture) the sweep has {caveat}",
         }
     return metrics
 

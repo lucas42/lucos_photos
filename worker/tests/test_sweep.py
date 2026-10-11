@@ -500,6 +500,25 @@ class TestApplyReenqueueBackoff:
         assert is_chronic is True
         assert any("chronically stuck" in r.message for r in caplog.records)
 
+    def test_chronic_item_in_backoff_counts_but_does_not_warn(self, monkeypatch, caplog):
+        """Skipped passes still report chronic (for the gauge) but must not log per pass."""
+        fake_redis = _make_fake_redis()
+        clock = self._fixed_clock(monkeypatch)
+
+        fake_redis.hset("sweep:reenqueue:item-1", mapping={
+            "count": app_main.SWEEP_CHRONIC_THRESHOLD,
+            "first_enqueued_at": clock["now"] - 100000,
+            "last_enqueued_at": clock["now"],
+        })
+
+        enqueue_fn = MagicMock()
+        with caplog.at_level("INFO"):
+            is_chronic = app_main._apply_reenqueue_backoff(fake_redis, "reenqueue", "item-1", enqueue_fn)
+
+        assert is_chronic is True
+        enqueue_fn.assert_not_called()
+        assert not caplog.records
+
     def test_chronic_by_age_even_below_count_threshold(self, monkeypatch):
         """An item stuck continuously since before the ceiling is chronic even if its
         count hasn't reached SWEEP_CHRONIC_THRESHOLD."""
@@ -599,7 +618,7 @@ class TestSweepPerItemBackoffIntegration:
         assert args[1] == str(new_item.id)
 
     def test_chronic_gauge_published_to_redis(self, db_session, monkeypatch):
-        """A chronically-stuck item is counted in the sweep:chronically_stuck_count gauge."""
+        """A chronically-stuck item is counted in the sweep:chronically_stuck_media_count gauge."""
         clock = {"now": 1000.0}
         monkeypatch.setattr(app_main.time, "time", lambda: clock["now"])
 
@@ -620,7 +639,8 @@ class TestSweepPerItemBackoffIntegration:
              patch("lucos_photos_common.jobs.process_video", __name__="process_video"):
             sweep_pending_photos(fake_redis)
 
-        assert fake_redis.get(app_main.SWEEP_CHRONICALLY_STUCK_COUNT_KEY) == "1"
+        assert fake_redis.get(app_main.SWEEP_CHRONICALLY_STUCK_MEDIA_COUNT_KEY) == "1"
+        assert fake_redis.get(app_main.SWEEP_CHRONICALLY_STUCK_PERSONS_COUNT_KEY) == "0"
 
     def test_chronic_gauge_zero_when_nothing_chronic(self, db_session):
         fake_redis = _make_fake_redis()
@@ -629,7 +649,8 @@ class TestSweepPerItemBackoffIntegration:
         with patch("app.main.Queue", return_value=mock_queue):
             sweep_pending_photos(fake_redis)
 
-        assert fake_redis.get(app_main.SWEEP_CHRONICALLY_STUCK_COUNT_KEY) == "0"
+        assert fake_redis.get(app_main.SWEEP_CHRONICALLY_STUCK_MEDIA_COUNT_KEY) == "0"
+        assert fake_redis.get(app_main.SWEEP_CHRONICALLY_STUCK_PERSONS_COUNT_KEY) == "0"
 
     def test_clustering_and_contact_sync_always_run(self, db_session):
         """Unlike the old breaker (which could suppress the stuck-item re-enqueue),
@@ -858,4 +879,5 @@ class TestSweepMissingProfilePictures:
              patch("lucos_photos_common.jobs._enqueue_profile_picture_for_persons"):
             sweep_pending_photos(fake_redis)
 
-        assert fake_redis.get(app_main.SWEEP_CHRONICALLY_STUCK_COUNT_KEY) == "1"
+        assert fake_redis.get(app_main.SWEEP_CHRONICALLY_STUCK_PERSONS_COUNT_KEY) == "1"
+        assert fake_redis.get(app_main.SWEEP_CHRONICALLY_STUCK_MEDIA_COUNT_KEY) == "0"

@@ -166,55 +166,66 @@ class TestWorkerMemoryMetric:
 
 
 class TestSweepChronicallyStuckMetric:
-    """Tests for the sweep-chronically-stuck-count metric, surfaced from the Redis gauge
-    the worker's sweep publishes every pass (see lucas42/lucos_photos#479 — this replaced
-    the old 'is the breaker tripped' signal with the more useful chronic-item count)."""
+    """Tests for the sweep-chronically-stuck-media-count / -persons-count metrics, surfaced
+    from the Redis gauges the worker's sweep publishes every pass."""
 
-    def _mock_redis_with_chronic_count(self, count=3):
+    NAMES = {
+        "media": "sweep-chronically-stuck-media-count",
+        "persons": "sweep-chronically-stuck-persons-count",
+    }
+
+    def _mock_redis(self, **counts):
         mock_redis = MagicMock()
-        mock_redis.get.side_effect = lambda key: (
-            str(count).encode() if key == "sweep:chronically_stuck_count" else None
+        mock_redis.get.side_effect = lambda key: next(
+            (str(v).encode() for k, v in counts.items() if key == f"sweep:chronically_stuck_{k}_count"),
+            None,
         )
         return mock_redis
 
-    def test_metric_present_when_gauge_available(self, client):
-        mock_redis = self._mock_redis_with_chronic_count(count=3)
-        with patch("app.main.get_redis", return_value=mock_redis):
+    def test_both_metrics_present_and_independent(self, client):
+        with patch("app.main.get_redis", return_value=self._mock_redis(media=3, persons=7)):
             data = client.get("/_info").json()
-        assert "sweep-chronically-stuck-count" in data["metrics"]
-        assert data["metrics"]["sweep-chronically-stuck-count"]["value"] == 3
+        assert data["metrics"][self.NAMES["media"]]["value"] == 3
+        assert data["metrics"][self.NAMES["persons"]]["value"] == 7
+        assert "sweep-chronically-stuck-count" not in data["metrics"]
 
     def test_metric_present_and_zero(self, client):
-        """A published value of 0 (nothing currently chronic) must still surface — this
-        is different from the key being entirely absent."""
-        mock_redis = self._mock_redis_with_chronic_count(count=0)
-        with patch("app.main.get_redis", return_value=mock_redis):
+        """A published 0 must still surface — different from the key being absent."""
+        with patch("app.main.get_redis", return_value=self._mock_redis(media=0, persons=0)):
             data = client.get("/_info").json()
-        assert "sweep-chronically-stuck-count" in data["metrics"]
-        assert data["metrics"]["sweep-chronically-stuck-count"]["value"] == 0
+        assert data["metrics"][self.NAMES["media"]]["value"] == 0
+        assert data["metrics"][self.NAMES["persons"]]["value"] == 0
 
-    def test_metric_absent_when_no_gauge_published(self, client):
+    def test_only_published_metric_appears(self, client):
+        with patch("app.main.get_redis", return_value=self._mock_redis(media=2)):
+            data = client.get("/_info").json()
+        assert self.NAMES["media"] in data["metrics"]
+        assert self.NAMES["persons"] not in data["metrics"]
+
+    def test_metrics_absent_when_no_gauge_published(self, client):
         mock_redis = MagicMock()
         mock_redis.get.return_value = None
         with patch("app.main.get_redis", return_value=mock_redis):
             data = client.get("/_info").json()
-        assert "sweep-chronically-stuck-count" not in data["metrics"]
+        for name in self.NAMES.values():
+            assert name not in data["metrics"]
 
-    def test_metric_absent_when_redis_fails(self, client):
+    def test_metrics_absent_when_redis_fails(self, client):
         mock_redis = MagicMock()
         mock_redis.get.side_effect = Exception("Redis unreachable")
         with patch("app.main.get_redis", return_value=mock_redis):
             data = client.get("/_info").json()
-        assert "sweep-chronically-stuck-count" not in data["metrics"]
+        for name in self.NAMES.values():
+            assert name not in data["metrics"]
 
-    def test_metric_has_correct_structure(self, client):
-        mock_redis = self._mock_redis_with_chronic_count(count=1)
-        with patch("app.main.get_redis", return_value=mock_redis):
+    def test_metric_structure_and_backlog_caveat(self, client):
+        with patch("app.main.get_redis", return_value=self._mock_redis(media=1, persons=1)):
             data = client.get("/_info").json()
-        metric = data["metrics"]["sweep-chronically-stuck-count"]
-        assert "value" in metric
-        assert "techDetail" in metric
-        assert isinstance(metric["value"], int)
+        for name in self.NAMES.values():
+            metric = data["metrics"][name]
+            assert isinstance(metric["value"], int)
+            assert "long queue" in metric["techDetail"]
+        assert not any("sweep" in c for c in data["checks"])
 
 
 class TestHealthChecks:
