@@ -1,9 +1,11 @@
 import asyncio
 import hashlib
 import uuid
+import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from lucos_photos_common.models import ProcessingState
+from lucos_photos_common.models import MediaItem
 
 AUTH_HEADER = {"Authorization": "Bearer validkey"}
 VALID_IMAGE_CONTENT = bytes.fromhex(
@@ -585,6 +587,13 @@ class TestUpload:
         )
         assert response.status_code == 422
         assert response.json() == {"detail": "Invalid image file"}
+
+    @pytest.mark.parametrize("filename,content_type", [("empty.mp4", "video/mp4"), ("empty.jpg", "image/jpeg")])
+    def test_empty_upload_returns_422(self, client, db_session, filename, content_type):
+        response = client.post("/photos", files={"file": (filename, b"", content_type)}, headers=AUTH_HEADER)
+        assert response.status_code == 422
+        assert response.json() == {"detail": "Empty file"}
+        assert db_session.query(MediaItem).count() == 0
 
     def test_staged_file_cleaned_up_on_db_error(self, client, db_session, tmp_path):
         content = VALID_IMAGE_CONTENT

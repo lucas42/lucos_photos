@@ -306,6 +306,9 @@ async def upload_photo(
         finally:
             tmp_file.close()
 
+        if total_bytes == 0:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Empty file")
+
         sha256_hash = hasher.hexdigest()
 
         # Validate that the file is a valid image (videos are not validated here)
