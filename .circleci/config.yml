@@ -13,6 +13,9 @@ jobs:
       - run:
           name: Run tests
           command: cd api && pytest
+      - run:
+          name: Run migration script tests
+          command: cd migration && python -m unittest -v test_google_takeout_import
   test-worker:
     docker:
       - image: cimg/python:3.14
@@ -24,14 +27,6 @@ jobs:
       - run:
           name: Run tests
           command: cd worker && pytest
-  test-migration:
-    docker:
-      - image: cimg/python:3.14
-    steps:
-      - checkout
-      - run:
-          name: Run migration script tests
-          command: cd migration && python -m unittest -v test_google_takeout_import
   test-db-integration:
     docker:
       - image: cimg/python:3.14
@@ -61,7 +56,6 @@ workflows:
     jobs:
       - test-api
       - test-worker
-      - test-migration
       - test-db-integration
       - lucos/build:
           serial-group: << pipeline.project.slug >>/build/<< pipeline.git.branch >>
@@ -70,8 +64,7 @@ workflows:
           requires:
             - test-api
             - test-worker
-            - test-migration
-            - test-db-integration
+                  - test-db-integration
             - lucos/build
           filters:
             branches:
