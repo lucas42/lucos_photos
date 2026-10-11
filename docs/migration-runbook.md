@@ -114,38 +114,31 @@ The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry).
    - the photos snapshot directory `/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/2026-10-06/` (a top-level listing of the backup directory can wrongly show nothing: the lucas42/lucos#294 lesson);
    - the postgres tarball `lucos_photos_postgres_data.2026-10-06.tar.gz` under `host/avalon/volume/` on aurora. Postgres uses the default daily tarball strategy, *not* `volume-snapshots/`. The copy under `/srv/backups/local/volume/` on avalon does **not** count for this gate: it sits on avalon's single disk, so it would be lost in exactly the host failure a long-lived restore point exists to survive (avalon's disk already died once, lucas42/lucos#294).
 
-   **Nobody on the team can see aurora, so for now lucas42 performs these checks** (or arranges read access for the operator). They are in the one command in step 4.
+   **Nobody on the team can see aurora, so lucas42 checks both paths exist** (one command, in step 4), or arranges read access for the operator.
 3. *(No trial restore — see above.)*
-4. **Deletion.** The date doesn't matter; run it once the checks below pass. First freeze the ids and the matching original filenames in one query, and show lucas42 the counts:
+4. **Deletion.** The date doesn't matter; run it once the checks below pass. Freeze the ids, then run the coverage query, and show lucas42 both counts:
 
    ```bash
    docker exec lucos_photos_postgres psql -U photos -d photos -Atc \
-     "SELECT id, sha256_hash || '.' || file_extension FROM media_item WHERE taken_at < '2026-02-01T00:00:00Z' ORDER BY id" > "$W/frozen.txt"
-   cut -d'|' -f1 "$W/frozen.txt" > "$W/ids.txt"; cut -d'|' -f2 "$W/frozen.txt" | sort > "$W/original-names.txt"
+     "SELECT id FROM media_item WHERE taken_at < '2026-02-01T00:00:00Z' ORDER BY id" > "$W/ids.txt"
    wc -l "$W/ids.txt"
+   docker exec lucos_photos_postgres psql -U photos -d photos -Atc \
+     "SELECT count(*) FROM media_item WHERE taken_at < '2026-02-01T00:00:00Z' AND uploaded_at >= '2026-10-06T00:00:00Z'"   # coverage: must be 0
    docker exec lucos_photos_postgres psql -U photos -d photos -Atc \
      "SELECT count(*) FROM media_item WHERE taken_at IS NULL"
    ```
 
    Rows with a null `taken_at` are *not* in the list; decide about them explicitly before deleting.
 
-   **Coverage and presence check (lucas42, one command, no manual comparison).** A photo uploaded after 2026-10-06 (e.g. by a phone resync) wouldn't be in the 10-06 snapshot, so every frozen original must be in it. From a machine that can reach both avalon and aurora, this prints the number of frozen originals **missing** from the snapshot (expected `0`) and checks both backups exist:
+   **Why the coverage query is enough.** The only way a photo on the list could be missing from the 10-06 snapshot is if it was added to lucos_photos after the snapshot was taken, e.g. by a phone resync of old photos. `uploaded_at` is set by the database (`now()`) when the row is inserted, and no code writes it afterwards. Midnight is earlier than either daily backup run, so a 0 means the 10-06 snapshot holds every photo being deleted. If it isn't 0, those photos are covered by the nightly backups for a week: wait for the next one, or leave them out of `ids.txt`.
+
+   This relies on the snapshot being complete. lucos_backups writes each snapshot into a `<date>.partial` directory and renames it to `<date>` only after `rsync` exits 0 (a non-zero exit raises before the rename). The 2026-09-16 rebuild restored the photos volume from this mechanism. A per-file comparison against aurora would also catch a snapshot damaged after it was written, which is a small residual risk, and isn't required.
+
+   **Backup existence check (lucas42, one command).** From a machine that can reach aurora, both paths must be listed without an error:
 
    ```bash
-   (
-     set -eo pipefail   # any failed ssh/sudo aborts the check instead of printing a clean-looking 0
-     S=/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/2026-10-06
-     ssh aurora "ls -d $S /share/backups/host/avalon/volume/lucos_photos_postgres_data.2026-10-06.tar.gz" > /dev/null
-     snap=$(ssh aurora "ls $S/originals" | sort)
-     want=$(ssh avalon.s.l42.eu 'sudo cat /srv/photos-migration/original-names.txt' | sort)
-     test -n "$snap" && test -n "$want"
-     echo "frozen originals:     $(printf '%s\n' "$want" | wc -l)   (must equal the id count the operator showed you)"
-     echo "originals in snapshot: $(printf '%s\n' "$snap" | wc -l)"
-     echo "frozen but missing:    $(comm -13 <(printf '%s\n' "$snap") <(printf '%s\n' "$want") | wc -l)   (must be 0)"
-   )
+   ssh aurora 'ls -d /share/backups/host/avalon/volume-snapshots/lucos_photos_photos/2026-10-06 /share/backups/host/avalon/volume/lucos_photos_postgres_data.2026-10-06.tar.gz'
    ```
-
-   If any command errors, the check has not passed (it stops at the first failure and prints no counts). If a path is missing, step 2 fails. If "frozen originals" differs from the id count, or "frozen but missing" isn't `0`, send the team the output of the same `comm` with `| head -20` instead of `| wc -l` (the names are file hashes, safe to share); those photos are covered by the nightly backup for a week, so re-run the check after the next backup or exclude them from `ids.txt`. The shell logic was tested with stubbed `ssh` (clean pass, detects a missing original, aborts on a failed `sudo`/`ssh`), but it hasn't run against the real hosts (it assumes `aurora` is an ssh alias you can reach, a snapshot layout of `<snapshot>/originals/<sha>.<ext>`, and that listing ~78k names over ssh is fine); if it doesn't work, tell the team rather than comparing by hand.
 
    After his go-ahead on the count: `delete "$W/ids.txt" --expected-count <wc -l>`.
 5. **Trial import.** Before it, **lucas42 checks aurora's free space** (agents can't see it; the last figure, 954GB, is from June). The pre-cutoff originals stay linked from older snapshots for up to about 52 weeks, so deleting them frees nothing there, and the photos volume will grow to roughly 200GB+ (more if the export is video-heavy). Then `run_detached import <dir> --limit 200` (and `docker rm lucos_photos_migration_import` once it exits 0), watching IO pressure (see "Disk I/O caps"), `docker stats`, `free -h` and `df -h /` on avalon. **This is the contention measurement:** the first ~200 uploads fill the queue as fast as the caps allow, which is the import's worst burst, and then the worker sets the pace (about 200 photos an hour). If pressure crosses the stop rule while the worker is merely processing, with uploads paused for queue depth, the worker itself is the problem. Uploading less won't help in that case: stop and tell the team. Note the worker's steady-state pressure, the `lucos_photos_api` and `lucos_photos_worker` CPU in `docker stats`, and whether other services' `/_info` stayed green, on #577 before the full import (the API's `MIN_FREE_DISK_SPACE` guard is effectively off at this scale, so watch disk by hand). **Confirm that night's backup completes and publishes** before going on.
