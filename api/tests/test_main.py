@@ -545,6 +545,17 @@ class TestUpload:
         data = response.json()
         assert data["description"] == "A lovely sunset over the hills"
 
+    def test_description_form_field_supports_newlines_and_unicode(self, client):
+        """A description form field carries text a header can't (newlines, non-ASCII)."""
+        response = client.post(
+            "/photos",
+            files={"file": ("photo.jpg", VALID_IMAGE_CONTENT + b"\x09", "image/jpeg")},
+            data={"description": "Café\nsecond line"},
+            headers=AUTH_HEADER,
+        )
+        assert response.status_code == 201
+        assert response.json()["description"] == "Café\nsecond line"
+
     def test_description_is_null_when_header_absent(self, client):
         """Uploads without X-Description should have description=null."""
         response = client.post(

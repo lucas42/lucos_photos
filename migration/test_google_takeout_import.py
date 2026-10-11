@@ -1,0 +1,204 @@
+import json
+import os
+import tempfile
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+import google_takeout_import as imp
+
+JPEG = b"\xff\xd8\xff\xe0fakejpeg"
+
+
+def sidecar(taken, description="", people=None):
+    return json.dumps({"photoTakenTime": {"timestamp": str(taken)}, "description": description, "people": people or []})
+
+
+class SidecarMatching(unittest.TestCase):
+    def match(self, media, *jsons):
+        return imp.find_sidecar(media, set(jsons))
+
+    def test_plain_and_supplemental_names(self):
+        self.assertEqual(self.match("a.jpg", "a.jpg.json"), "a.jpg.json")
+        self.assertEqual(self.match("a.jpg", "a.jpg.supplemental-metadata.json"), "a.jpg.supplemental-metadata.json")
+
+    def test_truncated_supplemental_name(self):
+        media = "IMG_20200101_123456_somewhat_long_name.jpg"
+        truncated = (media + ".supplemental-metadata")[:46] + ".json"
+        self.assertEqual(self.match(media, truncated), truncated)
+
+    def test_truncated_plain_name(self):
+        media = "a_really_quite_long_photo_filename_from_a_camera_0001.jpg"
+        truncated = media[:46] + ".json"
+        self.assertEqual(self.match(media, truncated), truncated)
+
+    def test_duplicate_counter_moves_to_the_end(self):
+        self.assertEqual(self.match("IMG(1).jpg", "IMG.jpg(1).json"), "IMG.jpg(1).json")
+        self.assertEqual(self.match("IMG(1).jpg", "IMG.jpg.supplemental-metadata(1).json"), "IMG.jpg.supplemental-metadata(1).json")
+
+    def test_edited_copy_uses_original_sidecar(self):
+        self.assertEqual(self.match("IMG-edited.jpg", "IMG.jpg.json"), "IMG.jpg.json")
+
+    def test_no_sidecar(self):
+        self.assertIsNone(self.match("a.jpg", "b.jpg.json"))
+
+
+class ParseSidecar(unittest.TestCase):
+    def parse(self, text):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+            f.write(text)
+        try:
+            return imp.parse_sidecar(f.name)
+        finally:
+            os.unlink(f.name)
+
+    def test_reads_date_description_and_names(self):
+        taken, description, names = self.parse(sidecar(1500000000, "Sunset\nover hills", [{"name": "Alice"}, {"name": " "}]))
+        self.assertEqual((taken, description, names), (1500000000, "Sunset\nover hills", ["Alice"]))
+
+    def test_empty_description_is_none(self):
+        self.assertIsNone(self.parse(sidecar(1))[1])
+
+    def test_missing_taken_time(self):
+        self.assertIsNone(self.parse(json.dumps({"description": "x"}))[0])
+
+    def test_unexpected_people_shape_is_rejected(self):
+        for people in ("Alice", ["Alice"], [{"person": "Alice"}], [{"name": 3}]):
+            with self.assertRaises(imp.SidecarShapeError):
+                self.parse(json.dumps({"photoTakenTime": {"timestamp": "1"}, "people": people}))
+
+
+class FakePhotos(BaseHTTPRequestHandler):
+    log = []
+    lock = threading.Lock()
+
+    def _reply(self, status, body=b""):
+        self.send_response(status)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _record(self, body=b""):
+        with self.lock:
+            self.log.append((self.command, self.path, dict(self.headers), body))
+
+    def do_GET(self):
+        self._record()
+        self._reply(200, json.dumps({"metrics": {"processing-pending-count": {"value": 0}}}).encode())
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        self._record(body)
+        if self.path == "/photos":
+            status = 422 if b"rejectme" in body else 201
+            self._reply(status, json.dumps({"id": f"id-{len(self.log)}"}).encode())
+        else:
+            self._reply(200, b"{}")
+
+    def do_DELETE(self):
+        self._record()
+        self._reply(204)
+
+    def log_message(self, *args):
+        pass
+
+
+class EndToEnd(unittest.TestCase):
+    def setUp(self):
+        FakePhotos.log = []
+        self.server = HTTPServer(("127.0.0.1", 0), FakePhotos)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "takeout"
+        self.root.mkdir()
+        os.environ["PHOTOS_API_KEY"] = "secret"
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+        self.ledger = str(Path(self.tmp.name) / "ledger.sqlite")
+        self.skipped = str(Path(self.tmp.name) / "skipped.tsv")
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.tmp.cleanup()
+
+    def add(self, name, taken, description="", people=None, body=JPEG):
+        (self.root / name).write_bytes(body)
+        (self.root / f"{name}.json").write_text(sidecar(taken, description, people))
+
+    def run_import(self, *extra):
+        return imp.main(["import", str(self.root), "--base-url", self.base, "--ledger", self.ledger,
+                         "--unmatched-log", self.skipped, *extra])
+
+    def uploads(self):
+        return [e for e in FakePhotos.log if e[0] == "POST" and e[1] == "/photos"]
+
+    def test_imports_only_before_cutoff_and_sends_metadata(self):
+        self.add("old.jpg", imp.CUTOFF_SECONDS - 1, "Line one\nCafé", [{"name": "Alice"}])
+        self.add("new.jpg", imp.CUTOFF_SECONDS)
+        (self.root / "orphan.jpg").write_bytes(JPEG)
+
+        self.assertEqual(self.run_import(), 0)
+
+        sent = self.uploads()
+        self.assertEqual(len(sent), 1)
+        _, _, headers, body = sent[0]
+        self.assertEqual(headers["X-Taken-At"], str((imp.CUTOFF_SECONDS - 1) * 1000))
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+        self.assertIn("Line one\nCafé".encode(), body)
+        self.assertIn(b'filename="old.jpg"', body)
+        self.assertIn("orphan.jpg", Path(self.skipped).read_text())
+
+    def test_resume_does_not_repush_confirmed_files(self):
+        self.add("a.jpg", 1)
+        self.add("b.jpg", 2)
+        self.run_import()
+        self.assertEqual(len(self.uploads()), 2)
+
+        self.add("c.jpg", 3)
+        self.run_import()
+
+        self.assertEqual(len(self.uploads()), 3)
+
+    def test_rejected_files_are_not_retried(self):
+        self.add("bad.jpg", 1, body=JPEG + b"rejectme")
+        self.assertEqual(self.run_import(), 0)
+        self.run_import()
+        self.assertEqual(len(self.uploads()), 1)
+
+    def test_limit_stops_early(self):
+        for i in range(5):
+            self.add(f"{i}.jpg", i + 1)
+        self.run_import("--limit", "2")
+        self.assertEqual(len(self.uploads()), 2)
+
+    def test_prename_runs_tier1_then_tier2_and_resumes(self):
+        self.add("one.jpg", 1, people=[{"name": "Alice"}])
+        self.add("two.jpg", 2, people=[{"name": "Alice"}, {"name": "Bob"}])
+        self.add("none.jpg", 3)
+        self.run_import()
+
+        self.assertEqual(imp.main(["prename", "--base-url", self.base, "--ledger", self.ledger]), 0)
+        tiers = [json.loads(e[3])["tier"] for e in FakePhotos.log if e[1].endswith("/prename")]
+        self.assertEqual(tiers, [1, 2])
+
+        imp.main(["prename", "--base-url", self.base, "--ledger", self.ledger])
+        self.assertEqual(len([e for e in FakePhotos.log if e[1].endswith("/prename")]), 2)
+
+    def test_delete_requires_matching_count_and_resumes(self):
+        ids = [f"00000000-0000-0000-0000-00000000000{i}" for i in range(3)]
+        ids_file = Path(self.tmp.name) / "ids.txt"
+        ids_file.write_text("\n".join(ids) + "\n")
+        args = ["delete", str(ids_file), "--base-url", self.base, "--ledger", self.ledger, "--delay", "0"]
+
+        with self.assertRaises(SystemExit):
+            imp.main(args + ["--expected-count", "2"])
+        self.assertEqual([e for e in FakePhotos.log if e[0] == "DELETE"], [])
+
+        imp.main(args + ["--expected-count", "3"])
+        imp.main(args + ["--expected-count", "3"])
+        self.assertEqual(len([e for e in FakePhotos.log if e[0] == "DELETE"]), 3)
+
+
+if __name__ == "__main__":
+    unittest.main()

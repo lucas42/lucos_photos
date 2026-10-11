@@ -1,5 +1,6 @@
 import hashlib
 import uuid
+from unittest.mock import patch
 
 import pytest
 
@@ -645,6 +646,58 @@ class TestDeletePhoto:
 
         db_session.expire_all()
         assert db_session.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).first() is None
+
+    def test_deletes_person_left_with_no_faces(self, authenticated_client, db_session):
+        from lucos_photos_common.models import Face as FaceModel
+        photo = make_photo(db_session, "deleteemptiesperson")
+        person = Person()
+        db_session.add(person)
+        db_session.flush()
+        db_session.add(FaceModel(photo_id=photo.id, person_id=person.id, bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2))
+        db_session.commit()
+        person_id = person.id
+
+        authenticated_client.delete(f"/photos/{photo.id}")
+
+        db_session.expire_all()
+        assert db_session.query(Person).filter(Person.id == person_id).first() is None
+
+    def test_releases_and_regenerates_profile_picture_pointing_at_the_photo(self, authenticated_client, db_session):
+        from lucos_photos_common.models import Face as FaceModel
+        photo, other = make_photo(db_session, "profilephoto"), make_photo(db_session, "profileother")
+        person = Person()
+        db_session.add(person)
+        db_session.flush()
+        for p in (photo, other):
+            db_session.add(FaceModel(photo_id=p.id, person_id=person.id, bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2))
+        person.profile_photo_id = photo.id
+        person.profile_auto_generated = True
+        db_session.commit()
+        person_id = person.id
+
+        with patch("app.routers.photos._enqueue_profile_picture") as enqueue:
+            response = authenticated_client.delete(f"/photos/{photo.id}")
+
+        assert response.status_code == 204
+        db_session.expire_all()
+        assert db_session.get(Person, person_id).profile_photo_id is None
+        enqueue.assert_called_once_with(str(person_id))
+
+    def test_keeps_person_still_in_other_photos(self, authenticated_client, db_session):
+        from lucos_photos_common.models import Face as FaceModel
+        photo, other = make_photo(db_session, "deletekeepsperson"), make_photo(db_session, "otherphoto")
+        person = Person()
+        db_session.add(person)
+        db_session.flush()
+        for p in (photo, other):
+            db_session.add(FaceModel(photo_id=p.id, person_id=person.id, bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2))
+        db_session.commit()
+        person_id = person.id
+
+        authenticated_client.delete(f"/photos/{photo.id}")
+
+        db_session.expire_all()
+        assert db_session.query(Person).filter(Person.id == person_id).first() is not None
 
     def test_deletes_physical_files(self, authenticated_client, db_session, monkeypatch, tmp_path):
         import app.routers.photos as photos_module
