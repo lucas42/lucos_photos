@@ -22,8 +22,15 @@ Standard library only. Run it from a stock python image on avalon, with the expo
 
 ```bash
 W=/srv/photos-migration        # holds takeout/, import.env, migration-ledger.sqlite, ids.txt
-run() { docker run --rm --user "$(id -u):$(id -g)" -e PHOTOS_API_KEY_FILE=/work/import.env -v "$W":/work -v "$PWD/migration":/app:ro -w /work python:3.14-slim python /app/google_takeout_import.py "$@"; }
+IO=(--device-read-bps /dev/sda:10mb --device-write-bps /dev/sda:10mb --device-read-iops /dev/sda:100 --device-write-iops /dev/sda:100)
+run() { docker run --rm "${IO[@]}" --user "$(id -u):$(id -g)" -e PHOTOS_API_KEY_FILE=/work/import.env -v "$W":/work -v "$PWD/migration":/app:ro -w /work python:3.14-slim python /app/google_takeout_import.py "$@"; }
 ```
+
+**Disk I/O caps (`IO`).** avalon has one spinning disk, which every service shares. An uncapped `tar` of the export saturated it on 2026-10-11: IO pressure was around 95%, and `/_info` timed out on several services. `ionice` does nothing here, because the disk's scheduler is `mq-deadline`. Docker's `--device-*` limits do work: they set cgroup v2 `io.max`, which throttles buffered writes as well as reads on ext4. On avalon, a capped direct read measured 10.2MB/s against 52MB/s uncapped. Every container in this runbook that reads or writes the export uses the same caps. For `import`, capping its reads also caps the upload rate, and so the API's writes into the uploads volume, because the API only writes what it receives.
+
+**Don't start a heavy step while a lucos_photos deploy is running.** Every merge to lucos_photos (runbook changes included) redeploys it, and pulling the multi-GB image saturates the disk by itself: IO pressure went from about 1% to 53% during one on 2026-10-11.
+
+**IO pressure is the gauge** for every heavy step: `grep some /proc/pressure/io`. A quiet avalon reads `avg60` in single digits. If `some avg60` is above 25% on two readings a minute apart, with no deploy underway, stop the step (`docker stop <name>`) and halve the caps (`5mb` and `50`) before restarting it.
 
 `--user` makes the container write the ledger and skipped logs as the operator, not root (otherwise the final clean-up needs `sudo` for them). The script reads `KEY_LUCOS_PHOTOS` from `import.env` itself (quotes stripped), so the key never appears in the environment, on a command line or in `docker inspect`.
 
@@ -44,7 +51,7 @@ The full import takes about two weeks, which is longer than any agent session. R
 run_detached() {  # run_detached import <dir> [options]   |   run_detached prename
   docker run -d --name "lucos_photos_migration_$1" --restart no \
     --log-opt max-size=20m --log-opt max-file=5 \
-    --user "$(id -u):$(id -g)" -e PHOTOS_API_KEY_FILE=/work/import.env \
+    "${IO[@]}" --user "$(id -u):$(id -g)" -e PHOTOS_API_KEY_FILE=/work/import.env \
     -v "$W":/work -v "$PWD/migration":/app:ro -w /work \
     python:3.14-slim python /app/google_takeout_import.py "$@"
 }
@@ -93,46 +100,48 @@ The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry).
 
 1. **First look at the export.** As soon as any Takeout export exists (even a small one), run `dry-run` on it and check the sample output: the `people` values must be plain names, `no_sidecar` should be near zero, and `bad_people_shape` must be zero. If not, stop and tell the developer — the sidecar parsing was written from documentation, not a real export (acceptance criterion on #469).
 
-   The export is four `.tgz` files, about 185GB, not the ~78GB first estimated. Extract each with `tar -xzf` (as `lucos-agent`) into `/srv/photos-migration/takeout/`, never `/tmp` (RAM-backed). Photos and video don't compress, so extraction roughly doubles it; with the archives kept the peak is about 370GB, and avalon has about 1.6TB free (sysadmin, 2026-10-11), so deleting each archive as you go is optional. Point the script at the extracted `Takeout/Google Photos` directory. `dry-run` also prints `videos` and `bytes_to_import`, which settle the photo/video split and how big the pre-cutoff import actually is.
+   The export is four `.tgz` files, about 185GB, not the ~78GB first estimated. Extract each archive into `/srv/photos-migration/takeout/`, never `/tmp` (RAM-backed), one at a time, in a capped container (not a bare `tar`; see "Disk I/O caps" above):
+
+   ```bash
+   docker run -d --name lucos_photos_migration_extract --restart no "${IO[@]}" --memory 512m \
+     --user "$(id -u):$(id -g)" -v "$W":/work -w /work python:3.14-slim \
+     tar -xzf raw-takeout/partN.tgz -C takeout
+   cat /sys/fs/cgroup/system.slice/docker-$(docker inspect -f '{{.Id}}' lucos_photos_migration_extract).scope/io.max   # expect 8:0 rbps=10485760 wbps=10485760 riops=100 wiops=100
+   ```
+
+   `--memory 512m` bounds the dirty page cache, so the writer is throttled before it can queue gigabytes for a single flush. A 36GB archive takes about an hour. Watch it with IO pressure. When it exits, check `docker inspect -f '{{.State.ExitCode}}' lucos_photos_migration_extract` is 0, then `docker rm` it before the next archive. To redo an archive, rerun it: GNU `tar` overwrites partial files. Run `dry-run` only once extraction has finished, never at the same time. Photos and video don't compress, so extraction roughly doubles it; with the archives kept the peak is about 370GB, and avalon has about 1.6TB free (sysadmin, 2026-10-11), so deleting each archive as you go is optional. Point the script at the extracted `Takeout/Google Photos` directory. `dry-run` also prints `videos` and `bytes_to_import`, which settle the photo/video split and how big the pre-cutoff import actually is.
 2. **Confirm the backups exist** (first half of the gate before the deletion; no trial restore is needed). Everything the deletion removes was taken before 2026-02-01 and originals are immutable (stored by SHA-256), so any pre-deletion backup that contains those files is as good as the day before's, and the date of the deletion doesn't matter. Use the 2026-10-06 backups: they sit on the long retention track (kept until about 2027-10-06, the 6th of each month for a year, for both volumes). Confirm both are present on aurora:
    - the photos snapshot directory `/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/2026-10-06/` (a top-level listing of the backup directory can wrongly show nothing: the lucas42/lucos#294 lesson);
    - the postgres tarball `lucos_photos_postgres_data.2026-10-06.tar.gz` under `host/avalon/volume/` on aurora. Postgres uses the default daily tarball strategy, *not* `volume-snapshots/`. The copy under `/srv/backups/local/volume/` on avalon does **not** count for this gate: it sits on avalon's single disk, so it would be lost in exactly the host failure a long-lived restore point exists to survive (avalon's disk already died once, lucas42/lucos#294).
 
-   **Nobody on the team can see aurora, so for now lucas42 performs these checks** (or arranges read access for the operator). They are in the one command in step 4.
+   **Nobody on the team can see aurora, so lucas42 checks both paths exist** (one command, in step 4), or arranges read access for the operator.
 3. *(No trial restore — see above.)*
-4. **Deletion.** The date doesn't matter; run it once the checks below pass. First freeze the ids and the matching original filenames in one query, and show lucas42 the counts:
+4. **Deletion.** The date doesn't matter; run it once the checks below pass. Freeze the ids, then run the coverage query, and show lucas42 both counts:
 
    ```bash
    docker exec lucos_photos_postgres psql -U photos -d photos -Atc \
-     "SELECT id, sha256_hash || '.' || file_extension FROM media_item WHERE taken_at < '2026-02-01T00:00:00Z' ORDER BY id" > "$W/frozen.txt"
-   cut -d'|' -f1 "$W/frozen.txt" > "$W/ids.txt"; cut -d'|' -f2 "$W/frozen.txt" | sort > "$W/original-names.txt"
+     "SELECT id FROM media_item WHERE taken_at < '2026-02-01T00:00:00Z' ORDER BY id" > "$W/ids.txt"
    wc -l "$W/ids.txt"
+   docker exec lucos_photos_postgres psql -U photos -d photos -Atc \
+     "SELECT count(*) FROM media_item WHERE taken_at < '2026-02-01T00:00:00Z' AND uploaded_at >= '2026-10-06T00:00:00Z'"   # coverage: must be 0
    docker exec lucos_photos_postgres psql -U photos -d photos -Atc \
      "SELECT count(*) FROM media_item WHERE taken_at IS NULL"
    ```
 
    Rows with a null `taken_at` are *not* in the list; decide about them explicitly before deleting.
 
-   **Coverage and presence check (lucas42, one command, no manual comparison).** A photo uploaded after 2026-10-06 (e.g. by a phone resync) wouldn't be in the 10-06 snapshot, so every frozen original must be in it. From a machine that can reach both avalon and aurora, this prints the number of frozen originals **missing** from the snapshot (expected `0`) and checks both backups exist:
+   **Why the coverage query is enough.** The only way a photo on the list could be missing from the 10-06 snapshot is if it was added to lucos_photos after the snapshot was taken, e.g. by a phone resync of old photos. `uploaded_at` is set by the database (`now()`) when the row is inserted, and no code writes it afterwards. Midnight is earlier than either daily backup run, so a 0 means the 10-06 snapshot holds every photo being deleted. If it isn't 0, those photos are covered by the nightly backups for a week: wait for the next one, or leave them out of `ids.txt`.
+
+   This relies on the snapshot being complete. lucos_backups writes each snapshot into a `<date>.partial` directory and renames it to `<date>` only after `rsync` exits 0 (a non-zero exit raises before the rename). The 2026-09-16 rebuild restored the photos volume from this mechanism. A per-file comparison against aurora would also catch a snapshot damaged after it was written, which is a small residual risk, and isn't required.
+
+   **Backup existence check (lucas42, one command).** From a machine that can reach aurora, both paths must be listed without an error:
 
    ```bash
-   (
-     set -eo pipefail   # any failed ssh/sudo aborts the check instead of printing a clean-looking 0
-     S=/share/backups/host/avalon/volume-snapshots/lucos_photos_photos/2026-10-06
-     ssh aurora "ls -d $S /share/backups/host/avalon/volume/lucos_photos_postgres_data.2026-10-06.tar.gz" > /dev/null
-     snap=$(ssh aurora "ls $S/originals" | sort)
-     want=$(ssh avalon.s.l42.eu 'sudo cat /srv/photos-migration/original-names.txt' | sort)
-     test -n "$snap" && test -n "$want"
-     echo "frozen originals:     $(printf '%s\n' "$want" | wc -l)   (must equal the id count the operator showed you)"
-     echo "originals in snapshot: $(printf '%s\n' "$snap" | wc -l)"
-     echo "frozen but missing:    $(comm -13 <(printf '%s\n' "$snap") <(printf '%s\n' "$want") | wc -l)   (must be 0)"
-   )
+   ssh aurora 'ls -d /share/backups/host/avalon/volume-snapshots/lucos_photos_photos/2026-10-06 /share/backups/host/avalon/volume/lucos_photos_postgres_data.2026-10-06.tar.gz'
    ```
 
-   If any command errors, the check has not passed (it stops at the first failure and prints no counts). If a path is missing, step 2 fails. If "frozen originals" differs from the id count, or "frozen but missing" isn't `0`, send the team the output of the same `comm` with `| head -20` instead of `| wc -l` (the names are file hashes, safe to share); those photos are covered by the nightly backup for a week, so re-run the check after the next backup or exclude them from `ids.txt`. The shell logic was tested with stubbed `ssh` (clean pass, detects a missing original, aborts on a failed `sudo`/`ssh`), but it hasn't run against the real hosts (it assumes `aurora` is an ssh alias you can reach, a snapshot layout of `<snapshot>/originals/<sha>.<ext>`, and that listing ~78k names over ssh is fine); if it doesn't work, tell the team rather than comparing by hand.
-
    After his go-ahead on the count: `delete "$W/ids.txt" --expected-count <wc -l>`.
-5. **Trial import.** Before it, **lucas42 checks aurora's free space** (agents can't see it; the last figure, 954GB, is from June). The pre-cutoff originals stay linked from older snapshots for up to about 52 weeks, so deleting them frees nothing there, and the photos volume will grow to roughly 200GB+ (more if the export is video-heavy). Then `run_detached import <dir> --limit 200` (and `docker rm lucos_photos_migration_import` once it exits 0), watching `docker stats`, `free -h` and `df -h /` on avalon (the API's `MIN_FREE_DISK_SPACE` guard is effectively off at this scale, so watch disk by hand). **Confirm that night's backup completes and publishes** before going on.
+5. **Trial import.** Before it, **lucas42 checks aurora's free space** (agents can't see it; the last figure, 954GB, is from June). The pre-cutoff originals stay linked from older snapshots for up to about 52 weeks, so deleting them frees nothing there, and the photos volume will grow to roughly 200GB+ (more if the export is video-heavy). Then `run_detached import <dir> --limit 200` (and `docker rm lucos_photos_migration_import` once it exits 0), watching IO pressure (see "Disk I/O caps"), `docker stats`, `free -h` and `df -h /` on avalon. **This is the contention measurement:** the first ~200 uploads fill the queue as fast as the caps allow, which is the import's worst burst, and then the worker sets the pace (about 200 photos an hour). If pressure crosses the stop rule while the worker is merely processing, with uploads paused for queue depth, the worker itself is the problem. Uploading less won't help in that case: stop and tell the team. Note the worker's steady-state pressure, the `lucos_photos_api` and `lucos_photos_worker` CPU in `docker stats`, and whether other services' `/_info` stayed green, on #577 before the full import (the API's `MIN_FREE_DISK_SPACE` guard is effectively off at this scale, so watch disk by hand). **Confirm that night's backup completes and publishes** before going on.
 6. **Full import.** `run_detached import <dir>`, then use the check under "Long runs" whenever a session is working on it, until it exits. If it is interrupted, or exits 1 (some files failed), resume it as described under "Long runs": the ledger skips everything already confirmed. Exit 2 means it stopped for a human: read its log before resuming.
    - **Don't raise `--max-pending` (200) or `--concurrency` (2, never above 4)** without redoing this arithmetic: the nightly backup delta is set by the worker's throughput (about 200 photos an hour, roughly 14GB a day), not by upload speed, and one 2-hour rsync attempt moves roughly 79GB at the ~11MB/s ceiling. Big videos are the way an item's size could break that, which is what `dry-run`'s video count is for.
    - **Confirm the nightly backup completed after the first full day at steady rate**, then keep checking it with the check under "Long runs". If a night's backup fails, pause the import (`docker stop lucos_photos_migration_import`; it resumes from the ledger) and run `seed-volume` by hand before continuing.
