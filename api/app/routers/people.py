@@ -615,6 +615,19 @@ def _enqueue_generate_manual_profile_picture(person_id: str, photo_id: str) -> N
         print(f"Warning: failed to enqueue generate_manual_profile_picture for {person_id}: {exc}", flush=True)
 
 
+def delete_person_if_emptied(db: Session, person_id) -> bool:
+    """Delete a person left with zero faces, unless it carries a contact link (deleting
+    would silently destroy the link). Returns True if deleted. Does not commit."""
+    if db.query(Face).filter(Face.person_id == person_id).count() > 0:
+        return False
+    person = db.query(Person).filter(Person.id == person_id).first()
+    if person is None or person.contact_id is not None:
+        return False
+    db.query(PhotoPerson).filter(PhotoPerson.person_id == person_id).delete(synchronize_session="fetch")
+    db.delete(person)
+    return True
+
+
 def move_faces_to_person(db: Session, faces: list[Face], destination: Person) -> set:
     """Reassign a set of faces to `destination`, implementing the transactional
     contract shared by the bulk face-move endpoint (lucas42/lucos_photos#471) and
@@ -648,13 +661,8 @@ def move_faces_to_person(db: Session, faces: list[Face], destination: Person) ->
 
     needs_regen = {destination.id}
     for source_id in source_person_ids:
-        remaining = db.query(Face).filter(Face.person_id == source_id).count()
-        if remaining == 0:
-            source_person = db.query(Person).filter(Person.id == source_id).first()
-            if source_person and source_person.contact_id is None:
-                db.query(PhotoPerson).filter(PhotoPerson.person_id == source_id).delete(synchronize_session="fetch")
-                db.delete(source_person)
-                continue  # deleted — no regen needed
+        if delete_person_if_emptied(db, source_id):
+            continue  # deleted — no regen needed
         needs_regen.add(source_id)
 
     return needs_regen
