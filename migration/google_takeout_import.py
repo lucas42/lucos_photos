@@ -9,6 +9,7 @@ import argparse
 import http.client
 import json
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -66,21 +67,35 @@ def _counter_split(name):
     return name, ""
 
 
+def _sidecar_sources(media_name):
+    """(name the sidecar is built from, counter) pairs. A duplicate with a `(n)` counter only ever
+    matches its own `(n)` sidecar: a different photo can share the filename, so borrowing the
+    plain sidecar could attach the wrong date and people."""
+    pairs = [(media_name, "")]
+    base, counter = _counter_split(media_name)
+    if counter:
+        pairs.append((base, counter))
+    edited = re.fullmatch(r"(.*)-edited(\(\d+\))?(\.[^.]+)", media_name)
+    if edited:
+        original = edited.group(1) + edited.group(3)
+        pairs.append((original, edited.group(2) or ""))
+    return pairs
+
+
 def sidecar_candidates(media_name):
     """Possible sidecar filenames for a media file, most specific first.
 
     Takeout names a sidecar `<media>.json` or `<media>.supplemental-metadata.json`, truncates the
     part before `.json` to 46 characters, and moves a `(1)` duplicate counter from the media
-    name to the end (`IMG(1).jpg` -> `IMG.jpg(1).json`). `-edited` copies share the original's sidecar.
+    name to the end (`IMG(1).jpg` -> `IMG.jpg(1).json`). `-edited` copies (`IMG-edited(8).jpg`)
+    share the original's sidecar.
     """
     out = []
-    for name in (media_name, media_name.replace("-edited.", ".", 1)):
-        base, counter = _counter_split(name)
-        for source, source_counter in ((name, ""), (base, counter)):
-            for suffix in (f".{SIDECAR_SUFFIX}", ""):
-                full = source + suffix
-                for stem in (full, full[:SIDECAR_STEM_LIMIT]):
-                    out.append(f"{stem}{source_counter}.json")
+    for source, counter in _sidecar_sources(media_name):
+        for suffix in (f".{SIDECAR_SUFFIX}", ""):
+            full = source + suffix
+            for stem in (full, full[:SIDECAR_STEM_LIMIT]):
+                out.append(f"{stem}{counter}.json")
     return list(dict.fromkeys(out))
 
 
