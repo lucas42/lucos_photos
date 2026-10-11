@@ -44,7 +44,7 @@ Production credentials can't be read by agents and the value must never go throu
 # 1. Once: the working directory, owned by the operator, not readable by anyone else (this is also where the Takeout zips go)
 ssh avalon.s.l42.eu 'sudo install -d -o lucos-agent -g docker -m 700 /srv/photos-migration'
 
-# 2. Before the trial import: the key, copied in one pipe so it never lands on his laptop's disk or in a shell variable
+# 2. Before the deletion (step 4; `delete` authenticates with this key too, so it is also needed before the trial import): the key, copied in one pipe so it never lands on his laptop's disk or in a shell variable
 scp -P 2202 creds.l42.eu:lucos_photos_import/production/.env /dev/stdout \
   | ssh avalon.s.l42.eu 'sudo install -o lucos-agent -g docker -m 600 /dev/stdin /srv/photos-migration/import.env'
 ```
@@ -57,7 +57,7 @@ The key can upload **and** delete photos (it's an unscoped `CLIENT_KEYS` entry).
 
 1. Delete `import.env` as soon as the last run has finished, not at the end of the whole migration.
 2. Revoke the key once the import is verified complete: `ssh -p 2202 creds.l42.eu "rm lucos_photos_import/production => lucos_photos/production"`, then redeploy lucos_photos.
-3. Outer limit: seven days after the first use of the key. If the migration isn't finished by then, revoke it anyway and mint a new one for the next stretch.
+3. Outer limit: seven days after the first use of the key (the deletion, step 4, is its first use). A full import may take longer than that (about 200 photos an hour at the worker's measured ceiling is over two weeks for 78k), so expect to revoke and mint a fresh key partway; that is intended, not a failure.
 
 ## Steps
 
