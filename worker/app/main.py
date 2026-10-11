@@ -47,9 +47,10 @@ SWEEP_CHRONIC_THRESHOLD = int(os.environ.get("SWEEP_CHRONIC_THRESHOLD", 5))
 
 
 WORKER_HEARTBEAT_KEY = "worker:heartbeat"
-# Aggregate gauge of currently chronically-stuck items, recomputed from scratch every
-# sweep pass (see sweep_pending_photos) — never a SCAN over sweep:* keys.
-SWEEP_CHRONICALLY_STUCK_COUNT_KEY = "sweep:chronically_stuck_count"
+# Gauges of currently chronically-stuck items, recomputed from scratch every sweep pass
+# (see sweep_pending_photos) — never a SCAN over sweep:* keys.
+SWEEP_CHRONICALLY_STUCK_MEDIA_COUNT_KEY = "sweep:chronically_stuck_media_count"
+SWEEP_CHRONICALLY_STUCK_PERSONS_COUNT_KEY = "sweep:chronically_stuck_persons_count"
 
 
 def get_rss_bytes() -> int | None:
@@ -125,7 +126,7 @@ def _apply_reenqueue_backoff(redis_conn: Redis, prefix: str, item_id, enqueue_fn
     not reset it and re-arm the loop.
 
     Returns True if the item is currently "chronically stuck" (see _is_chronic) — the
-    caller tallies this into the /_info gauge and this function logs a WARNING for it.
+    caller tallies this into the /_info gauge; the WARNING is logged only when the item is actually re-enqueued.
     """
     key = _reenqueue_key(prefix, item_id)
     state = _read_backoff_state(redis_conn, key)
@@ -136,18 +137,13 @@ def _apply_reenqueue_backoff(redis_conn: Redis, prefix: str, item_id, enqueue_fn
         wait = min(BACKOFF_BASE_SECONDS * (2 ** (count - 1)), BACKOFF_CEILING_SECONDS)
         remaining = (last_enqueued_at + wait) - time.time()
         if remaining > 0:
-            logger.info(
+            logger.debug(
                 "sweep: skipping re-enqueue of %s — re-enqueued %d time(s) already, "
                 "%.0fs remaining in backoff",
                 key, count, remaining,
             )
-            if _is_chronic(state, count):
-                logger.warning(
-                    "sweep: %s is chronically stuck (re-enqueued %d times, first seen at %s)",
-                    key, count, state.get("first_enqueued_at"),
-                )
-                return True
-            return False
+            # No warning here: it would repeat every sweep pass; the warning below fires once per backoff window.
+            return _is_chronic(state, count)
 
     enqueue_fn()
 
@@ -286,7 +282,8 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
     without a second query or a DetachedInstanceError.
     """
     queue = Queue("photos", connection=redis_conn)
-    chronic_count = 0
+    chronic_media_count = 0
+    chronic_persons_count = 0
 
     pending_threshold = datetime.now(timezone.utc) - timedelta(minutes=PENDING_SWEEP_THRESHOLD_MINUTES)
     processing_threshold = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_SWEEP_THRESHOLD_MINUTES)
@@ -318,23 +315,23 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
                 lambda status=status: _enqueue_for_media_item(queue, status),
             )
             if is_chronic:
-                chronic_count += 1
+                chronic_media_count += 1
     except Exception:
         logger.exception("sweep: error during pending photo sweep")
 
     try:
-        chronic_count += _enqueue_missing_profile_pictures(redis_conn)
+        chronic_persons_count = _enqueue_missing_profile_pictures(redis_conn)
     except Exception:
         logger.exception("sweep: error during missing profile picture sweep")
 
     try:
-        redis_conn.set(
-            SWEEP_CHRONICALLY_STUCK_COUNT_KEY,
-            chronic_count,
-            ex=PENDING_SWEEP_INTERVAL_SECONDS * 3,
-        )
+        for key, value in (
+            (SWEEP_CHRONICALLY_STUCK_MEDIA_COUNT_KEY, chronic_media_count),
+            (SWEEP_CHRONICALLY_STUCK_PERSONS_COUNT_KEY, chronic_persons_count),
+        ):
+            redis_conn.set(key, value, ex=PENDING_SWEEP_INTERVAL_SECONDS * 3)
     except Exception:
-        logger.warning("sweep: failed to publish chronically_stuck_count to Redis", exc_info=True)
+        logger.warning("sweep: failed to publish chronically-stuck counts to Redis", exc_info=True)
 
     # Face clustering and contact display-name sync don't participate in the re-enqueue
     # backoff above — they aren't gated by it.
