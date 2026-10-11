@@ -13,7 +13,7 @@ No separate trial restore is required beforehand. lucas42 decided this in chat o
 |---|---|
 | Request the Takeout export, authorise its transfer to avalon (e.g. one-off `rclone authorize drive` token) | lucas42 |
 | Create the import key (done), and put it on avalon with the two commands under "Handing the key to avalon" below | lucas42 |
-| Go-ahead on the deletion count (step 5) | lucas42 |
+| Go-ahead on the deletion count (step 4) | lucas42 |
 | Everything else (backup check, trial, deletion, import, pre-naming, resume, checks) | SRE / sysadmin via prod SSH + docker |
 
 ## The script
