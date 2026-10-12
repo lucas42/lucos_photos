@@ -267,6 +267,43 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(len(ids), 5)
         self.assertFalse(any(i.startswith("rejected") for i in ids))
 
+    def test_max_per_hour_spaces_uploads_out(self):
+        for i in range(3):
+            self.add(f"{i}.jpg", i + 1)
+        sleeps = []
+        original, imp.time.sleep = imp.time.sleep, sleeps.append
+        try:
+            self.run_import("--max-per-hour", "3600")
+        finally:
+            imp.time.sleep = original
+
+        self.assertEqual(len(self.uploads()), 3)
+        # 3600 an hour is one a second: the first goes straight away, the next two wait about a second each
+        waits = [s for s in sleeps if s > 0.5]
+        self.assertEqual(len(waits), 2)
+        self.assertTrue(all(0.9 < s <= 1.0 for s in waits), waits)
+
+    def test_no_pacing_by_default(self):
+        for i in range(3):
+            self.add(f"{i}.jpg", i + 1)
+        sleeps = []
+        original, imp.time.sleep = imp.time.sleep, sleeps.append
+        try:
+            self.run_import()
+        finally:
+            imp.time.sleep = original
+        self.assertEqual([s for s in sleeps if s > 0.5], [])
+
+    def test_media_filter_imports_photos_then_videos_later(self):
+        self.add("a.jpg", 1)
+        self.add("b.mp4", 2, body=b"fakevideo")
+
+        self.run_import("--media", "photos")
+        self.assertEqual(len(self.uploads()), 1)
+
+        self.run_import("--media", "videos")
+        self.assertEqual(len(self.uploads()), 2)
+
     def test_limit_stops_early(self):
         for i in range(5):
             self.add(f"{i}.jpg", i + 1)
