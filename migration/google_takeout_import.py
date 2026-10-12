@@ -319,6 +319,10 @@ def scan(root, stats, unmatched_log=None):
         yield rel, full, taken, description, names
 
 
+def media_kind(path):
+    return "videos" if CONTENT_TYPES[path.rsplit(".", 1)[-1].lower()].startswith("video/") else "photos"
+
+
 def new_stats():
     return {k: 0 for k in ("media", "no_sidecar", "bad_people_shape", "bad_sidecar", "no_taken_time",
                            "after_cutoff", "to_import", "already_uploaded", "uploaded", "failed", "named_photos")}
@@ -332,7 +336,7 @@ def cmd_dry_run(args):
         for rel, full, taken, description, names in scan(args.takeout_dir, stats, unmatched):
             stats["to_import"] += 1
             stats["bytes_to_import"] += os.path.getsize(full)
-            stats["videos"] += CONTENT_TYPES[full.rsplit(".", 1)[-1].lower()].startswith("video/")
+            stats["videos"] += media_kind(full) == "videos"
             if names:
                 stats["named_photos"] += 1
                 if shown < 5:
@@ -434,9 +438,13 @@ def cmd_import(args):
                     stats["failed"] += 1
                     log(f"FAILED {rel}: {exc}")
 
+        interval = 3600 / args.max_per_hour if args.max_per_hour else 0
+        next_upload = 0.0
         for item in scan(args.takeout_dir, stats, unmatched):
             if fatal:
                 break
+            if args.media != "all" and media_kind(item[1]) != args.media:
+                continue
             stats["to_import"] += 1
             if ledger.uploaded(item[0]):
                 stats["already_uploaded"] += 1
@@ -451,6 +459,9 @@ def cmd_import(args):
                     break
             while len(inflight) >= args.concurrency:
                 drain(True)
+            if interval:
+                time.sleep(max(0.0, next_upload - time.monotonic()))
+                next_upload = time.monotonic() + interval
             inflight[pool.submit(upload, item)] = item[0]
             drain(False)
         while inflight:
@@ -522,6 +533,8 @@ def main(argv=None):
     imp.add_argument("--concurrency", type=int, default=2)
     imp.add_argument("--max-pending", type=int, default=200, help="pause uploads while the worker queue is deeper than this")
     imp.add_argument("--limit", type=int, default=0, help="stop after this many uploads (trial runs)")
+    imp.add_argument("--max-per-hour", type=int, default=0, help="space uploads out to at most this many an hour, so the worker idles between items (0 = no limit)")
+    imp.add_argument("--media", choices=("all", "photos", "videos"), default="all", help="import only photos or only videos (skipped files aren't recorded, so a later run picks them up)")
     imp.add_argument("--unmatched-log", default="migration-skipped.tsv")
     imp.set_defaults(func=cmd_import)
 
