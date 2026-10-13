@@ -2237,6 +2237,58 @@ class TestGenerateProfilePicture:
             assert result.width == result.height, "Must still be square"
 
 
+    def _run_unchanged_scenario(self, db_session, tmp_path, *, auto_generated, file_present, same_photo):
+        person = self._make_person(db_session)
+        person_id = person.id
+        photo = self._make_photo(db_session, "u" * 64, width=200, height=200)
+        self._make_face(db_session, photo, person, bbox_x=0.2, bbox_y=0.2, bbox_width=0.6, bbox_height=0.6)
+        other = self._make_photo(db_session, "v" * 64, width=200, height=200)
+        person.profile_photo_id = photo.id if same_photo else other.id
+        person.profile_auto_generated = auto_generated
+        db_session.commit()
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        Image.new("RGB", (200, 200), color=(1, 2, 3)).save(originals_dir / f"{'u' * 64}.jpg", format="JPEG")
+        profile_path = derivatives_dir / f"{person_id}_profile.jpg"
+        if file_present:
+            profile_path.write_bytes(b"existing")
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update:
+            mock_session_local.return_value = db_session
+            generate_profile_picture(str(person_id))
+        return profile_path, mock_update
+
+    def test_unchanged_profile_skips_regeneration_and_event(self, db_session, tmp_path):
+        profile_path, mock_update = self._run_unchanged_scenario(
+            db_session, tmp_path, auto_generated=True, file_present=True, same_photo=True)
+        assert profile_path.read_bytes() == b"existing"
+        mock_update.assert_not_called()
+
+    def test_changed_best_photo_regenerates_and_emits(self, db_session, tmp_path):
+        profile_path, mock_update = self._run_unchanged_scenario(
+            db_session, tmp_path, auto_generated=True, file_present=True, same_photo=False)
+        assert profile_path.read_bytes() != b"existing"
+        mock_update.assert_called_once()
+
+    def test_missing_profile_file_regenerates_and_emits(self, db_session, tmp_path):
+        profile_path, mock_update = self._run_unchanged_scenario(
+            db_session, tmp_path, auto_generated=True, file_present=False, same_photo=True)
+        assert profile_path.exists()
+        mock_update.assert_called_once()
+
+    def test_auto_generated_unset_regenerates_and_emits(self, db_session, tmp_path):
+        profile_path, mock_update = self._run_unchanged_scenario(
+            db_session, tmp_path, auto_generated=None, file_present=True, same_photo=True)
+        assert profile_path.read_bytes() != b"existing"
+        mock_update.assert_called_once()
+
+
 class TestGenerateManualProfilePicture:
     """Tests for generate_manual_profile_picture() — the crop-only worker job behind
     the "Set as profile picture" action (lucas42/lucos_photos#473). The API has
