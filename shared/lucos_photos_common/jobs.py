@@ -971,6 +971,13 @@ def generate_profile_picture(person_id: str) -> None:
             person_id, best_photo.id, best_score,
         )
 
+        # Nothing to do if the chosen photo is already the profile and its file exists.
+        if (person.profile_auto_generated is True
+                and person.profile_photo_id == best_photo.id
+                and (DERIVATIVES_DIR / f"{person_id}_profile.jpg").exists()):
+            logger.info("generate_profile_picture: profile picture for person %s unchanged, skipping", person_id)
+            return
+
         if not _crop_and_save_profile_picture(person_id, best_face, best_photo):
             return
 
