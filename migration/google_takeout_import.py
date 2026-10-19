@@ -36,14 +36,14 @@ CHUNK = 64 * 1024
 def load_key():
     """The API key, from the env file named by PHOTOS_API_KEY_FILE (preferred: it stays out of container
     metadata) or from PHOTOS_API_KEY. Never logged."""
-    path = os.environ.get("PHOTOS_API_KEY_FILE")
+    path = os.environ.get("PHOTOS_API_KEY_FILE")  # lucos_repos: noenv PHOTOS_API_KEY_FILE
     if path:
         for line in open(path, encoding="utf-8"):
             name, _, value = line.strip().partition("=")
             if name == "KEY_LUCOS_PHOTOS" and value.strip("\"'"):
                 return value.strip("\"'")
         sys.exit(f"no KEY_LUCOS_PHOTOS entry in {path}")
-    key = os.environ.get("PHOTOS_API_KEY")
+    key = os.environ.get("PHOTOS_API_KEY")  # lucos_repos: noenv PHOTOS_API_KEY
     if not key:
         sys.exit("set PHOTOS_API_KEY_FILE (path to the creds .env) or PHOTOS_API_KEY")
     return key
@@ -525,7 +525,7 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
 
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--base-url", default=os.environ.get("PHOTOS_BASE_URL", "https://photos.l42.eu"))
+    common.add_argument("--base-url", default=os.environ.get("PHOTOS_BASE_URL", "https://photos.l42.eu"))  # lucos_repos: noenv PHOTOS_BASE_URL
     common.add_argument("--ledger", default="migration-ledger.sqlite")
 
     imp = sub.add_parser("import", parents=[common], help="upload pre-cutoff photos (run `prename` once all uploads are done)")
