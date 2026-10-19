@@ -68,6 +68,7 @@ services:
       - BACKOFF_BASE_SECONDS
       - BACKOFF_CEILING_SECONDS
       - SWEEP_CHRONIC_THRESHOLD
+      - CONTACT_NAME_SYNC_INTERVAL_SECONDS
     depends_on:
       - postgres
       - redis
