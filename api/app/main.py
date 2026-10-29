@@ -166,8 +166,9 @@ def root(request: Request, _: Annotated[None, Depends(verify_session_or_key)], d
     photo_total = processed_photos_query.count()
     recent_photos = processed_photos_query.order_by(*photo_order_cols).limit(10).all()
 
-    # People: count and top 10 by number of photos tagged in
-    base_person_filter = Person.is_background == False  # noqa: E712
+    # People: count and top 10 by number of photos tagged in.
+    # Flagged groupings (wrong, awaiting correction) are hidden here but stay listed on /people.
+    base_person_filter = (Person.is_background == False) & Person.flagged_at.is_(None)  # noqa: E712
     people_total = db.query(func.count(Person.id)).filter(base_person_filter).scalar()
     top_people_with_counts = (
         db.query(Person, func.count(PhotoPerson.photo_id).label("photo_count"))

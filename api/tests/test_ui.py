@@ -412,6 +412,22 @@ class TestPeoplePageHtml:
 # Person detail page HTML tests
 # ---------------------------------------------------------------------------
 
+class TestPeoplePageFlaggedBadge:
+    def test_people_page_lists_flagged_people_with_badge(self, authenticated_client, db_session):
+        """Flagged people stay on /people, marked with a text badge (lucas42/lucos_photos#617)."""
+        from datetime import datetime, timezone
+        from lucos_photos_common.models import Person
+        db_session.add(Person(display_name="Flagged Fred", flagged_at=datetime.now(timezone.utc)))
+        db_session.add(Person(display_name="Plain Pat"))
+        db_session.commit()
+
+        response = authenticated_client.get("/people", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert "Flagged Fred" in response.text
+        assert "Plain Pat" in response.text
+        assert response.text.count('class="person-flagged-badge"') == 1
+
+
 class TestPersonDetailHtml:
     def test_person_page_search_has_is_contact_filter(self, authenticated_client, db_session, monkeypatch):
         """The face-tagging search on the person page must pass data-is-contact=true.
@@ -573,6 +589,20 @@ class TestHomepage:
         assert 'href="/"' in response.text
         assert 'href="/photos"' in response.text
         assert 'href="/people"' in response.text
+
+    def test_homepage_excludes_flagged_people_from_list_and_count(self, authenticated_client, db_session):
+        """Flagged groupings are hidden from the homepage list and count (lucas42/lucos_photos#617)."""
+        from datetime import datetime, timezone
+        from lucos_photos_common.models import Person
+        db_session.add(Person(display_name="Visible Vera"))
+        db_session.add(Person(display_name="Flagged Fred", flagged_at=datetime.now(timezone.utc)))
+        db_session.commit()
+
+        response = authenticated_client.get("/")
+        assert response.status_code == 200
+        assert "Visible Vera" in response.text
+        assert "Flagged Fred" not in response.text
+        assert 'class="homepage-section-count">1<' in response.text
 
     def test_homepage_excludes_unprocessed_photos(self, authenticated_client, db_session):
         """Photos with pending processing status must not appear on the homepage."""
