@@ -22,6 +22,7 @@
                         {% include "_profile_picture_placeholder.html" %}
                         {% endif %}
                         <h2 class="person-name">{{ person_label }}</h2>
+                        {% if person.flaggedAt %}<span class="person-flagged-badge">Flagged</span>{% endif %}
                     </div>
                 </a>
                 {% if not person.contactId %}

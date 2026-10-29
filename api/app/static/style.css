@@ -881,6 +881,14 @@ a:hover {
 	font-weight: 600;
 }
 
+.person-flagged-badge {
+	font-size: 0.75rem;
+	font-weight: 600;
+	border: 1px solid currentColor;
+	border-radius: 4px;
+	padding: 0.1rem 0.4rem;
+}
+
 .person-grid-card-wrap {
 	display: flex;
 	flex-direction: column;
