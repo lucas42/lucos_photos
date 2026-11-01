@@ -70,7 +70,7 @@
                 <ul class="photo-people-list" id="photo-people-list">
                     {% for person in photo.people %}
                     {% set person_label = person.name or ('Person ' + person.id[:8] + '…') %}
-                    <li class="photo-person{% if person.isBackground %} photo-person-background{% endif %}" data-person-id="{{ person.id }}" data-person-label="{{ person_label }}"{% if not (person.isBackground or person.contactId or person.name or person.flaggedAt) %} data-ignorable{% endif %}>
+                    <li class="photo-person{% if person.isBackground %} photo-person-background{% endif %}" data-person-id="{{ person.id }}" data-person-label="{{ person_label }}"{% if not (person.contactId or person.name or person.flaggedAt) %} data-eligible{% if not person.isBackground %} data-ignorable{% endif %}{% endif %}>
                         <a href="/people/{{ person.id }}" class="photo-person-link">
                             {% if person.profilePictureUrl %}
                             <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt=""
@@ -177,7 +177,7 @@
 
         function markRow(li, ignored) {
             li.classList.toggle('photo-person-background', ignored);
-            if (ignored) li.removeAttribute('data-ignorable'); else li.setAttribute('data-ignorable', '');
+            if (ignored || !li.hasAttribute('data-eligible')) li.removeAttribute('data-ignorable'); else li.setAttribute('data-ignorable', '');
             li.querySelector('.photo-person-ignored-status')?.remove();
             li.querySelector('.ignore-person-btn, .unignore-person-btn')?.remove();
             const label = li.dataset.personLabel, id = li.dataset.personId;
