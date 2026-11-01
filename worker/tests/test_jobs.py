@@ -2450,3 +2450,103 @@ class TestGenerateManualProfilePicture:
              Image.open(derivatives_dir / f"{person_manual_id}_profile.jpg") as manual_img:
             assert auto_img.size == manual_img.size
             assert list(auto_img.getdata()) == list(manual_img.getdata())
+
+
+class TestProfilePictureExifOrientation:
+    """The crop box is in the EXIF-transposed frame, so the crop must apply exif_transpose
+    to the raw pixels (lucas42/lucos_photos#619)."""
+
+    # Display frame is 400x200 landscape; the face box covers x 160-240, y 50-150, with
+    # its left half red and its right half blue, so the crop shows both position and rotation.
+    DISPLAY_W, DISPLAY_H = 400, 200
+    BBOX = dict(bbox_x=0.4, bbox_y=0.25, bbox_width=0.2, bbox_height=0.5)
+    RED, BLUE, GREY = (220, 30, 30), (30, 30, 220), (120, 120, 120)
+
+    def _write_original(self, path, orientation):
+        from PIL import ImageDraw
+        display = Image.new("RGB", (self.DISPLAY_W, self.DISPLAY_H), self.GREY)
+        draw = ImageDraw.Draw(display)
+        draw.rectangle((160, 50, 199, 149), fill=self.RED)
+        draw.rectangle((200, 50, 239, 149), fill=self.BLUE)
+        # Raw pixels are the inverse of what the Orientation tag asks the viewer to apply.
+        inverse = {1: None, 3: Image.ROTATE_180, 6: Image.ROTATE_90, 8: Image.ROTATE_270}[orientation]
+        raw = display if inverse is None else display.transpose(inverse)
+        exif = raw.getexif()
+        exif[274] = orientation
+        raw.save(path, format="JPEG", quality=95, exif=exif.tobytes())
+
+    def _generate(self, db_session, tmp_path, orientation, person_label="o"):
+        person = Person()
+        db_session.add(person)
+        db_session.flush()
+        sha = (str(orientation) * 64)[:64]
+        photo = MediaItem(sha256_hash=sha, file_extension="jpg", width=self.DISPLAY_W, height=self.DISPLAY_H)
+        db_session.add(photo)
+        db_session.flush()
+        db_session.add(Face(photo_id=photo.id, person_id=person.id, person_confirmed=False, det_score=0.9, **self.BBOX))
+        db_session.commit()
+        person_id = person.id
+
+        originals_dir = tmp_path / "originals"
+        originals_dir.mkdir(exist_ok=True)
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir(exist_ok=True)
+        self._write_original(originals_dir / f"{sha}.jpg", orientation)
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", originals_dir), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne"):
+            mock_session_local.return_value = db_session
+            generate_profile_picture(str(person_id))
+        return derivatives_dir / f"{person_id}_profile.jpg"
+
+    @staticmethod
+    def _close(pixel, expected, tolerance=40):
+        return all(abs(a - b) <= tolerance for a, b in zip(pixel, expected))
+
+    @pytest.mark.parametrize("orientation", [1, 3, 6, 8])
+    def test_crop_is_upright_and_on_the_face(self, db_session, tmp_path, orientation):
+        profile_path = self._generate(db_session, tmp_path, orientation)
+
+        with Image.open(profile_path) as result:
+            w, h = result.size
+            left_of_centre = result.getpixel((int(w * 0.4), h // 2))
+            right_of_centre = result.getpixel((int(w * 0.6), h // 2))
+        assert self._close(left_of_centre, self.RED), f"orientation {orientation}: left of centre was {left_of_centre}"
+        assert self._close(right_of_centre, self.BLUE), f"orientation {orientation}: right of centre was {right_of_centre}"
+
+    def test_manual_pin_path_is_also_upright(self, db_session, tmp_path):
+        profile_path = self._generate(db_session, tmp_path, 6)
+        person = db_session.query(Person).first()
+        photo = db_session.query(MediaItem).first()
+        profile_path.unlink()
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", tmp_path / "originals"), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", tmp_path / "derivatives"), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+            generate_manual_profile_picture(str(person.id), str(photo.id))
+
+        with Image.open(profile_path) as result:
+            w, h = result.size
+            assert self._close(result.getpixel((int(w * 0.4), h // 2)), self.RED)
+            assert self._close(result.getpixel((int(w * 0.6), h // 2)), self.BLUE)
+
+    def test_force_regenerates_unchanged_photo_and_emit_event_false_is_silent(self, db_session, tmp_path):
+        profile_path = self._generate(db_session, tmp_path, 6)
+        person = db_session.query(Person).first()
+        person_id = person.id
+        profile_path.write_bytes(b"stale")
+
+        with patch("lucos_photos_common.jobs.ORIGINALS_DIR", tmp_path / "originals"), \
+             patch("lucos_photos_common.jobs.DERIVATIVES_DIR", tmp_path / "derivatives"), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local, \
+             patch("lucos_photos_common.jobs.updateLoganne") as mock_update:
+            mock_session_local.return_value = db_session
+            generate_profile_picture(str(person_id))
+            assert profile_path.read_bytes() == b"stale", "without force an unchanged photo is skipped"
+            generate_profile_picture(str(person_id), force=True, emit_event=False)
+
+        assert profile_path.read_bytes() != b"stale"
+        mock_update.assert_not_called()

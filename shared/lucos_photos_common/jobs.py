@@ -831,7 +831,7 @@ def _crop_and_save_profile_picture(person_id: str, face: "Face", photo: "MediaIt
     transaction around it. Returns False (logged, not raised) if the original file is
     missing on disk; True on success.
     """
-    from PIL import Image as PILImage
+    from PIL import Image as PILImage, ImageOps
     import math
 
     original_path = ORIGINALS_DIR / f"{photo.sha256_hash}.{photo.file_extension}"
@@ -893,7 +893,9 @@ def _crop_and_save_profile_picture(person_id: str, face: "Face", photo: "MediaIt
     top_px = round(top)
 
     MAX_PROFILE_SIZE = 600
-    with PILImage.open(original_path) as img:
+    with PILImage.open(original_path) as raw_img:
+        # photo.width/height and the face bbox are in the EXIF-transposed frame (lucas42/lucos_photos#619).
+        img = ImageOps.exif_transpose(raw_img)
         cropped = img.crop((left_px, top_px, left_px + crop_side_px, top_px + crop_side_px))
         if cropped.width > MAX_PROFILE_SIZE or cropped.height > MAX_PROFILE_SIZE:
             cropped = cropped.resize((MAX_PROFILE_SIZE, MAX_PROFILE_SIZE), PILImage.LANCZOS)
@@ -907,7 +909,7 @@ def _crop_and_save_profile_picture(person_id: str, face: "Face", photo: "MediaIt
     return True
 
 
-def generate_profile_picture(person_id: str) -> None:
+def generate_profile_picture(person_id: str, force: bool = False, emit_event: bool = True) -> None:
     """Choose the best profile picture for a person and crop it to a square derivative.
 
     Scores all photos in which this person appears, picks the highest-scoring face,
@@ -916,6 +918,9 @@ def generate_profile_picture(person_id: str) -> None:
 
     Also updates person.profile_photo_id and person.profile_auto_generated in the DB.
     Idempotent: re-running overwrites the existing derivative file.
+
+    `force` regenerates even when the chosen photo is unchanged; `emit_event=False`
+    suppresses the Loganne event. Both exist for bulk repair runs.
     """
     person_uuid = UUID(person_id)
     db = SessionLocal()
@@ -972,7 +977,8 @@ def generate_profile_picture(person_id: str) -> None:
         )
 
         # Nothing to do if the chosen photo is already the profile and its file exists.
-        if (person.profile_auto_generated is True
+        if (not force
+                and person.profile_auto_generated is True
                 and person.profile_photo_id == best_photo.id
                 and (DERIVATIVES_DIR / f"{person_id}_profile.jpg").exists()):
             logger.info("generate_profile_picture: profile picture for person %s unchanged, skipping", person_id)
@@ -986,10 +992,11 @@ def generate_profile_picture(person_id: str) -> None:
         person.profile_auto_generated = True
         db.commit()
 
-        # Emit Loganne event — updateLoganne swallows HTTP errors internally
-        app_origin = os.environ.get("APP_ORIGIN", "")
-        person_label = person.display_name or str(person_id)
-        updateLoganne("profilePhotoUpdated", f"Profile photo updated for {person_label} in lucos_photos", level="routine", url=f"{app_origin}/people/{person_id}")
+        if emit_event:
+            # updateLoganne swallows HTTP errors internally
+            app_origin = os.environ.get("APP_ORIGIN", "")
+            person_label = person.display_name or str(person_id)
+            updateLoganne("profilePhotoUpdated", f"Profile photo updated for {person_label} in lucos_photos", level="routine", url=f"{app_origin}/people/{person_id}")
 
     except Exception:
         logger.exception("generate_profile_picture: error for person %s", person_id)
