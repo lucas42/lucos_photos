@@ -1233,3 +1233,107 @@ class TestIgnoreUnlinkedPeople:
         db_session.commit()
         response = client.post(f"/photos/{photo.id}/ignore-unlinked-people", headers={"Origin": "https://photos.l42.eu"}, follow_redirects=False)
         assert response.status_code in (302, 401)
+
+
+def add_embedded_face(db, photo, person, vector, confirmed=False):
+    face = Face(
+        photo_id=photo.id, person_id=person.id, person_confirmed=confirmed, embedding=list(vector),
+        bbox_x=0.1, bbox_y=0.2, bbox_width=0.3, bbox_height=0.4,
+    )
+    db.add(face)
+    return face
+
+
+def unit(axis, jitter=0.0, seed=0):
+    import numpy as np
+    vec = np.zeros(512)
+    vec[axis] = 1.0
+    vec[(axis + 1) % 512] = jitter * (seed + 1)
+    return vec
+
+
+class TestLikelyMistags:
+    def seed_person(self, db, inliers=12, outliers=3, confirmed_outlier=False):
+        person = make_person(db, "Alice")
+        photos = [make_photo(db, f"{i:064x}") for i in range(inliers + outliers)]
+        for i in range(inliers):
+            add_embedded_face(db, photos[i], person, unit(0, 0.01, i))
+        outlier_faces = [
+            add_embedded_face(db, photos[inliers + j], person, unit(7, 0.01, j), confirmed=confirmed_outlier and j == 0)
+            for j in range(outliers)
+        ]
+        db.commit()
+        return person, outlier_faces
+
+    def test_outliers_returned_inliers_not(self, authenticated_client, db_session):
+        person, outliers = self.seed_person(db_session)
+
+        data = authenticated_client.get(f"/people/{person.id}/likely-mistags").json()
+
+        assert data["eligible"] is True
+        assert data["totalAboveThreshold"] == 3
+        assert {f["id"] for f in data["faces"]} == {str(f.id) for f in outliers}
+        assert all(f["score"] >= data["threshold"] for f in data["faces"])
+        scores = [f["score"] for f in data["faces"]]
+        assert scores == sorted(scores, reverse=True)
+        first = data["faces"][0]
+        assert first["boundingBox"] == {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}
+        assert first["thumbnailUrl"]
+
+    def test_confirmed_faces_excluded(self, authenticated_client, db_session):
+        person, outliers = self.seed_person(db_session, confirmed_outlier=True)
+
+        data = authenticated_client.get(f"/people/{person.id}/likely-mistags").json()
+
+        assert str(outliers[0].id) not in {f["id"] for f in data["faces"]}
+        assert data["totalAboveThreshold"] == 2
+
+    def test_not_eligible_under_ten_faces(self, authenticated_client, db_session):
+        person, _ = self.seed_person(db_session, inliers=5, outliers=2)
+
+        data = authenticated_client.get(f"/people/{person.id}/likely-mistags").json()
+
+        assert data["eligible"] is False
+        assert data["faces"] == []
+
+    def test_no_outliers(self, authenticated_client, db_session):
+        person, _ = self.seed_person(db_session, outliers=0)
+
+        data = authenticated_client.get(f"/people/{person.id}/likely-mistags").json()
+
+        assert data["eligible"] is True
+        assert data["faces"] == []
+        assert data["totalAboveThreshold"] == 0
+
+    def test_ordering_is_stable_across_requests(self, authenticated_client, db_session):
+        person, _ = self.seed_person(db_session)
+        first = authenticated_client.get(f"/people/{person.id}/likely-mistags").json()
+        second = authenticated_client.get(f"/people/{person.id}/likely-mistags").json()
+        assert first == second
+
+    def test_person_not_found(self, authenticated_client):
+        assert authenticated_client.get(f"/people/{uuid.uuid4()}/likely-mistags").status_code == 404
+
+    def test_invalid_uuid(self, authenticated_client):
+        assert authenticated_client.get("/people/not-a-uuid/likely-mistags").status_code == 404
+
+    def test_requires_authentication(self, client, db_session):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+        response = client.get(f"/people/{person.id}/likely-mistags", headers={"Origin": "https://photos.l42.eu"}, follow_redirects=False)
+        assert response.status_code in (302, 401)
+
+    def test_this_is_correct_confirms_via_bulk_put(self, authenticated_client, db_session):
+        person, outliers = self.seed_person(db_session)
+        with patch("app.routers.faces.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
+                patch("app.routers.faces._enqueue_profile_picture"):
+            response = authenticated_client.put("/faces/person", json={"faceIds": [str(outliers[0].id)], "personId": str(person.id)})
+
+        assert response.status_code == 200
+        db_session.refresh(outliers[0])
+        assert outliers[0].person_confirmed is True
+        assert outliers[0].person_id == person.id
+        assert mock_emit.call_args[0][0] == "facesConfirmed"
+        assert "Confirmed 1 face(s) as Alice" in mock_emit.call_args[0][1]
+        data = authenticated_client.get(f"/people/{person.id}/likely-mistags").json()
+        assert str(outliers[0].id) not in {f["id"] for f in data["faces"]}

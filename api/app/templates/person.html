@@ -34,6 +34,19 @@
         <span class="flag-status" id="flag-status"{% if not person.flaggedAt %} hidden{% endif %}></span>
     </div>
 
+    {% if person.faceCount >= 10 %}
+    <section class="likely-mistags" id="likely-mistags" aria-labelledby="likely-mistags-heading">
+        <div class="person-photos-header">
+            <h2 id="likely-mistags-heading">Likely mistags</h2>
+            <button type="button" class="select-mode-btn" id="likely-mistags-refresh">Refresh</button>
+        </div>
+        <p id="likely-mistags-status" role="status"></p>
+        <button type="button" class="select-mode-btn" id="likely-mistags-retry" hidden>Retry</button>
+        <ul class="likely-mistags-list" id="likely-mistags-list"></ul>
+        <button type="button" class="select-mode-btn" id="likely-mistags-more" hidden>Show more</button>
+    </section>
+    {% endif %}
+
     <section class="person-photos">
         <div class="person-photos-header">
             <h2 id="photos-heading">Photos ({{ person.photos | length }})</h2>
@@ -465,6 +478,7 @@
         selectModeBtn.textContent = 'Select photos to move';
         selectedFaceIds.clear();
         photoGrid.querySelectorAll('.photo-select-checkbox').forEach((cb) => { cb.checked = false; });
+        document.querySelectorAll('.mistag-checkbox').forEach((cb) => { cb.checked = false; });
         updateBulkActionBar();
     }
 
@@ -655,6 +669,7 @@
                 const link = checkbox && checkbox.closest('.media-card-link');
                 if (link) link.remove();
             }
+            removeMistagFaces(faceIds);
             const photosHeading = document.getElementById('photos-heading');
             if (photosHeading) {
                 photosHeading.textContent = `Photos (${photoGrid.querySelectorAll('.media-card-link').length})`;
@@ -673,5 +688,167 @@
             movePromptConfirm.disabled = false;
         }
     });
+
+    // --- Likely mistags (lucas42/lucos_photos#623) ---
+    const mistagSection = document.getElementById('likely-mistags');
+    const mistagList = document.getElementById('likely-mistags-list');
+    const mistagStatus = document.getElementById('likely-mistags-status');
+    const mistagMore = document.getElementById('likely-mistags-more');
+    const mistagRetry = document.getElementById('likely-mistags-retry');
+    const mistagRefresh = document.getElementById('likely-mistags-refresh');
+    const MISTAG_PAGE_SIZE = 24;
+    let mistagFaces = [];
+    let mistagShown = 0;
+    let mistagTotal = 0;
+    let mistagLoaded = false;
+
+    function updateMistagStatus() {
+        if (mistagFaces.length === 0) {
+            mistagStatus.textContent = 'No likely mistags found.';
+        } else {
+            const total = Math.max(mistagTotal, mistagFaces.length);
+            mistagStatus.textContent = `Showing ${mistagList.children.length} of ${total} likely mistag${total === 1 ? '' : 's'}.`;
+        }
+        mistagMore.hidden = mistagShown >= mistagFaces.length;
+    }
+
+    function renderMistagCrop(face) {
+        const { x, y, width, height } = face.boundingBox;
+        const label = face.takenAtDisplay ? `Select face from photo taken ${face.takenAtDisplay}` : 'Select face from this photo';
+        const li = document.createElement('li');
+        li.className = 'likely-mistag';
+        li.dataset.faceId = face.id;
+
+        const cropLabel = document.createElement('label');
+        cropLabel.className = 'likely-mistag-crop-label';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'mistag-checkbox';
+        checkbox.dataset.faceId = face.id;
+        checkbox.checked = selectedFaceIds.has(face.id);
+        const sr = document.createElement('span');
+        sr.className = 'sr-only';
+        sr.textContent = label;
+        const crop = document.createElement('div');
+        crop.className = 'likely-mistag-crop';
+        crop.setAttribute('role', 'img');
+        crop.setAttribute('aria-label', face.takenAtDisplay ? `Face from photo taken ${face.takenAtDisplay}` : 'Face from this photo');
+        crop.style.backgroundImage = `url("${face.thumbnailUrl}")`;
+        crop.style.backgroundSize = `${100 / width}% auto`;
+        crop.style.backgroundPosition = `${width >= 1 ? 0 : (x / (1 - width)) * 100}% ${height >= 1 ? 0 : (y / (1 - height)) * 100}%`;
+        cropLabel.append(checkbox, sr, crop);
+
+        const score = document.createElement('span');
+        score.className = 'likely-mistag-score';
+        score.textContent = `Unlike the others (${face.score.toFixed(2)})`;
+
+        const correctBtn = document.createElement('button');
+        correctBtn.type = 'button';
+        correctBtn.className = 'likely-mistag-correct-btn';
+        correctBtn.textContent = 'This is correct';
+
+        li.append(cropLabel, score, correctBtn);
+        return li;
+    }
+
+    function showMoreMistags() {
+        const next = mistagFaces.slice(mistagShown, mistagShown + MISTAG_PAGE_SIZE);
+        next.forEach((face) => mistagList.appendChild(renderMistagCrop(face)));
+        mistagShown += next.length;
+        updateMistagStatus();
+    }
+
+    async function loadMistags() {
+        mistagLoaded = true;
+        mistagRetry.hidden = true;
+        mistagMore.hidden = true;
+        mistagRefresh.disabled = true;
+        mistagStatus.textContent = 'Looking for likely mistags…';
+        try {
+            const response = await fetch(`/people/${container.dataset.personId}/likely-mistags`);
+            if (!response.ok) throw new Error(`API responded with ${response.status}`);
+            const data = await response.json();
+            if (!data.eligible) {
+                mistagSection.hidden = true;
+                return;
+            }
+            mistagList.replaceChildren();
+            mistagFaces = data.faces;
+            mistagTotal = data.totalAboveThreshold;
+            mistagShown = 0;
+            showMoreMistags();
+        } catch (err) {
+            console.error('Failed to load likely mistags:', err);
+            mistagStatus.textContent = "Couldn't look for likely mistags.";
+            mistagRetry.hidden = false;
+        } finally {
+            mistagRefresh.disabled = false;
+        }
+    }
+
+    function removeMistagFaces(faceIds) {
+        if (!mistagList) return;
+        const gone = new Set(faceIds);
+        mistagList.querySelectorAll('.likely-mistag').forEach((li) => { if (gone.has(li.dataset.faceId)) li.remove(); });
+        mistagFaces = mistagFaces.filter((f) => !gone.has(f.id));
+        mistagShown = mistagList.children.length;
+        mistagTotal = Math.max(mistagTotal - faceIds.length, 0);
+        faceIds.forEach((id) => selectedFaceIds.delete(id));
+        updateBulkActionBar();
+        updateMistagStatus();
+    }
+
+    if (mistagSection) {
+        mistagRefresh.addEventListener('click', loadMistags);
+        mistagRetry.addEventListener('click', loadMistags);
+        mistagMore.addEventListener('click', showMoreMistags);
+
+        mistagList.addEventListener('change', (e) => {
+            if (!e.target.classList.contains('mistag-checkbox')) return;
+            const faceId = e.target.dataset.faceId;
+            if (e.target.checked) selectedFaceIds.add(faceId);
+            else selectedFaceIds.delete(faceId);
+            updateBulkActionBar();
+        });
+
+        mistagList.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.likely-mistag-correct-btn');
+            if (!btn) return;
+            const li = btn.closest('.likely-mistag');
+            const faceId = li.dataset.faceId;
+            btn.disabled = true;
+            try {
+                const response = await fetch('/faces/person', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ faceIds: [faceId], personId: container.dataset.personId }),
+                });
+                if (!response.ok) throw new Error(`API responded with ${response.status}`);
+                const next = li.nextElementSibling || li.previousElementSibling;
+                removeMistagFaces([faceId]);
+                moveConfirmation.textContent = 'Confirmed 1 face as correct.';
+                moveConfirmation.hidden = false;
+                (next ? next.querySelector('.likely-mistag-correct-btn') : mistagRefresh).focus();
+            } catch (err) {
+                console.error('Failed to confirm face:', err);
+                btn.disabled = false;
+                moveConfirmation.textContent = "Couldn't confirm that face. Please try again.";
+                moveConfirmation.hidden = false;
+            }
+        });
+
+        // Computed lazily: only once the section is scrolled into view.
+        if ('IntersectionObserver' in window) {
+            const observer = new IntersectionObserver((entries) => {
+                if (entries.some((entry) => entry.isIntersecting) && !mistagLoaded) {
+                    observer.disconnect();
+                    loadMistags();
+                }
+            });
+            observer.observe(mistagSection);
+        } else {
+            loadMistags();
+        }
+    }
 </script>
 {% endblock %}

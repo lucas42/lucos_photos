@@ -1763,3 +1763,75 @@ a:focus-visible {
 	outline: 2px solid var(--accent-color);
 	outline-offset: 2px;
 }
+
+/* Likely mistags (lucas42/lucos_photos#623) */
+.likely-mistags {
+	margin-bottom: 2rem;
+}
+
+.likely-mistags-list {
+	list-style: none;
+	padding: 0;
+	margin: 1rem 0;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+	gap: 0.75rem;
+}
+
+.likely-mistag {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+}
+
+.likely-mistag-crop-label {
+	position: relative;
+	display: block;
+	cursor: pointer;
+}
+
+.likely-mistag-crop {
+	aspect-ratio: 1;
+	border-radius: 8px;
+	background-repeat: no-repeat;
+	background-color: rgba(255, 255, 255, 0.05);
+}
+
+.likely-mistag-crop-label .mistag-checkbox {
+	position: absolute;
+	top: 0.4rem;
+	left: 0.4rem;
+	width: 1.2rem;
+	height: 1.2rem;
+	z-index: 1;
+}
+
+.likely-mistag-crop-label .mistag-checkbox:focus-visible + .sr-only + .likely-mistag-crop {
+	outline: 2px solid var(--accent-color);
+}
+
+.likely-mistag-score {
+	font-size: 0.8rem;
+	opacity: 0.75;
+}
+
+.likely-mistag-correct-btn {
+	align-self: flex-start;
+	background: none;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	color: var(--text-color);
+	border-radius: 6px;
+	padding: 0.2rem 0.6rem;
+	font-size: 0.75rem;
+	cursor: pointer;
+}
+
+.likely-mistag-correct-btn:hover {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: rgba(255, 255, 255, 0.4);
+}
+
+.likely-mistag-correct-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
