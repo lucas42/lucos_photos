@@ -31,6 +31,8 @@ def test_find_affected_picks_only_oriented_profile_photos(db_session, tmp_path):
     rotated, _ = add_person(db_session, "c")
     pinned, _ = add_person(db_session, "d", auto_generated=False)
     missing, _ = add_person(db_session, "e")
+    zero, _ = add_person(db_session, "f")
+    out_of_range, _ = add_person(db_session, "g")
     no_picture = Person()
     db_session.add(no_picture)
     db_session.commit()
@@ -38,6 +40,8 @@ def test_find_affected_picks_only_oriented_profile_photos(db_session, tmp_path):
     write_jpeg(tmp_path / f"{'b' * 64}.jpg", None)
     write_jpeg(tmp_path / f"{'c' * 64}.jpg", 6)
     write_jpeg(tmp_path / f"{'d' * 64}.jpg", 3)
+    write_jpeg(tmp_path / f"{'f' * 64}.jpg", 0)  # exif_transpose ignores 0
+    write_jpeg(tmp_path / f"{'g' * 64}.jpg", 9)  # and anything above 8
 
     with patch("lucos_photos_common.jobs.ORIGINALS_DIR", tmp_path):
         affected = repair.find_affected(db_session)
