@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import mimeparse
+import numpy as np
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -210,6 +211,79 @@ def get_person(
         }, headers={"Vary": "Accept"})
 
     return JSONResponse(content=data, headers={"Vary": "Accept"})
+
+
+# Median cosine distance above which an unconfirmed face is listed as a likely mistag.
+# Separate from FACE_SIMILARITY_THRESHOLD: that is pairwise, this is a median over many faces.
+LIKELY_MISTAG_THRESHOLD = 0.7
+LIKELY_MISTAG_MIN_FACES = 10
+LIKELY_MISTAG_SAMPLE_SIZE = 500
+LIKELY_MISTAG_MAX_RESULTS = 240
+
+
+@router.get("/people/{person_id}/likely-mistags")
+def get_likely_mistags(
+    person_id: str,
+    _: Annotated[None, Depends(verify_session_or_key)],
+    db: Session = Depends(get_db),
+):
+    """Unconfirmed faces of this person that are unlike the rest, most unlike first (lucas42/lucos_photos#623).
+
+    score = median cosine distance from the face to a seeded sample of the person's other faces.
+    """
+    try:
+        person_uuid = uuid.UUID(person_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Person not found")
+    if not db.query(Person.id).filter(Person.id == person_uuid).first():
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    rows = db.query(Face.id, Face.person_confirmed, Face.embedding).filter(
+        Face.person_id == person_uuid, Face.embedding.isnot(None)
+    ).all()
+    result = {"eligible": len(rows) >= LIKELY_MISTAG_MIN_FACES, "threshold": LIKELY_MISTAG_THRESHOLD, "totalAboveThreshold": 0, "faces": []}
+    if not result["eligible"]:
+        return result
+
+    ids = np.array([str(r.id) for r in rows])
+    confirmed = np.array([r.person_confirmed for r in rows])
+    vectors = np.array([np.asarray(r.embedding, dtype=np.float32) for r in rows])
+    vectors /= np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-12)
+
+    rng = np.random.default_rng(person_uuid.int % (2**32))
+    sample_idx = np.sort(rng.choice(len(rows), size=min(LIKELY_MISTAG_SAMPLE_SIZE, len(rows)), replace=False))
+    unconfirmed_idx = np.flatnonzero(~confirmed)
+    if len(unconfirmed_idx) == 0:
+        return result
+
+    distances = 1.0 - vectors[unconfirmed_idx] @ vectors[sample_idx].T
+    distances[unconfirmed_idx[:, None] == sample_idx[None, :]] = np.nan  # a face isn't its own reference
+    scores = np.nanmedian(distances, axis=1)
+
+    above = np.flatnonzero(scores >= LIKELY_MISTAG_THRESHOLD)
+    result["totalAboveThreshold"] = int(len(above))
+    top = above[np.argsort(-scores[above])][:LIKELY_MISTAG_MAX_RESULTS]
+    if len(top) == 0:
+        return result
+
+    score_by_face_id = {ids[unconfirmed_idx[i]]: float(scores[i]) for i in top}
+    faces = db.query(Face).filter(Face.id.in_([uuid.UUID(f) for f in score_by_face_id])).all()
+    photos = {p.id: p for p in db.query(MediaItem).filter(MediaItem.id.in_({f.photo_id for f in faces})).all()}
+    result["faces"] = sorted(
+        (
+            {
+                "id": str(f.id),
+                "photoId": str(f.photo_id),
+                "boundingBox": {"x": f.bbox_x, "y": f.bbox_y, "width": f.bbox_width, "height": f.bbox_height},
+                "thumbnailUrl": photo_to_dict(photos[f.photo_id])["thumbnailUrl"],
+                "takenAtDisplay": photo_to_dict(photos[f.photo_id])["takenAtDisplay"],
+                "score": score_by_face_id[str(f.id)],
+            }
+            for f in faces
+        ),
+        key=lambda d: -d["score"],
+    )
+    return result
 
 
 @router.get("/people/{person_id}/profile-picture")

@@ -153,17 +153,18 @@ async def bulk_assign_person(
         missing = [str(u) for u in face_uuids if u not in found_ids]
         raise HTTPException(status_code=404, detail=f"Face(s) not found: {', '.join(missing)}")
 
+    already_there = all(f.person_id == destination.id for f in faces)
     needs_regen = move_faces_to_person(db, faces, destination)
     db.commit()
 
     for pid in needs_regen:
         _enqueue_profile_picture(str(pid))
 
-    await emit_loganne_event(
-        "facesMoved",
-        f"Moved {len(faces)} face(s) to {destination.display_name or str(person_uuid)} in lucos_photos",
-        url=photo_url(faces[0].photo_id),
-    )
+    destination_name = destination.display_name or str(person_uuid)
+    if already_there:
+        await emit_loganne_event("facesConfirmed", f"Confirmed {len(faces)} face(s) as {destination_name} in lucos_photos", url=photo_url(faces[0].photo_id))
+    else:
+        await emit_loganne_event("facesMoved", f"Moved {len(faces)} face(s) to {destination_name} in lucos_photos", url=photo_url(faces[0].photo_id))
 
     return {"movedCount": len(faces), "personId": str(person_uuid)}
 
