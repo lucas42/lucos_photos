@@ -6,7 +6,8 @@ Run inside the worker container, after the exif_transpose fix is deployed:
     python -m app.repair_exif_profile_pictures --apply    # enqueue regeneration
     python -m app.repair_exif_profile_pictures --apply --limit 20
 
-Affected = a person whose current profile photo has an EXIF Orientation other than 1.
+Affected = a person whose current profile photo has an EXIF Orientation of 2-8, the values
+ImageOps.exif_transpose acts on (0 and other out-of-range values are ignored by it).
 Auto-generated pictures are regenerated with force=True and no Loganne event; manually
 pinned ones go through the manual path.
 """
@@ -52,7 +53,7 @@ def find_affected(db) -> list[tuple[str, str, bool, int]]:
     affected = []
     for person_id, auto_generated, media_item in rows:
         orientation = read_orientation(media_item)
-        if orientation != 1:
+        if 2 <= orientation <= 8:
             affected.append((str(person_id), str(media_item.id), auto_generated is False, orientation))
     return affected
 
