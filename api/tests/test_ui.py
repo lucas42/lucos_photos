@@ -165,7 +165,7 @@ class TestPhotoDetailHtml:
         """A tagged person's picture sits next to a visible name span — its alt must
         be empty, or the name gets announced twice (lucas42/lucos_photos#476)."""
         from unittest.mock import patch
-        from lucos_photos_common.models import Photo, ProcessingStatus, ProcessingState, Person, PhotoPerson
+        from lucos_photos_common.models import Photo, ProcessingStatus, ProcessingState, Person, PhotoPerson, Face
         photo = Photo(sha256_hash="i" * 64, file_extension="jpg")
         db_session.add(photo)
         db_session.flush()
@@ -174,6 +174,7 @@ class TestPhotoDetailHtml:
         db_session.add(person)
         db_session.flush()
         db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
+        db_session.add(Face(photo_id=photo.id, person_id=person.id, bbox_x=0, bbox_y=0, bbox_width=0.1, bbox_height=0.1))
         db_session.commit()
 
         derivatives_dir = tmp_path / "derivatives"

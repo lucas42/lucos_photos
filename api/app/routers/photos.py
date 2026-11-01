@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, Up
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse, Response
 from fastapi.templating import Jinja2Templates
 from PIL import Image
-from sqlalchemy import case, or_, and_
+from sqlalchemy import and_, case, distinct, func, or_
 from sqlalchemy.orm import Session
 
 from app.auth import verify_key, verify_session_or_key
@@ -584,11 +584,17 @@ def get_photo(
     data = photo_to_dict(photo)
     data["processingStatus"] = processing_status.state.value if processing_status else None
     data["faces"] = [face_to_dict_simple(f) for f in faces]
+    # Built from face.person_id, not photo_person, so auto-assigned faces aren't missed (lucas42/lucos_photos#620).
     people = (
         db.query(Person)
-        .join(PhotoPerson, Person.id == PhotoPerson.person_id)
-        .filter(PhotoPerson.photo_id == photo_uuid)
-        .order_by(Person.display_name.asc().nullslast())
+        .filter(Person.id.in_(db.query(Face.person_id).filter(Face.photo_id == photo_uuid, Face.person_id.isnot(None))))
+        .order_by(Person.display_name.asc().nullslast(), Person.id.asc())
+        .all()
+    )
+    photo_counts = dict(
+        db.query(Face.person_id, func.count(distinct(Face.photo_id)))
+        .filter(Face.person_id.in_([p.id for p in people]))
+        .group_by(Face.person_id)
         .all()
     )
     # person_to_dict alone can't say whether *this* photo is the person's current
@@ -596,7 +602,7 @@ def get_photo(
     # (lucas42/lucos_photos#473) — so compare against Person.profile_photo_id here.
     data["people"] = [
         {
-            **person_to_dict(p),
+            **person_to_dict(p, photo_count=photo_counts.get(p.id, 0)),
             "isCurrentProfilePicture": p.profile_photo_id == photo_uuid,
             "profilePictureIsManual": p.profile_photo_id == photo_uuid and p.profile_auto_generated is False,
         }
@@ -620,6 +626,39 @@ def get_photo(
         return templates.TemplateResponse(request, "photo.html", {"photo": data, "current_page": "photos"}, headers={"Vary": "Accept"})
 
     return JSONResponse(content=data, headers={"Vary": "Accept"})
+
+
+@router.post("/photos/{photo_id}/ignore-unlinked-people", status_code=status.HTTP_200_OK)
+async def ignore_unlinked_people(
+    photo_id: str,
+    _: Annotated[None, Depends(verify_session_or_key)],
+    db: Session = Depends(get_db),
+):
+    """Mark every unlinked, unnamed, unflagged person on this photo as a background face.
+
+    Returns the ids it changed so the caller can undo exactly this action.
+    """
+    photo = _get_photo_or_404(photo_id, db)
+    people = (
+        db.query(Person)
+        .filter(Person.id.in_(db.query(Face.person_id).filter(Face.photo_id == photo.id, Face.person_id.isnot(None))))
+        .all()
+    )
+    ignored, skipped_flagged = [], 0
+    for person in people:
+        if person.is_background or person.contact_id or person.display_name:
+            continue
+        if person.flagged_at:
+            skipped_flagged += 1
+            continue
+        person.is_background = True
+        ignored.append(str(person.id))
+    db.commit()
+
+    if ignored:
+        await emit_loganne_event("peopleMarkedBackground", f"Ignored {len(ignored)} unlinked people from a photo in lucos_photos", url=photo_url(photo.id))
+
+    return {"ignoredPersonIds": ignored, "skippedFlagged": skipped_flagged}
 
 
 @router.delete("/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)

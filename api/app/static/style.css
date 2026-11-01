@@ -1506,11 +1506,25 @@ a:hover {
 	filter: grayscale(0%);
 }
 
+.photo-person-count,
+.photo-person-ignored-status {
+	font-size: 0.8rem;
+	opacity: 0.75;
+}
+
+.photo-people-bulk,
+.photo-people-message {
+	margin-bottom: 0.75rem;
+}
+
 /* ------------------------------------------------------------------ */
 /* Set / revert profile picture (lucas42/lucos_photos#473)             */
 /* ------------------------------------------------------------------ */
 
-.set-profile-picture-btn {
+.set-profile-picture-btn,
+.unignore-person-btn,
+#photo-people-undo-btn,
+#photo-people-dismiss-btn {
 	background: none;
 	border: 1px solid rgba(255, 255, 255, 0.2);
 	color: var(--text-color);
@@ -1521,12 +1535,18 @@ a:hover {
 	transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.set-profile-picture-btn:hover {
+.set-profile-picture-btn:hover,
+.unignore-person-btn:hover,
+#photo-people-undo-btn:hover,
+#photo-people-dismiss-btn:hover {
 	background: rgba(255, 255, 255, 0.1);
 	border-color: rgba(255, 255, 255, 0.4);
 }
 
-.set-profile-picture-btn:disabled {
+.set-profile-picture-btn:disabled,
+.unignore-person-btn:disabled,
+#photo-people-undo-btn:disabled,
+#photo-people-dismiss-btn:disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
 }
