@@ -5,7 +5,7 @@ WORKDIR /build
 COPY api/search-component/package.json api/search-component/package-lock.json ./
 RUN npm ci
 
-FROM python:3.14-slim
+FROM python:3.15-slim
 ARG VERSION
 ENV VERSION=$VERSION
 
