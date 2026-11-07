@@ -24,7 +24,8 @@ from app.auth import (  # noqa: F401 - safe_path and verify_session_or_key re-ex
     verify_aithne_token,
     verify_session_or_key,
 )
-from app.database import get_db, SessionLocal  # noqa: F401 - re-exported for tests; SessionLocal used by check_db/get_metrics
+from app.database import get_db, SessionLocal  # noqa: F401 - re-exported for tests; SessionLocal used by the db probes
+from app.probes import ProbeStillRunning, run_probe
 from app.redis_client import _broadcast, _redis_subscriber_task, _ws_clients, get_redis  # noqa: F401 - _broadcast and _ws_clients re-exported for tests
 from app.routers import app_release, faces, people, photos, telemetry, webhooks
 from app.serializers import person_to_dict, photo_to_dict
@@ -192,41 +193,64 @@ def root(request: Request, _: Annotated[None, Depends(verify_session_or_key)], d
 CHECK_TIMEOUT = 0.5  # seconds — must be well under monitoring system's 1s hard limit
 
 
-async def check_db() -> dict:
-    """Check whether a connection to PostgreSQL can be established."""
-    tech_detail = "Checks whether a connection to PostgreSQL can be established"
+def _probe_db_check() -> None:
+    """Runs on a probe thread: the session is opened, used, invalidated and closed there."""
     db = SessionLocal()
-    ok = False
-    debug_info = None
-    error_occurred = False
     try:
-        await asyncio.wait_for(asyncio.to_thread(db.execute, text("SELECT 1")), timeout=CHECK_TIMEOUT)
-        ok = True
-    except asyncio.TimeoutError:
-        error_occurred = True
-        log.warning("db-reachable check timed out after %ss", CHECK_TIMEOUT)
-        debug_info = f"timeout after {CHECK_TIMEOUT}s"
-    except Exception as exc:
-        error_occurred = True
-        log.warning("db-reachable check failed: %r", exc)
-        debug_info = repr(exc)
+        db.execute(text("SELECT 1"))
+    except Exception:
+        # invalidate() makes the pool discard the connection instead of recycling a broken one.
+        try:
+            db.invalidate()
+        except Exception:
+            pass
+        raise
     finally:
-        # Only invalidate on error: invalidate() tells the pool to discard the connection
-        # rather than recycle it (preventing a broken/in-flight connection from contaminating
-        # future sessions).  It must NOT be called on the happy path because it can race with
-        # other concurrent sessions sharing the same underlying connection (e.g. SQLite in tests).
-        # Both calls are wrapped broadly because db.invalidate() can itself raise
-        # IllegalStateChangeError when the underlying thread is still running _connection_for_bind()
-        # — a concurrent state-machine violation that must never escape as a 500.
-        if error_occurred:
-            try:
-                db.invalidate()
-            except Exception:
-                pass
         try:
             db.close()
         except Exception:
-            log.debug("session.close() skipped in check_db: state error during cleanup")
+            log.debug("session.close() skipped in db-check probe: state error during cleanup")
+
+
+def _probe_db_metrics():
+    """Runs on a probe thread; see _probe_db_check."""
+    db = SessionLocal()
+    try:
+        return db.execute(text("""
+            SELECT
+                (SELECT COUNT(*) FROM media_item WHERE media_type = 'photo') AS photo_count,
+                (SELECT COUNT(*) FROM media_item WHERE media_type = 'video') AS video_count,
+                (SELECT COUNT(*) FROM processing_status WHERE state = 'pending') AS pending_count
+        """)).fetchone()
+    except Exception:
+        try:
+            db.invalidate()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            db.close()
+        except Exception:
+            log.debug("session.close() skipped in db-metrics probe: state error during cleanup")
+
+
+async def check_db() -> dict:
+    """Check whether a connection to PostgreSQL can be established."""
+    tech_detail = "Checks whether a connection to PostgreSQL can be established"
+    ok = False
+    debug_info = None
+    try:
+        await run_probe("db-check", _probe_db_check, CHECK_TIMEOUT)
+        ok = True
+    except asyncio.TimeoutError:
+        log.warning("db-reachable check timed out after %ss", CHECK_TIMEOUT)
+        debug_info = f"timeout after {CHECK_TIMEOUT}s"
+    except ProbeStillRunning as exc:
+        debug_info = str(exc)
+    except Exception as exc:
+        log.warning("db-reachable check failed: %r", exc)
+        debug_info = repr(exc)
     result: dict = {"ok": ok, "techDetail": tech_detail}
     if debug_info is not None:
         result["debug"] = debug_info
@@ -238,11 +262,13 @@ async def check_redis() -> dict:
     tech_detail = "Checks whether a connection to Redis can be established"
     try:
         redis_conn = get_redis()
-        await asyncio.wait_for(asyncio.to_thread(redis_conn.ping), timeout=CHECK_TIMEOUT)
+        await run_probe("redis-ping", redis_conn.ping, CHECK_TIMEOUT)
         return {"ok": True, "techDetail": tech_detail}
     except asyncio.TimeoutError:
         log.warning("redis-reachable check timed out after %ss", CHECK_TIMEOUT)
         return {"ok": False, "techDetail": tech_detail, "debug": f"timeout after {CHECK_TIMEOUT}s"}
+    except ProbeStillRunning as exc:
+        return {"ok": False, "techDetail": tech_detail, "debug": str(exc)}
     except Exception as exc:
         log.warning("redis-reachable check failed: %r", exc)
         return {"ok": False, "techDetail": tech_detail, "debug": repr(exc)}
@@ -252,7 +278,7 @@ async def get_worker_memory_rss_bytes() -> int | None:
     """Read the worker's last-reported RSS from the Redis heartbeat key, or None if absent."""
     try:
         redis_conn = get_redis()
-        raw = await asyncio.wait_for(asyncio.to_thread(redis_conn.get, "worker:heartbeat"), timeout=CHECK_TIMEOUT)
+        raw = await run_probe("redis-worker-rss", lambda: redis_conn.get("worker:heartbeat"), CHECK_TIMEOUT)
         if raw:
             return json.loads(raw).get("rss_bytes")
     except Exception:
@@ -266,9 +292,10 @@ async def get_sweep_chronically_stuck_count(kind: str) -> int | None:
     has stopped — the key is TTL'd, see worker/app/main.py sweep_pending_photos)."""
     try:
         redis_conn = get_redis()
-        raw = await asyncio.wait_for(
-            asyncio.to_thread(redis_conn.get, f"sweep:chronically_stuck_{kind}_count"),
-            timeout=CHECK_TIMEOUT,
+        raw = await run_probe(
+            f"redis-chronic-{kind}",
+            lambda: redis_conn.get(f"sweep:chronically_stuck_{kind}_count"),
+            CHECK_TIMEOUT,
         )
         if raw is not None:
             return int(raw)
@@ -279,38 +306,14 @@ async def get_sweep_chronically_stuck_count(kind: str) -> int | None:
 
 async def get_metrics() -> dict:
     """Return live metrics: photo count, video count, pending queue depth, worker RSS."""
-    db = SessionLocal()
     photo_count = video_count = pending_count = 0
-    metrics_error = False
     try:
-        row = await asyncio.wait_for(
-            asyncio.to_thread(
-                lambda: db.execute(text("""
-                    SELECT
-                        (SELECT COUNT(*) FROM media_item WHERE media_type = 'photo') AS photo_count,
-                        (SELECT COUNT(*) FROM media_item WHERE media_type = 'video') AS video_count,
-                        (SELECT COUNT(*) FROM processing_status WHERE state = 'pending') AS pending_count
-                """)).fetchone()
-            ),
-            timeout=CHECK_TIMEOUT,
-        )
+        row = await run_probe("db-metrics", _probe_db_metrics, CHECK_TIMEOUT)
         photo_count = row.photo_count if row else 0
         video_count = row.video_count if row else 0
         pending_count = row.pending_count if row else 0
     except Exception:
-        metrics_error = True  # defaults already set
-    finally:
-        # Same error-guarded invalidate pattern as check_db: only invalidate on error to avoid
-        # racing with other concurrent sessions on the shared SQLite connection in tests.
-        if metrics_error:
-            try:
-                db.invalidate()
-            except Exception:
-                pass
-        try:
-            db.close()
-        except Exception:
-            log.debug("session.close() skipped in get_metrics: state error during cleanup")
+        pass  # defaults already set
 
     worker_rss = await get_worker_memory_rss_bytes()
     chronic_media_count = await get_sweep_chronically_stuck_count("media")
