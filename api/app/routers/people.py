@@ -11,7 +11,8 @@ import numpy as np
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func
+from loganne import updateLoganne
+from sqlalchemy import func, insert, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -380,7 +381,7 @@ async def unlink_person_contact(
 
 
 @router.post("/people/merge")
-async def merge_people(
+def merge_people(
     body: dict,
     _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
@@ -442,42 +443,49 @@ async def merge_people(
 
     losers = [p for p in persons if p.id != winner.id]
 
-    # Collect photo_ids affected by the losers (for photo_person sync after merge)
     loser_ids = {p.id for p in losers}
-    affected_photo_ids = {
-        f.photo_id
-        for f in db.query(Face).filter(Face.person_id.in_(loser_ids)).all()
-    }
+    affected_photo_ids = [
+        row[0] for row in db.query(Face.photo_id).filter(Face.person_id.in_(loser_ids)).distinct()
+    ]
 
-    # Reassign all faces from losers to winner, marking them as confirmed.
-    # A user-initiated merge is a manual confirmation that these faces belong
-    # to the same person; without person_confirmed=True the assignments would
-    # be lost if the photo is later reprocessed (detect_and_save_faces only
-    # snapshots confirmed assignments before re-detecting).
+    # Marked confirmed so the assignment survives reprocessing (detect_and_save_faces only keeps confirmed ones).
     db.query(Face).filter(Face.person_id.in_(loser_ids)).update(
         {Face.person_id: winner.id, Face.person_confirmed: True},
-        synchronize_session="fetch",
+        synchronize_session=False,
     )
 
-    # Delete photo_person rows for the loser persons (sync_photo_person will rebuild correctly)
-    db.query(PhotoPerson).filter(PhotoPerson.person_id.in_(loser_ids)).delete(synchronize_session="fetch")
+    db.query(PhotoPerson).filter(PhotoPerson.person_id.in_(loser_ids)).delete(synchronize_session=False)
 
-    # Delete the loser persons
+    # The winner is the only person whose faces changed on these photos, so one set-based insert replaces the per-photo sync.
+    if affected_photo_ids:
+        already_linked = (
+            select(PhotoPerson.photo_id)
+            .where(PhotoPerson.person_id == winner.id, PhotoPerson.photo_id == Face.photo_id)
+            .exists()
+        )
+        db.execute(
+            insert(PhotoPerson).from_select(
+                ["photo_id", "person_id"],
+                select(Face.photo_id, literal(winner.id, PhotoPerson.person_id.type))
+                .where(Face.person_id == winner.id, Face.photo_id.in_(affected_photo_ids), ~already_linked)
+                .distinct(),
+            )
+        )
+
     for loser in losers:
         db.delete(loser)
 
     db.commit()
 
-    # Rebuild photo_person for all affected photos
-    for photo_id in affected_photo_ids:
-        sync_photo_person(db, photo_id)
-    db.commit()
-
-    # Enqueue profile picture regeneration for the winner
     _enqueue_profile_picture(str(winner.id))
 
     loser_names = ", ".join(p.display_name or str(p.id) for p in losers)
-    await emit_loganne_event("peopleMerged", f"Merged {loser_names} into {winner.display_name or str(winner.id)} in lucos_photos")
+    updateLoganne(
+        type="peopleMerged",
+        humanReadable=f"Merged {loser_names} into {winner.display_name or str(winner.id)} in lucos_photos",
+        level="routine",
+        url=None,
+    )
 
     return {"mergedPersonId": str(winner.id)}
 

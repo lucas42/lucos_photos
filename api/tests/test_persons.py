@@ -559,7 +559,7 @@ class TestMergePeople:
     def test_merge_two_people(self, authenticated_client, db_session):
         """Merging two people combines their faces and deletes the loser."""
         with patch("app.routers.people._enqueue_profile_picture"), \
-             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+             patch("app.routers.people.updateLoganne"):
             person_a = make_person(db_session, "Alice")
             person_b = make_person(db_session, "Bob")
             db_session.commit()
@@ -579,15 +579,15 @@ class TestMergePeople:
     def test_merge_loganne_message_uses_names(self, authenticated_client, db_session):
         """peopleMerged loganne message should use names, not IDs."""
         with patch("app.routers.people._enqueue_profile_picture"), \
-             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock) as mock_emit:
+             patch("app.routers.people.updateLoganne") as mock_emit:
             person_a = make_person(db_session, "Alice")
             person_b = make_person(db_session, "Bob")
             db_session.commit()
 
             authenticated_client.post("/people/merge", json={"personIds": [str(person_a.id), str(person_b.id)]})
 
-        assert mock_emit.call_args[0][0] == "peopleMerged"
-        message = mock_emit.call_args[0][1]
+        assert mock_emit.call_args.kwargs["type"] == "peopleMerged"
+        message = mock_emit.call_args.kwargs["humanReadable"]
         assert "Alice" in message or "Bob" in message
         # The loser's name and winner's name should both appear
         assert "Alice" in message
@@ -596,7 +596,7 @@ class TestMergePeople:
     def test_merge_keeps_person_with_contact(self, authenticated_client, db_session):
         """When one person has a contact link, they should be the winner."""
         with patch("app.routers.people._enqueue_profile_picture"), \
-             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+             patch("app.routers.people.updateLoganne"):
             person_a = make_person(db_session, "Alice", contact_id="42")
             person_b = make_person(db_session, "Bob")
             db_session.commit()
@@ -610,7 +610,7 @@ class TestMergePeople:
     def test_merge_reassigns_faces(self, authenticated_client, db_session):
         """All faces from the loser should be reassigned to the winner."""
         with patch("app.routers.people._enqueue_profile_picture"), \
-             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+             patch("app.routers.people.updateLoganne"):
             person_a = make_person(db_session, "Alice")
             person_b = make_person(db_session, "Bob")
             photo = make_photo(db_session, "b" * 64)
@@ -630,7 +630,7 @@ class TestMergePeople:
     def test_merge_marks_reassigned_faces_as_confirmed(self, authenticated_client, db_session):
         """Merged faces must be marked person_confirmed=True so they survive reprocessing."""
         with patch("app.routers.people._enqueue_profile_picture"), \
-             patch("app.routers.people.emit_loganne_event", new_callable=AsyncMock):
+             patch("app.routers.people.updateLoganne"):
             person_a = make_person(db_session, "Alice")
             person_b = make_person(db_session, "Bob")
             photo = make_photo(db_session, "b" * 64)
@@ -645,6 +645,76 @@ class TestMergePeople:
         db_session.expire_all()
         reassigned = db_session.query(Face).filter(Face.id == face.id).first()
         assert reassigned.person_confirmed is True
+
+    def test_merge_photo_person_matches_per_photo_sync(self, authenticated_client, db_session):
+        """Set-based photo_person rebuild gives the same winner/loser rows as per-photo sync_photo_person."""
+        from lucos_photos_common.jobs import sync_photo_person
+        with patch("app.routers.people._enqueue_profile_picture"), \
+             patch("app.routers.people.updateLoganne"):
+            winner = make_person(db_session, "Alice")
+            loser = make_person(db_session, "Bob")
+            other = make_person(db_session, "Carol")
+            photo_ids = []
+            for i in range(30):
+                photo = make_photo(db_session, f"{i:064d}")
+                photo_ids.append(photo.id)
+                # loser only on every photo; winner also on every 3rd; third person on every 5th
+                db_session.add(Face(photo_id=photo.id, person_id=loser.id, person_confirmed=True,
+                                    bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2))
+                db_session.add(PhotoPerson(photo_id=photo.id, person_id=loser.id))
+                if i % 3 == 0:
+                    db_session.add(Face(photo_id=photo.id, person_id=winner.id, person_confirmed=True,
+                                        bbox_x=0.5, bbox_y=0.5, bbox_width=0.2, bbox_height=0.2))
+                    db_session.add(PhotoPerson(photo_id=photo.id, person_id=winner.id))
+                if i % 5 == 0:
+                    db_session.add(Face(photo_id=photo.id, person_id=other.id, person_confirmed=True,
+                                        bbox_x=0.7, bbox_y=0.7, bbox_width=0.1, bbox_height=0.1))
+                    db_session.add(PhotoPerson(photo_id=photo.id, person_id=other.id))
+            db_session.commit()
+            winner_id, loser_id = winner.id, loser.id
+
+            response = authenticated_client.post("/people/merge", json={"personIds": [str(winner_id), str(loser_id)]})
+
+        assert response.status_code == 200
+        db_session.expire_all()
+        actual = {(r.photo_id, r.person_id) for r in db_session.query(PhotoPerson).all()}
+        for photo_id in photo_ids:
+            sync_photo_person(db_session, photo_id)
+        db_session.commit()
+        expected = {(r.photo_id, r.person_id) for r in db_session.query(PhotoPerson).all()}
+        assert actual == expected
+        assert not any(pid == loser_id for _, pid in actual)
+        assert {ph for ph, pid in actual if pid == winner_id} == set(photo_ids)
+
+    def test_merge_does_not_block_other_requests(self, authenticated_client, db_session):
+        """A slow merge must not stall other requests (it runs in the threadpool, not on the event loop)."""
+        import threading
+        import time
+        merge_started = threading.Event()
+
+        def slow_loganne(**kwargs):
+            merge_started.set()
+            time.sleep(1.0)
+
+        with patch("app.routers.people._enqueue_profile_picture"), \
+             patch("app.routers.people.updateLoganne", side_effect=slow_loganne):
+            person_a = make_person(db_session, "Alice")
+            person_b = make_person(db_session, "Bob")
+            db_session.commit()
+            ids = [str(person_a.id), str(person_b.id)]
+
+            merge = threading.Thread(
+                target=lambda: authenticated_client.post("/people/merge", json={"personIds": ids})
+            )
+            merge.start()
+            assert merge_started.wait(timeout=5)
+            start = time.monotonic()
+            response = authenticated_client.get("/_info")
+            elapsed = time.monotonic() - start
+            merge.join()
+
+        assert response.status_code == 200
+        assert elapsed < 0.5
 
     def test_merge_conflict_both_have_contacts(self, authenticated_client, db_session):
         """Merging two contact-linked people should return 409."""
