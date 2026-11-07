@@ -2,7 +2,9 @@
 
 import logging
 import os
+import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -24,6 +26,17 @@ from lucos_photos_common.jobs import sync_photo_person
 from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 router = APIRouter()
+log = logging.getLogger(__name__)
+
+
+@contextmanager
+def _timed(label: str):
+    """Log how long the wrapped block took, at INFO."""
+    start = time.monotonic()
+    try:
+        yield
+    finally:
+        log.info("merge_people %s took %.3fs", label, time.monotonic() - start)
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -444,17 +457,20 @@ def merge_people(
     losers = [p for p in persons if p.id != winner.id]
 
     loser_ids = {p.id for p in losers}
-    affected_photo_ids = [
-        row[0] for row in db.query(Face.photo_id).filter(Face.person_id.in_(loser_ids)).distinct()
-    ]
+    with _timed("affected_photo_ids"):
+        affected_photo_ids = [
+            row[0] for row in db.query(Face.photo_id).filter(Face.person_id.in_(loser_ids)).distinct()
+        ]
 
     # Marked confirmed so the assignment survives reprocessing (detect_and_save_faces only keeps confirmed ones).
-    db.query(Face).filter(Face.person_id.in_(loser_ids)).update(
-        {Face.person_id: winner.id, Face.person_confirmed: True},
-        synchronize_session=False,
-    )
+    with _timed("face update"):
+        db.query(Face).filter(Face.person_id.in_(loser_ids)).update(
+            {Face.person_id: winner.id, Face.person_confirmed: True},
+            synchronize_session=False,
+        )
 
-    db.query(PhotoPerson).filter(PhotoPerson.person_id.in_(loser_ids)).delete(synchronize_session=False)
+    with _timed("photo_person delete"):
+        db.query(PhotoPerson).filter(PhotoPerson.person_id.in_(loser_ids)).delete(synchronize_session=False)
 
     # The winner is the only person whose faces changed on these photos, so one set-based insert replaces the per-photo sync.
     if affected_photo_ids:
@@ -463,19 +479,21 @@ def merge_people(
             .where(PhotoPerson.person_id == winner.id, PhotoPerson.photo_id == Face.photo_id)
             .exists()
         )
-        db.execute(
-            insert(PhotoPerson).from_select(
-                ["photo_id", "person_id"],
-                select(Face.photo_id, literal(winner.id, PhotoPerson.person_id.type))
-                .where(Face.person_id == winner.id, Face.photo_id.in_(affected_photo_ids), ~already_linked)
-                .distinct(),
+        with _timed("photo_person insert"):
+            db.execute(
+                insert(PhotoPerson).from_select(
+                    ["photo_id", "person_id"],
+                    select(Face.photo_id, literal(winner.id, PhotoPerson.person_id.type))
+                    .where(Face.person_id == winner.id, Face.photo_id.in_(affected_photo_ids), ~already_linked)
+                    .distinct(),
+                )
             )
-        )
 
-    for loser in losers:
-        db.delete(loser)
+    with _timed("person delete and commit"):
+        for loser in losers:
+            db.delete(loser)
 
-    db.commit()
+        db.commit()
 
     _enqueue_profile_picture(str(winner.id))
 

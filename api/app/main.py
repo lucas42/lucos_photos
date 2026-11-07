@@ -33,6 +33,12 @@ from lucos_photos_common.models import MediaItem, Person, PhotoPerson, Processin
 
 log = logging.getLogger(__name__)
 
+# Nothing configures logging for the app, so INFO from app.* would be dropped.
+_app_logger = logging.getLogger("app")
+_app_logger.setLevel(logging.INFO)
+if not _app_logger.handlers:
+    _app_logger.addHandler(logging.StreamHandler())
+
 # Dump every thread's stack to stderr on SIGUSR1 without stopping the process (lucas42/lucos_photos#529).
 faulthandler.register(signal.SIGUSR1)
 
