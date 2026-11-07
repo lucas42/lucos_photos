@@ -747,7 +747,19 @@
         correctBtn.className = 'likely-mistag-correct-btn';
         correctBtn.textContent = 'This is correct';
 
-        li.append(cropLabel, score, correctBtn);
+        const viewLink = document.createElement('a');
+        viewLink.className = 'likely-mistag-view-link';
+        viewLink.href = `/photos/${face.photoId}`;
+        viewLink.target = '_blank';
+        viewLink.rel = 'noopener';
+        viewLink.textContent = 'View photo';
+        viewLink.setAttribute('aria-label', face.takenAtDisplay ? `View photo taken ${face.takenAtDisplay} (opens in new tab)` : 'View photo (opens in new tab)');
+
+        const actions = document.createElement('div');
+        actions.className = 'likely-mistag-actions';
+        actions.append(correctBtn, viewLink);
+
+        li.append(cropLabel, score, actions);
         return li;
     }
 

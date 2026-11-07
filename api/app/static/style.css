@@ -1815,8 +1815,23 @@ a:focus-visible {
 	opacity: 0.75;
 }
 
+.likely-mistag-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.25rem 0.75rem;
+}
+
+.likely-mistag-view-link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 24px;
+	font-size: 0.75rem;
+	color: var(--text-color);
+	text-decoration: underline;
+}
+
 .likely-mistag-correct-btn {
-	align-self: flex-start;
 	background: none;
 	border: 1px solid rgba(255, 255, 255, 0.2);
 	color: var(--text-color);
