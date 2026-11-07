@@ -945,7 +945,11 @@ def generate_profile_picture(person_id: str, force: bool = False, emit_event: bo
         )
 
         if not faces:
-            logger.info("generate_profile_picture: no suitable faces found for person %s", person_id)
+            logger.info("generate_profile_picture: no suitable faces found for person %s, clearing profile picture", person_id)
+            person.profile_photo_id = None
+            person.profile_auto_generated = None
+            db.commit()
+            (DERIVATIVES_DIR / f"{person_id}_profile.jpg").unlink(missing_ok=True)
             return
 
         # Score each face and pick the best

@@ -1407,3 +1407,52 @@ class TestLikelyMistags:
         assert "Confirmed 1 face(s) as Alice" in mock_emit.call_args[0][1]
         data = authenticated_client.get(f"/people/{person.id}/likely-mistags").json()
         assert str(outliers[0].id) not in {f["id"] for f in data["faces"]}
+
+
+class TestUntagRegeneratesProfilePicture:
+    def _setup(self, db_session, pinned):
+        person = make_person(db_session, "Alice")
+        other = make_person(db_session, "Bob")
+        photo = make_photo(db_session, "p" * 64)
+        other_photo = make_photo(db_session, "q" * 64)
+        face = Face(photo_id=photo.id, person_id=person.id, person_confirmed=True,
+                    bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2)
+        keep = Face(photo_id=other_photo.id, person_id=person.id, person_confirmed=True,
+                    bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2)
+        db_session.add_all([face, keep])
+        person.profile_photo_id = photo.id
+        person.profile_auto_generated = False if pinned else True
+        db_session.commit()
+        return person, other, photo, face
+
+    def test_unassign_enqueues_regeneration_for_previous_person(self, authenticated_client, db_session):
+        person, _, _, face = self._setup(db_session, pinned=False)
+        with patch("app.routers.faces._enqueue_profile_picture") as enqueue:
+            response = authenticated_client.delete(f"/faces/{face.id}/person")
+        assert response.status_code == 204
+        enqueue.assert_called_once_with(str(person.id))
+
+    def test_unassign_unpins_when_face_was_on_pinned_photo(self, authenticated_client, db_session):
+        person, _, _, face = self._setup(db_session, pinned=True)
+        with patch("app.routers.faces._enqueue_profile_picture"):
+            authenticated_client.delete(f"/faces/{face.id}/person")
+        db_session.expire_all()
+        assert db_session.query(Person).filter(Person.id == person.id).first().profile_auto_generated is None
+
+    def test_unassign_keeps_pin_when_untagging_a_different_photo(self, authenticated_client, db_session):
+        person, _, _, _ = self._setup(db_session, pinned=True)
+        keep = db_session.query(Face).filter(Face.person_id == person.id, Face.photo_id != person.profile_photo_id).first()
+        with patch("app.routers.faces._enqueue_profile_picture"):
+            authenticated_client.delete(f"/faces/{keep.id}/person")
+        db_session.expire_all()
+        assert db_session.query(Person).filter(Person.id == person.id).first().profile_auto_generated is False
+
+    def test_assign_enqueues_for_both_and_unpins_previous(self, authenticated_client, db_session):
+        person, other, _, face = self._setup(db_session, pinned=True)
+        with patch("app.routers.faces._enqueue_profile_picture") as enqueue, \
+             patch("app.routers.faces.emit_loganne_event", new_callable=AsyncMock):
+            response = authenticated_client.put(f"/faces/{face.id}/person", json={"personId": str(other.id)})
+        assert response.status_code == 200
+        assert {c.args[0] for c in enqueue.call_args_list} == {str(person.id), str(other.id)}
+        db_session.expire_all()
+        assert db_session.query(Person).filter(Person.id == person.id).first().profile_auto_generated is None

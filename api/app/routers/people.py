@@ -709,6 +709,18 @@ def delete_person_if_emptied(db: Session, person_id) -> bool:
     return True
 
 
+def unpin_if_untagged(db: Session, person_id, photo_id) -> None:
+    """Reset a manually pinned profile picture to automatic when the person is no longer
+    tagged anywhere on the pinned photo. Call after flushing the face change; does not commit."""
+    if db.query(Face).filter(Face.person_id == person_id, Face.photo_id == photo_id).count() > 0:
+        return
+    db.query(Person).filter(
+        Person.id == person_id,
+        Person.profile_photo_id == photo_id,
+        Person.profile_auto_generated.is_(False),
+    ).update({Person.profile_auto_generated: None}, synchronize_session=False)
+
+
 def move_faces_to_person(db: Session, faces: list[Face], destination: Person) -> set:
     """Reassign a set of faces to `destination`, implementing the transactional
     contract shared by the bulk face-move endpoint (lucas42/lucos_photos#471) and
@@ -731,6 +743,7 @@ def move_faces_to_person(db: Session, faces: list[Face], destination: Person) ->
     """
     source_person_ids = {f.person_id for f in faces if f.person_id is not None and f.person_id != destination.id}
     affected_photo_ids = {f.photo_id for f in faces}
+    moved_from = {f.id: f.person_id for f in faces if f.person_id is not None and f.person_id != destination.id}
 
     for face in faces:
         face.person_id = destination.id
@@ -739,6 +752,10 @@ def move_faces_to_person(db: Session, faces: list[Face], destination: Person) ->
 
     for photo_id in affected_photo_ids:
         sync_photo_person(db, photo_id)
+
+    for face in faces:
+        if face.id in moved_from:
+            unpin_if_untagged(db, moved_from[face.id], face.photo_id)
 
     needs_regen = {destination.id}
     for source_id in source_person_ids:
