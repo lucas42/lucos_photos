@@ -524,13 +524,11 @@ class TestGetPersonProfilePicture:
 
 
 class TestListPeopleIncludesProfilePictureUrl:
-    def test_profile_picture_url_null_when_no_file(self, authenticated_client, db_session):
+    def test_profile_picture_url_null_when_no_file(self, authenticated_client, db_session, tmp_path):
         make_person(db_session, "Alice")
         db_session.commit()
 
-        with patch("app.serializers.DERIVATIVES_DIR") as mock_dir:
-            mock_path = mock_dir.__truediv__.return_value
-            mock_path.exists.return_value = False
+        with patch("app.serializers.DERIVATIVES_DIR", tmp_path):
             response = authenticated_client.get("/people")
 
         assert response.status_code == 200
@@ -553,6 +551,36 @@ class TestListPeopleIncludesProfilePictureUrl:
         data = response.json()["people"]
         assert data[0]["profilePictureUrl"] is not None
         assert f"/people/{person.id}/profile-picture" in data[0]["profilePictureUrl"]
+
+
+class TestProfilePictureCaching:
+    def test_url_changes_when_derivative_mtime_changes(self, authenticated_client, db_session, tmp_path):
+        import os
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        profile_path = derivatives_dir / f"{person.id}_profile.jpg"
+        profile_path.write_bytes(b"fake jpeg")
+        os.utime(profile_path, (1000, 1000))
+
+        with patch("app.serializers.DERIVATIVES_DIR", derivatives_dir):
+            first = authenticated_client.get("/people").json()["people"][0]["profilePictureUrl"]
+            os.utime(profile_path, (2000, 2000))
+            second = authenticated_client.get("/people").json()["people"][0]["profilePictureUrl"]
+
+        assert first.endswith(f"/people/{person.id}/profile-picture?v=1000")
+        assert second.endswith(f"/people/{person.id}/profile-picture?v=2000")
+
+    def test_profile_picture_response_revalidates_and_has_validators(self, authenticated_client, db_session, tmp_path):
+        person = make_person(db_session, "Alice")
+        db_session.commit()
+        (tmp_path / f"{person.id}_profile.jpg").write_bytes(b"fake jpeg")
+        with patch("app.routers.people.DERIVATIVES_DIR", tmp_path):
+            response = authenticated_client.get(f"/people/{person.id}/profile-picture")
+        assert response.headers["cache-control"] == "no-cache"
+        assert "etag" in response.headers
+        assert "last-modified" in response.headers
 
 
 class TestMergePeople:

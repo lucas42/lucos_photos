@@ -302,7 +302,7 @@ def get_person_profile_picture(
     if not profile_path.exists():
         raise HTTPException(status_code=404, detail="Profile picture not yet generated")
 
-    return FileResponse(str(profile_path), media_type="image/jpeg")
+    return FileResponse(str(profile_path), media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
 
 
 @router.put("/people/{person_id}/contact")

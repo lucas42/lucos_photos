@@ -47,11 +47,12 @@ def photo_url(photo_id) -> str:
 
 def person_profile_picture_url(person_id) -> Optional[str]:
     """Return the absolute URL for a person's profile picture, or None if none exists."""
-    profile_path = DERIVATIVES_DIR / f"{person_id}_profile.jpg"
-    if not profile_path.exists():
+    try:
+        mtime = (DERIVATIVES_DIR / f"{person_id}_profile.jpg").stat().st_mtime
+    except FileNotFoundError:
         return None
     app_origin = os.environ.get("APP_ORIGIN", "")
-    return f"{app_origin}/people/{person_id}/profile-picture"
+    return f"{app_origin}/people/{person_id}/profile-picture?v={int(mtime)}"
 
 
 def photo_file_urls(photo: MediaItem) -> tuple[str, str]:
