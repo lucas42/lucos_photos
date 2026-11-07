@@ -1981,6 +1981,30 @@ class TestGenerateProfilePicture:
         with Image.open(profile_path) as saved:
             assert saved.mode == "RGB"
 
+    def test_clears_profile_picture_when_no_faces_remain(self, db_session, tmp_path):
+        """An auto-generated picture is cleared (DB fields and derivative) once the person has no faces."""
+        person = self._make_person(db_session)
+        photo = self._make_photo(db_session, "c" * 64, width=200, height=200)
+        person.profile_photo_id = photo.id
+        person.profile_auto_generated = True
+        db_session.commit()
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir()
+        profile_path = derivatives_dir / f"{person.id}_profile.jpg"
+        profile_path.write_bytes(b"old")
+        person_id = person.id
+
+        with patch("lucos_photos_common.jobs.DERIVATIVES_DIR", derivatives_dir), \
+             patch("lucos_photos_common.jobs.SessionLocal") as mock_session_local:
+            mock_session_local.return_value = db_session
+            generate_profile_picture(str(person_id))
+
+        db_session.expire_all()
+        refreshed = db_session.query(Person).filter(Person.id == person_id).first()
+        assert refreshed.profile_photo_id is None
+        assert refreshed.profile_auto_generated is None
+        assert not profile_path.exists()
+
     def test_emits_loganne_event_on_success(self, db_session, tmp_path):
         """Should emit profilePhotoUpdated to Loganne after a successful profile picture write."""
         person = self._make_person(db_session)
