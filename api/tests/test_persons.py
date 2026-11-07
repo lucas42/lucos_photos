@@ -686,11 +686,35 @@ class TestMergePeople:
         assert not any(pid == loser_id for _, pid in actual)
         assert {ph for ph, pid in actual if pid == winner_id} == set(photo_ids)
 
-    def test_merge_does_not_block_event_loop(self, authenticated_client, db_session):
-        """merge_people must be a sync handler so FastAPI runs it in the threadpool, not on the event loop."""
-        import inspect
-        from app.routers.people import merge_people
-        assert not inspect.iscoroutinefunction(merge_people)
+    def test_merge_does_not_block_other_requests(self, authenticated_client, db_session):
+        """A slow merge must not stall other requests (it runs in the threadpool, not on the event loop)."""
+        import threading
+        import time
+        merge_started = threading.Event()
+
+        def slow_loganne(**kwargs):
+            merge_started.set()
+            time.sleep(1.0)
+
+        with patch("app.routers.people._enqueue_profile_picture"), \
+             patch("app.routers.people.updateLoganne", side_effect=slow_loganne):
+            person_a = make_person(db_session, "Alice")
+            person_b = make_person(db_session, "Bob")
+            db_session.commit()
+            ids = [str(person_a.id), str(person_b.id)]
+
+            merge = threading.Thread(
+                target=lambda: authenticated_client.post("/people/merge", json={"personIds": ids})
+            )
+            merge.start()
+            assert merge_started.wait(timeout=5)
+            start = time.monotonic()
+            response = authenticated_client.get("/_info")
+            elapsed = time.monotonic() - start
+            merge.join()
+
+        assert response.status_code == 200
+        assert elapsed < 0.5
 
     def test_merge_conflict_both_have_contacts(self, authenticated_client, db_session):
         """Merging two contact-linked people should return 409."""
