@@ -165,8 +165,12 @@
             lightbox.classList.remove('open');
             pendingRow = null;
             pendingExistingId = null;
-            markDone(row, `Merged with <a href="/people/${data.mergedPersonId}">the person already linked to that contact</a>`,
-                `${name} was merged with the person already linked to that contact.`);
+            const n = data.detachedCount || 0;
+            const detachedNote = n > 0
+                ? ` ${n} face${n === 1 ? ' was' : 's were'} left unassigned because you'd marked ${n === 1 ? 'it' : 'them'} as not this person.`
+                : '';
+            markDone(row, `Merged with <a href="/people/${data.mergedPersonId}">the person already linked to that contact</a>.${detachedNote}`,
+                `${name} was merged with the person already linked to that contact.${detachedNote}`);
         } catch (err) {
             console.error('Failed to merge people:', err);
             promptError.textContent = err.message || 'Failed to merge. Please try again.';
