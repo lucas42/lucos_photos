@@ -721,3 +721,41 @@ class TestPhotosPageHtml:
         assert response.status_code == 200
         assert 'data-media-type="video"' in response.text
         assert 'class="play-overlay"' in response.text
+
+
+class TestLinkContactsPage:
+    def _add(self, db_session, **kw):
+        from lucos_photos_common.models import Person
+        p = Person(**kw)
+        db_session.add(p)
+        db_session.commit()
+        return p
+
+    def test_requires_auth(self, client):
+        response = client.get("/people/link-contacts", headers={"Accept": "text/html"}, follow_redirects=False)
+        assert response.status_code == 302
+
+    def test_lists_only_named_unlinked_non_ignored_sorted(self, authenticated_client, db_session):
+        self._add(db_session, display_name="zed Zulu")
+        self._add(db_session, display_name="Alice Alpha")
+        self._add(db_session, display_name="Linked Larry", contact_id="123")
+        self._add(db_session, display_name="Ignored Ivy", is_background=True)
+        self._add(db_session, display_name=None)
+        self._add(db_session, display_name="  ")
+        response = authenticated_client.get("/people/link-contacts", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        text = response.text
+        assert "Linked Larry" not in text
+        assert "Ignored Ivy" not in text
+        assert text.index("Alice Alpha") < text.index("zed Zulu")
+        assert text.count('class="link-contacts-row"') == 2
+        assert "merge-prompt-lightbox" in text
+
+    def test_empty_state(self, authenticated_client):
+        response = authenticated_client.get("/people/link-contacts", headers={"Accept": "text/html"})
+        assert response.status_code == 200
+        assert "Everyone with a name is linked" in response.text
+
+    def test_people_page_links_to_it(self, authenticated_client):
+        response = authenticated_client.get("/people", headers={"Accept": "text/html"})
+        assert 'href="/people/link-contacts"' in response.text
