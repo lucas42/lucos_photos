@@ -1421,7 +1421,10 @@ def delete_emptied_persons() -> int:
         ).scalars().all()
         db.commit()
         for person_id in deleted:
-            (DERIVATIVES_DIR / f"{person_id}_profile.jpg").unlink(missing_ok=True)
+            try:
+                (DERIVATIVES_DIR / f"{person_id}_profile.jpg").unlink(missing_ok=True)
+            except OSError:
+                logger.warning("delete_emptied_persons: could not remove profile picture for %s", person_id, exc_info=True)
         if deleted:
             logger.info("delete_emptied_persons: deleted %d person(s)", len(deleted))
         return len(deleted)
