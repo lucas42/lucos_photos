@@ -759,3 +759,8 @@ class TestLinkContactsPage:
     def test_people_page_links_to_it(self, authenticated_client):
         response = authenticated_client.get("/people", headers={"Accept": "text/html"})
         assert 'href="/people/link-contacts"' in response.text
+
+    def test_page_shows_detached_count_note_after_merge(self, authenticated_client):
+        response = authenticated_client.get("/people/link-contacts", headers={"Accept": "text/html"})
+        assert "data.detachedCount" in response.text
+        assert "left unassigned because you'd marked" in response.text
