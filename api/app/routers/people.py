@@ -11,14 +11,14 @@ from typing import Annotated, Optional
 import mimeparse
 import numpy as np
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from loganne import updateLoganne
 from sqlalchemy import exists, func, insert, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import verify_session_or_key
+from app.auth import verify_session_or_key, verify_session_or_key_for_embedded_image
 from app.database import get_db
 from app.serializers import DERIVATIVES_DIR, person_profile_picture_url, person_to_dict, photo_to_dict
 from app.services import emit_loganne_event, fetch_contact_name
@@ -166,6 +166,40 @@ async def create_person(
         await emit_loganne_event("personCreated", f"{person.display_name or person.id} created in lucos_photos")
 
     return person_to_dict(person)
+
+
+@router.get("/people/by-contact/{contact_id}/profile-picture")
+def get_profile_picture_by_contact(
+    contact_id: str,
+    _: Annotated[None, Depends(verify_session_or_key_for_embedded_image)],
+    db: Session = Depends(get_db),
+):
+    """A linked contact's profile picture, for embedding in lucos_contacts (lucas42/lucos_photos#666).
+    401 rather than a login redirect when not signed in, since it is loaded as a cross-origin image."""
+    person = db.query(Person).filter(Person.contact_id == contact_id).first()
+    if person is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    profile_path = DERIVATIVES_DIR / f"{person.id}_profile.jpg"
+    if not profile_path.exists():
+        raise HTTPException(status_code=404, detail="Profile picture not yet generated")
+    return FileResponse(
+        str(profile_path),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, no-cache", "Vary": "Cookie, Authorization", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/people/by-contact/{contact_id}")
+def redirect_to_person_by_contact(
+    contact_id: str,
+    _: Annotated[None, Depends(verify_session_or_key)],
+    db: Session = Depends(get_db),
+):
+    """Send a lucos_contacts id to that person's page (lucas42/lucos_photos#666)."""
+    person = db.query(Person).filter(Person.contact_id == contact_id).first()
+    if person is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return RedirectResponse(f"/people/{person.id}", status_code=302)
 
 
 @router.get("/people/link-contacts")
