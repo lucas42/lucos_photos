@@ -144,6 +144,25 @@ def test_apply_unconfirms_without_moving_records_reasons_and_is_idempotent(db_se
     assert repair.apply_selection(db_session, repair.select_faces(db_session, COHORT)) == 0
 
 
+def test_apply_leaves_a_face_moved_by_a_human_since_the_selection(db_session):
+    p, q = person_with_others(db_session, others=1), person_with_others(db_session, others=1)
+    moved, untouched = tier1(db_session, p, det_score=0.1), tier1(db_session, p, det_score=0.1)
+    sel = select(db_session)
+    assert {moved.id, untouched.id} <= set(sel.selected)
+
+    moved.person_id = q.id  # a human moves (and so confirms) it between the read and the update
+    moved.person_confirmed = True
+    db_session.commit()
+
+    assert repair.apply_selection(db_session, sel) == 1
+    db_session.commit()
+    db_session.expire_all()
+    assert db_session.get(Face, moved.id).person_confirmed is True
+    assert db_session.get(Face, moved.id).person_id == q.id
+    assert db_session.get(PrenameDemotion, moved.id) is None
+    assert db_session.get(Face, untouched.id).person_confirmed is False
+
+
 def test_revert_restores_faces_still_on_their_person_and_skips_moved_ones(db_session):
     p, q = person_with_others(db_session, others=1), person_with_others(db_session, others=1)
     stays, moved, detached = (tier1(db_session, p, det_score=0.1) for _ in range(3))

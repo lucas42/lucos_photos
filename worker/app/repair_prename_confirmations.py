@@ -138,18 +138,26 @@ def select_faces(db, cohort_date: date) -> Selection:
 
 
 def apply_selection(db, selection: Selection) -> int:
-    """Unconfirm the selected faces and record why, in the caller's transaction. Returns the number changed."""
+    """Unconfirm the selected faces and record why, in the caller's transaction. Returns the number changed.
+
+    Only faces still confirmed *and still on the person the selection was computed for* are changed, so a
+    face a human moved (and so confirmed) since the snapshot is left alone.
+    """
+    by_person: dict = {}
+    for face_id, (person_id, _) in selection.selected.items():
+        by_person.setdefault(person_id, []).append(face_id)
     changed = 0
-    for chunk in _chunks(selection.selected):
-        rows = db.execute(
-            update(Face)
-            .where(Face.id.in_(chunk), Face.person_confirmed.is_(True))
-            .values(person_confirmed=False)
-            .returning(Face.id, Face.person_id)
-        ).all()
-        for face_id, person_id in rows:
-            db.add(PrenameDemotion(face_id=face_id, person_id=person_id, reason=selection.selected[face_id][1]))
-        changed += len(rows)
+    for person_id, face_ids in by_person.items():
+        for chunk in _chunks(face_ids):
+            rows = db.execute(
+                update(Face)
+                .where(Face.id.in_(chunk), Face.person_id == person_id, Face.person_confirmed.is_(True))
+                .values(person_confirmed=False)
+                .returning(Face.id)
+            ).all()
+            for (face_id,) in rows:
+                db.add(PrenameDemotion(face_id=face_id, person_id=person_id, reason=selection.selected[face_id][1]))
+            changed += len(rows)
     db.flush()
     return changed
 
