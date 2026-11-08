@@ -583,3 +583,77 @@ class TestResilientJWKSClient:
         )
         with pytest.raises(jwt.exceptions.PyJWKClientError):
             client.get_signing_key_from_jwt(token)
+
+
+# ---------------------------------------------------------------------------
+# /people/by-contact routes (lucas42/lucos_photos#666)
+# ---------------------------------------------------------------------------
+
+class TestByContactAuth:
+    PICTURE = "/people/by-contact/42/profile-picture"
+
+    def test_picture_with_no_session_is_401_not_a_redirect(self, client):
+        response = client.get(self.PICTURE, follow_redirects=False)
+        assert response.status_code == 401
+        assert "location" not in response.headers
+        assert response.headers["www-authenticate"].startswith("Bearer")
+
+    def test_picture_with_an_invalid_token_is_401(self, client):
+        response = client.get(self.PICTURE, cookies={"aithne_session": _make_token(scopes=["photos:use"], expired=True)}, follow_redirects=False)
+        assert response.status_code == 401
+
+    def test_picture_for_a_session_without_photos_use_is_403(self, client):
+        response = client.get(self.PICTURE, cookies={"aithne_session": _make_token(scopes=[])}, follow_redirects=False)
+        assert response.status_code == 403
+
+    def test_picture_with_photos_use_gets_past_auth(self, client):
+        response = client.get(self.PICTURE, cookies={"aithne_session": _make_token(scopes=["photos:use"])}, follow_redirects=False)
+        assert response.status_code == 404  # authenticated; no such contact
+
+    def test_picture_accepts_an_m2m_key(self, client):
+        response = client.get(self.PICTURE, headers={"Authorization": "Bearer validkey"}, follow_redirects=False)
+        assert response.status_code == 404
+
+    def test_picture_rejects_an_invalid_key_with_no_session(self, client):
+        response = client.get(self.PICTURE, headers={"Authorization": "Bearer wrong"}, follow_redirects=False)
+        assert response.status_code == 401
+
+    def test_redirect_route_still_sends_a_signed_out_browser_to_login(self, client):
+        response = client.get("/people/by-contact/42", follow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"].startswith(f"{AITHNE_ORIGIN}/auth/login")
+
+    def test_other_routes_still_redirect_to_login(self, client):
+        assert client.get("/people/some-id/profile-picture", follow_redirects=False).status_code == 302
+
+    def test_picture_refuses_a_cross_site_browser_fetch_whether_or_not_signed_in(self, client):
+        signed_out = client.get(self.PICTURE, headers={"Sec-Fetch-Site": "cross-site"}, follow_redirects=False)
+        signed_in = client.get(
+            self.PICTURE, headers={"Sec-Fetch-Site": "cross-site"},
+            cookies={"aithne_session": _make_token(scopes=["photos:use"])}, follow_redirects=False,
+        )
+        assert signed_out.status_code == signed_in.status_code == 403
+
+    @pytest.mark.parametrize("site", ["same-origin", "same-site", "none"])
+    def test_picture_allows_same_site_and_user_initiated_fetches(self, client, site):
+        response = client.get(
+            self.PICTURE, headers={"Sec-Fetch-Site": site},
+            cookies={"aithne_session": _make_token(scopes=["photos:use"])}, follow_redirects=False,
+        )
+        assert response.status_code == 404  # past auth; no such contact
+
+    def test_a_key_is_not_subject_to_the_cross_site_check(self, client):
+        response = client.get(self.PICTURE, headers={"Authorization": "Bearer validkey", "Sec-Fetch-Site": "cross-site"})
+        assert response.status_code == 404
+
+    def test_dependency_rejects_a_write_method(self):
+        import asyncio
+        from fastapi import HTTPException
+        from starlette.requests import Request
+        request = Request({"type": "http", "method": "POST", "headers": [], "path": "/x", "query_string": b""})
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(auth_module.verify_session_or_key_for_embedded_image(request))
+        assert excinfo.value.status_code == 405
+
+    def test_the_picture_route_has_no_post(self, client):
+        assert client.post(self.PICTURE, follow_redirects=False).status_code == 405

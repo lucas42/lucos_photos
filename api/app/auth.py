@@ -306,7 +306,7 @@ def verify_key_if_present(authorization: Annotated[str | None, Header()] = None)
 # ---------------------------------------------------------------------------
 
 
-async def _verify_aithne_session(request: Request, aithne_session: "str | None") -> None:
+async def _verify_aithne_session(request: Request, aithne_session: "str | None", redirect_to_login: bool = True) -> None:
     """Validate an ``aithne_session`` JWT using the three-branch estate pattern:
 
     1. Valid JWT **and** ``photos:use`` scope (or dev ``render-ui`` bypass) → return.
@@ -314,7 +314,9 @@ async def _verify_aithne_session(request: Request, aithne_session: "str | None")
        Do NOT redirect to login here: re-login yields the same scopeless token,
        creating an infinite loop.  The user needs a grant, not a re-auth.
     3. No cookie / expired / invalid token → raise HTTPException(302) to the
-       aithne login page.
+       aithne login page, or HTTPException(401) when ``redirect_to_login`` is False
+       (for cross-origin ``<img>`` requests, where a redirect to an HTML login page
+       only produces a confusing browser error).
 
     ``/_info`` is exempt because that route carries no auth ``Depends`` — this
     function is never called for monitoring requests (FastAPI per-route wiring).
@@ -345,6 +347,8 @@ async def _verify_aithne_session(request: Request, aithne_session: "str | None")
             )
 
     # Branch 3: no session cookie, or token failed verification.
+    if not redirect_to_login:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not signed in", headers=WWW_AUTHENTICATE)
     # Build a full absolute URL for ?next= so aithne redirects back to photos,
     # not to itself.  safe_path() validates the path before combining with
     # APP_ORIGIN; quote() percent-encodes the whole URL for safe embedding.
@@ -385,3 +389,25 @@ async def verify_session_or_key(
         _check_csrf(request)
 
     await _verify_aithne_session(request, aithne_session)
+
+
+async def verify_session_or_key_for_embedded_image(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+    aithne_session: Annotated[str | None, Cookie()] = None,
+) -> None:
+    """verify_session_or_key for a GET route loaded as a cross-origin <img> (lucas42/lucos_photos#666).
+
+    - A missing or invalid session gets 401, not the login redirect (an <img> can't follow one usefully).
+    - GET/HEAD only: it does no CSRF check, which is only safe for reads, so any other method is a 405.
+    - A browser fetch that declares Sec-Fetch-Site: cross-site is refused before the session is looked at,
+      so another site can't use onload/onerror on an <img> as an oracle for "signed in with photos:use".
+      l42.eu subdomains arrive as same-site; an absent header is allowed for older clients.
+    """
+    if request.method not in ("GET", "HEAD"):
+        raise HTTPException(status_code=status.HTTP_405_METHOD_NOT_ALLOWED, detail="GET only")
+    if _is_valid_key(authorization):
+        return
+    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-site request refused")
+    await _verify_aithne_session(request, aithne_session, redirect_to_login=False)

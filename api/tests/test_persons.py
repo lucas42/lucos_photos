@@ -483,6 +483,71 @@ class TestGetPerson:
         assert str(pending_photo.id) not in photo_ids
 
 
+class TestByContactRoutes:
+    def _derivative(self, tmp_path, person):
+        derivatives_dir = tmp_path / "derivatives"
+        derivatives_dir.mkdir(exist_ok=True)
+        Image.new("RGB", (80, 80), color=(100, 150, 200)).save(derivatives_dir / f"{person.id}_profile.jpg", format="JPEG")
+        return derivatives_dir
+
+    def test_picture_for_a_linked_contact(self, authenticated_client, db_session, tmp_path):
+        person = make_person(db_session, "Alice", contact_id="42")
+        db_session.commit()
+
+        with patch("app.routers.people.DERIVATIVES_DIR", self._derivative(tmp_path, person)):
+            response = authenticated_client.get("/people/by-contact/42/profile-picture")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/jpeg"
+        assert response.headers["cache-control"] == "private, no-cache"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert "Cookie" in response.headers["vary"]
+        assert response.content[:2] == b"\xff\xd8"
+
+    def test_picture_404_for_an_unknown_contact(self, authenticated_client, db_session, tmp_path):
+        person = make_person(db_session, "Alice", contact_id="42")
+        db_session.commit()
+
+        with patch("app.routers.people.DERIVATIVES_DIR", self._derivative(tmp_path, person)):
+            assert authenticated_client.get("/people/by-contact/43/profile-picture").status_code == 404
+
+    def test_picture_404_for_a_linked_person_with_no_derivative(self, authenticated_client, db_session, tmp_path):
+        make_person(db_session, "Alice", contact_id="42")
+        db_session.commit()
+
+        with patch("app.routers.people.DERIVATIVES_DIR", tmp_path):
+            assert authenticated_client.get("/people/by-contact/42/profile-picture").status_code == 404
+
+    def test_contact_id_is_matched_as_a_plain_string(self, authenticated_client, db_session):
+        make_person(db_session, "Alice", contact_id="42")
+        db_session.commit()
+
+        for hostile in ("42' OR '1'='1", "..%2f..%2fetc", "4%2f2"):
+            assert authenticated_client.get(f"/people/by-contact/{hostile}/profile-picture").status_code == 404
+            assert authenticated_client.get(f"/people/by-contact/{hostile}", follow_redirects=False).status_code == 404
+
+    def test_redirects_a_linked_contact_to_the_person_page(self, authenticated_client, db_session):
+        person = make_person(db_session, "Alice", contact_id="42")
+        db_session.commit()
+
+        response = authenticated_client.get("/people/by-contact/42", follow_redirects=False)
+
+        assert response.status_code == 302
+        assert response.headers["location"] == f"/people/{person.id}"
+
+    def test_redirect_404_for_an_unknown_contact(self, authenticated_client):
+        assert authenticated_client.get("/people/by-contact/99", follow_redirects=False).status_code == 404
+
+    def test_existing_person_routes_are_not_shadowed(self, authenticated_client, db_session, tmp_path):
+        person = make_person(db_session, "Alice", contact_id="42")
+        db_session.commit()
+
+        with patch("app.routers.people.DERIVATIVES_DIR", self._derivative(tmp_path, person)):
+            assert authenticated_client.get(f"/people/{person.id}/profile-picture").status_code == 200
+        assert authenticated_client.get(f"/people/{person.id}", headers={"Accept": "application/json"}).status_code == 200
+        assert authenticated_client.get("/people/link-contacts", headers={"Accept": "text/html"}).status_code == 200
+
+
 class TestGetPersonProfilePicture:
     def test_returns_404_when_no_profile_picture(self, authenticated_client, db_session):
         person = make_person(db_session, "Alice")
