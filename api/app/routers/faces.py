@@ -9,14 +9,89 @@ from sqlalchemy.orm import Session
 
 from app.auth import verify_session_or_key
 from app.database import get_db
+from app.face_labels import apply_face_label
 from app.prenaming import prename_tier1, prename_tier2
 from app.routers.people import _enqueue_profile_picture, delete_person_if_emptied, move_faces_to_person, unpin_if_untagged
 from app.serializers import face_to_dict, photo_url
 from app.services import emit_loganne_event
 from lucos_photos_common.jobs import sync_photo_person
-from lucos_photos_common.models import Face, MediaItem, Person, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, FacePersonRejection, MediaItem, Person, ProcessingState, ProcessingStatus
 
 router = APIRouter()
+
+
+def _parse_face_ids(body: dict) -> list[uuid.UUID]:
+    face_id_strs = body.get("faceIds")
+    if not isinstance(face_id_strs, list) or not face_id_strs:
+        raise HTTPException(status_code=422, detail="faceIds must be a non-empty list")
+    face_uuids = []
+    for fid in face_id_strs:
+        try:
+            face_uuids.append(uuid.UUID(str(fid)))
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=422, detail=f"Invalid face ID: {fid!r}")
+    return face_uuids
+
+
+def _load_faces(db: Session, face_uuids: list[uuid.UUID]) -> list[Face]:
+    faces = db.query(Face).filter(Face.id.in_(face_uuids)).all()
+    if len(faces) != len(set(face_uuids)):
+        found_ids = {f.id for f in faces}
+        missing = [str(u) for u in face_uuids if u not in found_ids]
+        raise HTTPException(status_code=404, detail=f"Face(s) not found: {', '.join(missing)}")
+    return faces
+
+
+def _clear_labels(db: Session, face_ids: list[uuid.UUID], person_id: uuid.UUID) -> None:
+    """Explicit assignment overrides negative labels: drop the rejection of this person and any not-a-face mark."""
+    db.query(FacePersonRejection).filter(
+        FacePersonRejection.face_id.in_(face_ids), FacePersonRejection.person_id == person_id
+    ).delete(synchronize_session=False)
+    db.query(Face).filter(Face.id.in_(face_ids), Face.not_a_face_at.isnot(None)).update(
+        {Face.not_a_face_at: None}, synchronize_session=False
+    )
+
+
+@router.post("/faces/not-person")
+async def faces_not_person(
+    body: dict,
+    _: Annotated[None, Depends(verify_session_or_key)],
+    db: Session = Depends(get_db),
+):
+    """Record that these faces are not `personId` (lucas42/lucos_photos#622). All-or-nothing:
+    409 if any face isn't currently on that person, so a stale page can't reject the wrong pairing."""
+    face_uuids = _parse_face_ids(body)
+    try:
+        person_uuid = uuid.UUID(str(body.get("personId")))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="personId must be a valid UUID")
+    faces = _load_faces(db, face_uuids)
+    if any(f.person_id != person_uuid for f in faces):
+        raise HTTPException(status_code=409, detail="Some faces are no longer on this person")
+    person = db.query(Person).filter(Person.id == person_uuid).first()
+    changed, regen = apply_face_label(db, faces, not_a_face=False)
+    db.commit()
+    for pid in regen:
+        _enqueue_profile_picture(str(pid))
+    name = person.display_name or str(person_uuid)
+    await emit_loganne_event("facesRejected", f"Marked {len(faces)} face(s) as not {name} in lucos_photos", url=photo_url(faces[0].photo_id))
+    return {"changed": changed}
+
+
+@router.post("/faces/not-a-face")
+async def faces_not_a_face(
+    body: dict,
+    _: Annotated[None, Depends(verify_session_or_key)],
+    db: Session = Depends(get_db),
+):
+    """Record that these detections aren't faces: excluded from matching, kept with a timestamp (lucas42/lucos_photos#622)."""
+    faces = _load_faces(db, _parse_face_ids(body))
+    changed, regen = apply_face_label(db, faces, not_a_face=True)
+    db.commit()
+    for pid in regen:
+        _enqueue_profile_picture(str(pid))
+    await emit_loganne_event("facesMarkedNotAFace", f"Marked {len(faces)} detection(s) as not a face in lucos_photos", url=photo_url(faces[0].photo_id))
+    return {"changed": changed}
 
 
 @router.get("/photos/{photo_id}/faces")
@@ -34,7 +109,7 @@ def list_faces(
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    faces = db.query(Face).filter(Face.photo_id == photo_uuid).all()
+    faces = db.query(Face).filter(Face.photo_id == photo_uuid, Face.not_a_face_at.is_(None)).all()
     return [face_to_dict(f) for f in faces]
 
 
@@ -70,6 +145,7 @@ async def assign_person(
     previous_person_id = face.person_id
     face.person_id = person_uuid
     face.person_confirmed = True
+    _clear_labels(db, [face.id], person_uuid)
     db.flush()
     sync_photo_person(db, face.photo_id)
     regen_ids = {person_uuid}
@@ -102,18 +178,10 @@ def unassign_person(
     if not face:
         raise HTTPException(status_code=404, detail="Face not found")
 
-    previous_person_id = face.person_id
-    face.person_id = None
-    face.person_confirmed = False
-    db.flush()
-    sync_photo_person(db, face.photo_id)
-    person_survives = False
-    if previous_person_id is not None:
-        unpin_if_untagged(db, previous_person_id, face.photo_id)
-        person_survives = not delete_person_if_emptied(db, previous_person_id)
+    _, regen = apply_face_label(db, [face], not_a_face=False)
     db.commit()
-    if person_survives:
-        _enqueue_profile_picture(str(previous_person_id))
+    for pid in regen:
+        _enqueue_profile_picture(str(pid))
 
 
 @router.put("/faces/person")
@@ -163,6 +231,7 @@ async def bulk_assign_person(
         raise HTTPException(status_code=404, detail=f"Face(s) not found: {', '.join(missing)}")
 
     already_there = all(f.person_id == destination.id for f in faces)
+    _clear_labels(db, [f.id for f in faces], destination.id)
     needs_regen = move_faces_to_person(db, faces, destination)
     db.commit()
 

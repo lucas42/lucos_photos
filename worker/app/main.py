@@ -345,13 +345,23 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
 
     # Sync person display_names with lucos_contacts to catch drift (the Loganne webhook is the
     # primary path). Time-gated: the key is only set after a successful run, so failures retry next pass.
+    gate_open = False
     try:
-        if redis_conn.get(CONTACT_NAME_SYNC_GATE_KEY) is None:
+        gate_open = redis_conn.get(CONTACT_NAME_SYNC_GATE_KEY) is None
+    except Exception:
+        logger.exception("sweep: error reading the hourly gate")
+    if gate_open:
+        try:
+            from lucos_photos_common.jobs import delete_emptied_persons
+            delete_emptied_persons()
+        except Exception:
+            logger.exception("sweep: error during emptied person cleanup")
+        try:
             from lucos_photos_common.jobs import sweep_contact_display_names
             if sweep_contact_display_names():
                 redis_conn.set(CONTACT_NAME_SYNC_GATE_KEY, "1", ex=CONTACT_NAME_SYNC_INTERVAL_SECONDS)
-    except Exception:
-        logger.exception("sweep: error during contact display name sync")
+        except Exception:
+            logger.exception("sweep: error during contact display name sync")
 
 
 def run_sweep_loop(redis_conn: Redis) -> None:

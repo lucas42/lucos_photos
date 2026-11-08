@@ -9,7 +9,8 @@ import logging
 import os
 import shutil
 import subprocess
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -20,7 +21,7 @@ from rq.exceptions import NoSuchJobError
 from rq.job import Job, JobStatus, Retry
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus, photo_date_label
+from lucos_photos_common.models import Face, FacePersonRejection, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus, photo_date_label
 
 PHOTO_PROCESSED_CHANNEL = "photos:processed"
 
@@ -62,6 +63,24 @@ THUMBNAIL_WIDTH = 400
 # Empirically, same-person matches are typically < 0.4; strangers are > 0.6.
 # Threshold raised from 0.4 to 0.5 to reduce manual merges — configurable via env var.
 FACE_SIMILARITY_THRESHOLD = float(os.environ.get("FACE_SIMILARITY_THRESHOLD", 0.5))
+# Stricter than FACE_SIMILARITY_THRESHOLD: a false match here would hide a real face.
+FACE_LABEL_MATCH_THRESHOLD = 0.2
+EMPTIED_PERSON_GRACE = timedelta(days=7)
+
+
+def matchable_face_filter():
+    """Filters for a face that can take part in matching: it has an embedding and isn't marked not-a-face."""
+    return [Face.embedding.isnot(None), Face.not_a_face_at.is_(None)]
+
+
+def _cosine_distance(a, b) -> float:
+    import numpy as np
+    a = np.asarray(a, dtype=np.float32)
+    b = np.asarray(b, dtype=np.float32)
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    if na == 0 or nb == 0:
+        return float("inf")
+    return 1.0 - float(np.dot(a, b) / (na * nb))
 
 # Module-level singleton for the InsightFace model.
 # Initialised lazily on first call to _get_face_analysis_app() so that importing
@@ -139,6 +158,42 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
             len(confirmed_snapshot), photo.id,
         )
 
+    # Snapshot negative labels (not-a-face, rejected persons) so they survive the delete below.
+    old_faces = db.query(Face).filter(Face.photo_id == photo.id, Face.embedding.isnot(None)).all()
+    rejections_by_face: dict = {}
+    if old_faces:
+        for rej in db.query(FacePersonRejection).filter(FacePersonRejection.face_id.in_([f.id for f in old_faces])).all():
+            rejections_by_face.setdefault(rej.face_id, set()).add(rej.person_id)
+    label_snapshot = [
+        (f.embedding, f.not_a_face_at, rejections_by_face.get(f.id, set()))
+        for f in old_faces
+        if f.not_a_face_at is not None or f.id in rejections_by_face
+    ]
+
+    # Match each new detection to its closest labelled old face, one to one.
+    label_match: dict = {}
+    if label_snapshot:
+        pairs = sorted(
+            (_cosine_distance(det.embedding.tolist(), snap[0]), di, si)
+            for di, det in enumerate(detected_faces) if det.embedding is not None
+            for si, snap in enumerate(label_snapshot)
+        )
+        used_snaps: set = set()
+        for distance, di, si in pairs:
+            if distance >= FACE_LABEL_MATCH_THRESHOLD:
+                break
+            if di in label_match or si in used_snaps:
+                continue
+            label_match[di] = label_snapshot[si]
+            used_snaps.add(si)
+            logger.debug("detect_and_save_faces: matched face label (distance=%.3f)", distance)
+        for si, snap in enumerate(label_snapshot):
+            if si not in used_snaps:
+                logger.warning(
+                    "detect_and_save_faces: could not re-match a negative face label for photo %s (not_a_face=%s, rejected persons=%d)",
+                    photo.id, snap[1] is not None, len(snap[2]),
+                )
+
     # Idempotency: delete any existing face records for this photo before reinserting
     existing_faces = db.query(Face).filter(Face.photo_id == photo.id).all()
     if existing_faces:
@@ -150,7 +205,7 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
     img_width = photo.width
     img_height = photo.height
 
-    for detected in detected_faces:
+    for det_index, detected in enumerate(detected_faces):
         # bbox is [x1, y1, x2, y2] in absolute pixel coords
         x1, y1, x2, y2 = detected.bbox
 
@@ -163,6 +218,7 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
         embedding_vector = None
         person_id = None
         person_confirmed = False
+        _, not_a_face_at, rejected_person_ids = label_match.get(det_index, (None, None, set()))
 
         if detected.embedding is not None:
             embedding_list = detected.embedding.tolist()
@@ -171,10 +227,11 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
 
             # Step 1: try to re-apply a confirmed assignment from the snapshot.
             # Confirmed assignments take strict priority over ML auto-assignment.
-            if confirmed_snapshot:
+            usable_confirmed = [] if not_a_face_at else [c for c in confirmed_snapshot if c[0] not in rejected_person_ids]
+            if usable_confirmed:
                 best_confirmed_distance = float("inf")
                 best_confirmed_person_id = None
-                for snap_person_id, snap_embedding in confirmed_snapshot:
+                for snap_person_id, snap_embedding in usable_confirmed:
                     snap_array = np.array(snap_embedding, dtype=np.float32)
                     norm_a = np.linalg.norm(emb_array)
                     norm_b = np.linalg.norm(snap_array)
@@ -195,17 +252,19 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
                     )
 
             # Step 2: if not re-linked from snapshot, fall back to pgvector auto-assignment.
-            if person_id is None:
+            if person_id is None and not not_a_face_at:
                 # Search for the nearest existing face embedding using pgvector cosine distance.
                 # Only look at faces with an embedding and a confirmed or ML-assigned person.
                 # Short-circuit: skip the pgvector ORDER BY entirely if there are no candidates.
                 # This avoids the pgvector operator on SQLite (used in tests) when the table is empty.
                 from sqlalchemy import text
                 candidate_filter = [
-                    Face.embedding.isnot(None),
+                    *matchable_face_filter(),
                     Face.person_id.isnot(None),
                     Face.photo_id != photo.id,
                 ]
+                if rejected_person_ids:
+                    candidate_filter.append(Face.person_id.notin_(rejected_person_ids))
                 has_candidates = db.query(Face).filter(*candidate_filter).limit(1).first() is not None
                 nearest = (
                     db.query(Face)
@@ -238,6 +297,8 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
         kps = detected.kps.tolist() if detected.kps is not None else None
 
         face_record = Face(
+            id=uuid.uuid4(),
+            not_a_face_at=not_a_face_at,
             photo_id=photo.id,
             person_id=person_id,
             person_confirmed=person_confirmed,
@@ -250,6 +311,10 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
             kps=kps,
         )
         db.add(face_record)
+        if rejected_person_ids:
+            live_ids = {pid for (pid,) in db.query(Person.id).filter(Person.id.in_(rejected_person_ids))}
+            for rejected_id in live_ids:
+                db.add(FacePersonRejection(face_id=face_record.id, person_id=rejected_id))
 
     db.flush()
     logger.info("detect_and_save_faces: saved %d face record(s) for photo %s", len(detected_faces), photo.id)
@@ -1105,7 +1170,7 @@ def cluster_faces() -> None:
             .filter(
                 Face.person_id.is_(None),
                 Face.person_confirmed.is_(False),
-                Face.embedding.isnot(None),
+                *matchable_face_filter(),
             )
             .all()
         )
@@ -1332,6 +1397,33 @@ def sweep_contact_display_names() -> bool:
         return transient_failures == 0
     except Exception:
         logger.exception("sweep_contact_display_names: error during sweep")
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def delete_emptied_persons() -> int:
+    """Delete persons emptied by a face label more than EMPTIED_PERSON_GRACE ago. One statement,
+    re-checking for faces and photo_person rows, so a face arriving at the last moment isn't orphaned."""
+    from sqlalchemy import delete, exists
+
+    db = SessionLocal()
+    try:
+        cutoff = datetime.now(timezone.utc) - EMPTIED_PERSON_GRACE
+        result = db.execute(
+            delete(Person).where(
+                Person.contact_id.is_(None),
+                Person.emptied_at < cutoff,
+                ~exists().where(Face.person_id == Person.id),
+                ~exists().where(PhotoPerson.person_id == Person.id),
+            )
+        )
+        db.commit()
+        if result.rowcount:
+            logger.info("delete_emptied_persons: deleted %d person(s)", result.rowcount)
+        return result.rowcount
+    except Exception:
         db.rollback()
         raise
     finally:

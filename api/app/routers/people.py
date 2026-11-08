@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from loganne import updateLoganne
-from sqlalchemy import func, insert, literal, select
+from sqlalchemy import exists, func, insert, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,7 @@ from app.database import get_db
 from app.serializers import DERIVATIVES_DIR, person_profile_picture_url, person_to_dict, photo_to_dict
 from app.services import emit_loganne_event, fetch_contact_name
 from lucos_photos_common.jobs import sync_photo_person
-from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, FacePersonRejection, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -59,6 +59,9 @@ def list_people(
     db: Session = Depends(get_db),
 ):
     base_filter = Person.is_background == False  # noqa: E712
+    if not search:
+        # Persons emptied by a face label stay for a grace period (undo) but aren't listed.
+        base_filter = base_filter & ~(Person.emptied_at.isnot(None) & ~exists().where(Face.person_id == Person.id))
     if search:
         # Powers the "move to another person" search-as-you-type lightbox
         # (lucas42/lucos_photos#471) as well as any other name lookup.
@@ -462,12 +465,49 @@ def merge_people(
             row[0] for row in db.query(Face.photo_id).filter(Face.person_id.in_(loser_ids)).distinct()
         ]
 
+    # A face that would end up on a person it rejected is detached rather than confirmed.
+    merging_ids = loser_ids | {winner.id}
+    with _timed("conflict faces"):
+        conflict_face_ids = [
+            row[0] for row in db.query(FacePersonRejection.face_id)
+            .join(Face, Face.id == FacePersonRejection.face_id)
+            .filter(Face.person_id.in_(merging_ids), FacePersonRejection.person_id.in_(merging_ids))
+            .distinct()
+        ]
+        conflict_photo_ids = [row[0] for row in db.query(Face.photo_id).filter(Face.id.in_(conflict_face_ids)).distinct()] if conflict_face_ids else []
+
+    # Moved to the winner before the losers go, as the cascade would otherwise drop them.
+    with _timed("rejection move"):
+        already_rejected = (
+            select(FacePersonRejection.face_id)
+            .where(FacePersonRejection.person_id == winner.id)
+            .subquery()
+        )
+        db.execute(
+            insert(FacePersonRejection).from_select(
+                ["face_id", "person_id"],
+                select(FacePersonRejection.face_id, literal(winner.id, FacePersonRejection.person_id.type))
+                .where(
+                    FacePersonRejection.person_id.in_(loser_ids),
+                    FacePersonRejection.face_id.not_in(select(already_rejected.c.face_id)),
+                )
+                .distinct(),
+            )
+        )
+        db.query(FacePersonRejection).filter(FacePersonRejection.person_id.in_(loser_ids)).delete(synchronize_session=False)
+        db.flush()
+
     # Marked confirmed so the assignment survives reprocessing (detect_and_save_faces only keeps confirmed ones).
     with _timed("face update"):
-        db.query(Face).filter(Face.person_id.in_(loser_ids)).update(
+        db.query(Face).filter(Face.person_id.in_(loser_ids), ~Face.id.in_(conflict_face_ids)).update(
             {Face.person_id: winner.id, Face.person_confirmed: True},
             synchronize_session=False,
         )
+        if conflict_face_ids:
+            db.query(Face).filter(Face.id.in_(conflict_face_ids)).update(
+                {Face.person_id: None, Face.person_confirmed: False},
+                synchronize_session=False,
+            )
 
     with _timed("photo_person delete"):
         db.query(PhotoPerson).filter(PhotoPerson.person_id.in_(loser_ids)).delete(synchronize_session=False)
@@ -489,6 +529,9 @@ def merge_people(
                 )
             )
 
+    for photo_id in conflict_photo_ids:
+        sync_photo_person(db, photo_id)
+
     with _timed("person delete and commit"):
         for loser in losers:
             db.delete(loser)
@@ -505,7 +548,7 @@ def merge_people(
         url=None,
     )
 
-    return {"mergedPersonId": str(winner.id)}
+    return {"mergedPersonId": str(winner.id), "detachedCount": len(conflict_face_ids)}
 
 
 @router.put("/people/{person_id}/background", status_code=status.HTTP_200_OK)

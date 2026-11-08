@@ -579,7 +579,7 @@ def get_photo(
         raise HTTPException(status_code=404, detail="Photo not found")
 
     processing_status = db.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo_uuid).first()
-    faces = db.query(Face).filter(Face.photo_id == photo_uuid).all()
+    faces = db.query(Face).filter(Face.photo_id == photo_uuid, Face.not_a_face_at.is_(None)).all()
 
     data = photo_to_dict(photo)
     data["processingStatus"] = processing_status.state.value if processing_status else None
