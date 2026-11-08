@@ -24,7 +24,7 @@ from lucos_photos_common.jobs import (
     reprocess_photo,
     resweep_thumbnails,
 )
-from lucos_photos_common.models import Face, MediaItem, Person, Photo, PhotoPerson, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, FaceEmbedding, MediaItem, Person, Photo, PhotoPerson, ProcessingState, ProcessingStatus
 
 # Minimal valid 1x1 JPEG bytes
 VALID_JPEG = bytes.fromhex(
@@ -644,8 +644,8 @@ class TestDetectAndSaveFaces:
 
         saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
         assert saved is not None
-        assert saved.embedding is not None
-        assert len(saved.embedding) == 512
+        assert saved.embedding_row is not None
+        assert len(saved.embedding_row.embedding) == 512
 
     def test_person_confirmed_is_false_for_ml_guess(self, db_session, photo_with_dimensions, tmp_path):
         """Auto-assigned persons should always be unconfirmed (ML guess)."""
@@ -698,7 +698,8 @@ class TestDetectAndSaveFaces:
 
         saved = db_session.query(Face).filter(Face.photo_id == photo.id).first()
         assert saved is not None
-        assert saved.embedding is None
+        assert saved.embedding_row is None
+        assert db_session.query(FaceEmbedding).count() == 0
         assert saved.person_id is None
 
     def test_idempotent_deletes_existing_faces_before_rerun(self, db_session, photo_with_dimensions, tmp_path):
@@ -838,7 +839,7 @@ class TestDetectAndSaveFaces:
             person_id=person.id,
             person_confirmed=True,
             bbox_x=0.1, bbox_y=0.1, bbox_width=0.3, bbox_height=0.4,
-            embedding=confirmed_embedding,
+            embedding_row=FaceEmbedding(embedding=confirmed_embedding),
         )
         db_session.add(existing_face)
         db_session.commit()
@@ -876,7 +877,7 @@ class TestDetectAndSaveFaces:
             person_id=person.id,
             person_confirmed=True,
             bbox_x=0.1, bbox_y=0.1, bbox_width=0.3, bbox_height=0.4,
-            embedding=confirmed_embedding,
+            embedding_row=FaceEmbedding(embedding=confirmed_embedding),
         )
         db_session.add(existing_face)
         db_session.commit()
@@ -915,7 +916,7 @@ class TestDetectAndSaveFaces:
             person_id=auto_person.id,
             person_confirmed=False,
             bbox_x=0.0, bbox_y=0.0, bbox_width=0.5, bbox_height=0.5,
-            embedding=similar_embedding,
+            embedding_row=FaceEmbedding(embedding=similar_embedding),
         )
         db_session.add(other_face)
 
@@ -926,7 +927,7 @@ class TestDetectAndSaveFaces:
             person_id=confirmed_person.id,
             person_confirmed=True,
             bbox_x=0.1, bbox_y=0.1, bbox_width=0.3, bbox_height=0.4,
-            embedding=confirmed_embedding,
+            embedding_row=FaceEmbedding(embedding=confirmed_embedding),
         )
         db_session.add(existing_face)
         db_session.commit()
@@ -1673,7 +1674,7 @@ class TestClusterFaces:
             person_id=person_id,
             person_confirmed=person_confirmed,
             bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2,
-            embedding=embedding,
+            embedding_row=FaceEmbedding(embedding=embedding) if embedding is not None else None,
         )
         db_session.add(face)
         db_session.flush()
@@ -1834,7 +1835,7 @@ class TestFaceLabels:
         return db_session.query(Face).filter(Face.photo_id == photo.id).all()
 
     def _face(self, db_session, photo, emb, **kwargs):
-        face = Face(photo_id=photo.id, bbox_x=0, bbox_y=0, bbox_width=0.1, bbox_height=0.1, embedding=emb, **kwargs)
+        face = Face(photo_id=photo.id, bbox_x=0, bbox_y=0, bbox_width=0.1, bbox_height=0.1, embedding_row=FaceEmbedding(embedding=emb), **kwargs)
         db_session.add(face)
         db_session.flush()
         return face

@@ -2,12 +2,12 @@
 
 import math
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.routers.people import delete_person_if_emptied
 from lucos_photos_common.jobs import FACE_SIMILARITY_THRESHOLD, sync_photo_person
-from lucos_photos_common.models import Face, Person
+from lucos_photos_common.models import Face, FaceEmbedding, Person
 
 
 def normalise_names(names) -> list[str]:
@@ -65,9 +65,12 @@ def _unit(vec) -> "list[float] | None":
 
 
 def _centroid(db: Session, person_id) -> "list[float] | None":
-    rows = db.query(Face.embedding).filter(
-        Face.person_id == person_id, Face.person_confirmed.is_(True), Face.embedding.isnot(None)
-    ).all()
+    rows = (
+        db.query(FaceEmbedding.embedding)
+        .join(Face, Face.id == FaceEmbedding.face_id)
+        .filter(Face.person_id == person_id, Face.person_confirmed.is_(True))
+        .all()
+    )
     units = [u for u in (_unit(list(r[0])) for r in rows) if u is not None]
     if not units:
         return None
@@ -88,13 +91,16 @@ def prename_tier2(db: Session, photo_id, names, threshold: float = FACE_SIMILARI
             candidates.append((person, centroid))
     if not candidates:
         return {"assigned": 0, "reason": "no listed person has confirmed faces", "personIds": []}
-    faces = [
-        f for f in db.query(Face).filter(Face.photo_id == photo_id).all()
-        if not f.person_confirmed and f.embedding is not None
-    ]
+    rows = db.execute(
+        select(Face, FaceEmbedding.embedding)
+        .join(FaceEmbedding, FaceEmbedding.face_id == Face.id)
+        .where(Face.photo_id == photo_id, Face.person_confirmed.is_(False))
+    ).all()
+    faces = [face for face, _ in rows]
+    embeddings = [embedding for _, embedding in rows]
     pairs = []
     for fi, face in enumerate(faces):
-        vec = _unit(list(face.embedding))
+        vec = _unit(list(embeddings[fi]))
         if vec is None:
             continue
         for ci, (_, centroid) in enumerate(candidates):

@@ -117,8 +117,6 @@ class Face(Base):
     bbox_y: Mapped[float] = mapped_column(Float)
     bbox_width: Mapped[float] = mapped_column(Float)
     bbox_height: Mapped[float] = mapped_column(Float)
-    # 512-dimension vector for InsightFace embeddings
-    embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(512))
     # Detection confidence score from InsightFace (proxy for sharpness/focus)
     det_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # 5-point keypoints [[x,y], ...] for eyes, nose, mouth corners — used for frontality estimation
@@ -129,6 +127,10 @@ class Face(Base):
 
     media_item: Mapped["MediaItem"] = relationship(back_populates="faces")
     person: Mapped[Optional["Person"]] = relationship(back_populates="faces")
+    # The ArcFace vector lives in its own table so person changes never rewrite its HNSW index; no row = no embedding
+    embedding_row: Mapped[Optional["FaceEmbedding"]] = relationship(
+        back_populates="face", uselist=False, cascade="all, delete-orphan"
+    )
 
     @property
     def photo(self) -> "MediaItem":
@@ -137,6 +139,16 @@ class Face(Base):
     @photo.setter
     def photo(self, value: "MediaItem") -> None:
         self.media_item = value
+
+
+class FaceEmbedding(Base):
+    """512-dimension InsightFace embedding for a face; fixed at detection time."""
+    __tablename__ = "face_embedding"
+
+    face_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("face.id", ondelete="CASCADE"), primary_key=True)
+    embedding: Mapped[list[float]] = mapped_column(Vector(512), nullable=False)
+
+    face: Mapped["Face"] = relationship(back_populates="embedding_row")
 
 
 class FacePersonRejection(Base):

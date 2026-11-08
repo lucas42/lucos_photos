@@ -1,7 +1,7 @@
 import uuid
 from unittest.mock import patch
 
-from lucos_photos_common.models import Face, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, FaceEmbedding, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 A = [1.0, 0.0, 0.0]
 B = [0.0, 1.0, 0.0]
@@ -21,7 +21,8 @@ def make_photo(db, tag="a", state=ProcessingState.complete):
 def make_face(db, photo, embedding=None, person=None, confirmed=False):
     face = Face(
         photo_id=photo.id, person_id=person.id if person else None, person_confirmed=confirmed,
-        bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2, embedding=embedding,
+        bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2,
+        embedding_row=FaceEmbedding(embedding=embedding) if embedding is not None else None,
     )
     db.add(face)
     db.flush()

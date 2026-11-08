@@ -21,7 +21,7 @@ from rq.exceptions import NoSuchJobError
 from rq.job import Job, JobStatus, Retry
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import Face, FacePersonRejection, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus, photo_date_label
+from lucos_photos_common.models import Face, FaceEmbedding, FacePersonRejection, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus, photo_date_label
 
 PHOTO_PROCESSED_CHANNEL = "photos:processed"
 
@@ -69,8 +69,8 @@ EMPTIED_PERSON_GRACE = timedelta(days=7)
 
 
 def matchable_face_filter():
-    """Filters for a face that can take part in matching: it has an embedding and isn't marked not-a-face."""
-    return [Face.embedding.isnot(None), Face.not_a_face_at.is_(None)]
+    """Filters for a face that can take part in matching. Callers also inner-join FaceEmbedding, which supplies "has an embedding"."""
+    return [Face.not_a_face_at.is_(None)]
 
 
 def _cosine_distance(a, b) -> float:
@@ -145,12 +145,11 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
     # Snapshot confirmed face assignments before deletion so they can be re-applied
     # after re-detection using embedding similarity (robust to coordinate transforms).
     confirmed_snapshot = [
-        (f.person_id, f.embedding)
-        for f in db.query(Face).filter(
-            Face.photo_id == photo.id,
-            Face.person_confirmed.is_(True),
-            Face.embedding.isnot(None),
-        ).all()
+        (person_id, embedding)
+        for person_id, embedding in db.query(Face.person_id, FaceEmbedding.embedding)
+        .join(FaceEmbedding, FaceEmbedding.face_id == Face.id)
+        .filter(Face.photo_id == photo.id, Face.person_confirmed.is_(True))
+        .all()
     ]
     if confirmed_snapshot:
         logger.info(
@@ -159,7 +158,12 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
         )
 
     # Snapshot negative labels (not-a-face, rejected persons) so they survive the delete below.
-    old_faces = db.query(Face).filter(Face.photo_id == photo.id, Face.embedding.isnot(None)).all()
+    old_faces = (
+        db.query(Face.id, Face.not_a_face_at, FaceEmbedding.embedding)
+        .join(FaceEmbedding, FaceEmbedding.face_id == Face.id)
+        .filter(Face.photo_id == photo.id)
+        .all()
+    )
     rejections_by_face: dict = {}
     if old_faces:
         for rej in db.query(FacePersonRejection).filter(FacePersonRejection.face_id.in_([f.id for f in old_faces])).all():
@@ -257,7 +261,7 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
                 # Only look at faces with an embedding and a confirmed or ML-assigned person.
                 # Short-circuit: skip the pgvector ORDER BY entirely if there are no candidates.
                 # This avoids the pgvector operator on SQLite (used in tests) when the table is empty.
-                from sqlalchemy import text
+                from sqlalchemy import bindparam, text
                 candidate_filter = [
                     *matchable_face_filter(),
                     Face.person_id.isnot(None),
@@ -265,33 +269,39 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
                 ]
                 if rejected_person_ids:
                     candidate_filter.append(Face.person_id.notin_(rejected_person_ids))
-                has_candidates = db.query(Face).filter(*candidate_filter).limit(1).first() is not None
-                nearest = (
-                    db.query(Face)
-                    .filter(*candidate_filter)
-                    .order_by(Face.embedding.cosine_distance(embedding_list))
-                    .limit(1)
-                    .first()
-                ) if has_candidates else None
-                if nearest is not None:
-                    # Compute the actual distance to check against threshold
-                    dist_row = db.execute(
-                        text("SELECT (:emb)::vector <=> embedding FROM face WHERE id = :fid"),
-                        {"emb": str(embedding_list), "fid": str(nearest.id)},
-                    ).fetchone()
-                    if dist_row is not None and dist_row[0] is not None:
-                        distance = float(dist_row[0])
-                        if distance < FACE_SIMILARITY_THRESHOLD:
-                            person_id = nearest.person_id
-                            logger.info(
-                                "detect_and_save_faces: auto-assigned person %s to face (distance=%.3f)",
-                                person_id, distance,
-                            )
-                        else:
-                            logger.info(
-                                "detect_and_save_faces: nearest face distance %.3f exceeds threshold, no person assigned",
-                                distance,
-                            )
+                has_candidates = (
+                    db.query(Face.id).join(FaceEmbedding, FaceEmbedding.face_id == Face.id).filter(*candidate_filter).limit(1).first()
+                ) is not None
+                nearest = None
+                if has_candidates:
+                    # ORDER BY the bare distance expression so the HNSW index on face_embedding is used.
+                    sql = (
+                        "SELECT face.person_id, fe.embedding <=> CAST(:q AS vector) AS d "
+                        "FROM face_embedding fe JOIN face ON face.id = fe.face_id "
+                        "WHERE face.person_id IS NOT NULL AND face.not_a_face_at IS NULL "
+                        "AND face.photo_id <> CAST(:photo AS uuid) "
+                        + ("AND face.person_id NOT IN :rejected " if rejected_person_ids else "")
+                        + "ORDER BY fe.embedding <=> CAST(:q AS vector) LIMIT 1"
+                    )
+                    params = {"q": str(embedding_list), "photo": str(photo.id)}
+                    stmt = text(sql)
+                    if rejected_person_ids:
+                        params["rejected"] = [str(pid) for pid in rejected_person_ids]
+                        stmt = stmt.bindparams(bindparam("rejected", expanding=True))
+                    nearest = db.execute(stmt, params).fetchone()
+                if nearest is not None and nearest.d is not None:
+                    distance = float(nearest.d)
+                    if distance < FACE_SIMILARITY_THRESHOLD:
+                        person_id = nearest.person_id
+                        logger.info(
+                            "detect_and_save_faces: auto-assigned person %s to face (distance=%.3f)",
+                            person_id, distance,
+                        )
+                    else:
+                        logger.info(
+                            "detect_and_save_faces: nearest face distance %.3f exceeds threshold, no person assigned",
+                            distance,
+                        )
 
         det_score = float(detected.det_score) if detected.det_score is not None else None
         kps = detected.kps.tolist() if detected.kps is not None else None
@@ -306,10 +316,11 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
             bbox_y=norm_y,
             bbox_width=norm_w,
             bbox_height=norm_h,
-            embedding=embedding_vector,
             det_score=det_score,
             kps=kps,
         )
+        if embedding_vector is not None:
+            face_record.embedding_row = FaceEmbedding(embedding=embedding_vector)
         db.add(face_record)
         if rejected_person_ids:
             live_ids = {pid for (pid,) in db.query(Person.id).filter(Person.id.in_(rejected_person_ids))}
@@ -1158,22 +1169,24 @@ def cluster_faces() -> None:
     Only processes faces where:
       - person_id IS NULL (not yet assigned to anyone)
       - person_confirmed IS False (not manually confirmed — those are authoritative and must not be changed)
-      - embedding IS NOT NULL (need an embedding to cluster)
+      - has a face_embedding row (need an embedding to cluster)
 
     Idempotent: existing confirmed assignments are never modified.
     """
     db = SessionLocal()
     try:
         # Fetch all unassigned faces with embeddings
-        unassigned = (
-            db.query(Face)
-            .filter(
+        from sqlalchemy import select
+        rows = db.execute(
+            select(Face, FaceEmbedding.embedding)
+            .join(FaceEmbedding, FaceEmbedding.face_id == Face.id)
+            .where(
                 Face.person_id.is_(None),
                 Face.person_confirmed.is_(False),
                 *matchable_face_filter(),
             )
-            .all()
-        )
+        ).all()
+        unassigned = [face for face, _ in rows]
 
         if not unassigned:
             logger.info("cluster_faces: no unassigned faces with embeddings, nothing to do")
@@ -1184,7 +1197,7 @@ def cluster_faces() -> None:
         import numpy as np
         from sklearn.cluster import DBSCAN
 
-        embeddings = np.array([f.embedding for f in unassigned], dtype=np.float32)
+        embeddings = np.array([embedding for _, embedding in rows], dtype=np.float32)
 
         # Normalise embeddings to unit vectors so cosine distance = 1 - dot product.
         # sklearn's cosine metric in DBSCAN computes 1 - cosine_similarity.

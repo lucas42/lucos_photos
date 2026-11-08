@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import pytest
 from unittest.mock import AsyncMock, patch
 from PIL import Image
-from lucos_photos_common.models import Person, Photo, PhotoPerson, Face, ProcessingStatus, ProcessingState
+from lucos_photos_common.models import Person, Photo, PhotoPerson, Face, FaceEmbedding, ProcessingStatus, ProcessingState
 
 
 def make_person(db, display_name="Alice", contact_id=None):
@@ -1335,7 +1335,7 @@ class TestIgnoreUnlinkedPeople:
 
 def add_embedded_face(db, photo, person, vector, confirmed=False):
     face = Face(
-        photo_id=photo.id, person_id=person.id, person_confirmed=confirmed, embedding=list(vector),
+        photo_id=photo.id, person_id=person.id, person_confirmed=confirmed, embedding_row=FaceEmbedding(embedding=list(vector)),
         bbox_x=0.1, bbox_y=0.2, bbox_width=0.3, bbox_height=0.4,
     )
     db.add(face)
