@@ -158,6 +158,16 @@ class FacePersonRejection(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class PrenameDemotion(Base):
+    """A face the lucas42/lucos_photos#664 repair unconfirmed, and the person it was on; lets --revert undo it."""
+    __tablename__ = "prename_demotion"
+
+    face_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("face.id", ondelete="CASCADE"), primary_key=True)
+    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("person.id", ondelete="CASCADE"), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    demoted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 # photo_person is a view over face, so it can't disagree with the face assignments (lucas42/lucos_photos#620).
 # Its own MetaData keeps create_all from making a table of it; the DDL below creates the view for test databases.
 _photo_person_metadata = MetaData()
