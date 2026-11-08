@@ -1904,6 +1904,50 @@ class TestFaceLabels:
         assert db_session.query(Face).one().person_id is None
 
 
+class TestDeleteEmptiedPersonsDerivative:
+    def test_removes_the_deleted_persons_profile_picture_file(self, db_session, tmp_path, monkeypatch):
+        from lucos_photos_common.jobs import delete_emptied_persons
+        from lucos_photos_common.models import Person
+        monkeypatch.setattr("lucos_photos_common.jobs.DERIVATIVES_DIR", tmp_path)
+        gone = Person(emptied_at=datetime.now(timezone.utc) - timedelta(days=8))
+        kept = Person(emptied_at=datetime.now(timezone.utc) - timedelta(days=1))
+        db_session.add_all([gone, kept])
+        db_session.commit()
+        (tmp_path / f"{gone.id}_profile.jpg").write_bytes(b"x")
+        (tmp_path / f"{kept.id}_profile.jpg").write_bytes(b"x")
+
+        assert delete_emptied_persons() == 1
+
+        assert not (tmp_path / f"{gone.id}_profile.jpg").exists()
+        assert (tmp_path / f"{kept.id}_profile.jpg").exists()
+
+
+    def test_a_failing_file_removal_does_not_stop_the_rest(self, db_session, tmp_path, monkeypatch, caplog):
+        from pathlib import Path
+        from lucos_photos_common.jobs import delete_emptied_persons
+        from lucos_photos_common.models import Person
+        monkeypatch.setattr("lucos_photos_common.jobs.DERIVATIVES_DIR", tmp_path)
+        old = datetime.now(timezone.utc) - timedelta(days=8)
+        people = [Person(emptied_at=old), Person(emptied_at=old), Person(emptied_at=old)]
+        db_session.add_all(people)
+        db_session.commit()
+        for p in people:
+            (tmp_path / f"{p.id}_profile.jpg").write_bytes(b"x")
+        real_unlink = Path.unlink
+
+        def flaky_unlink(self, missing_ok=False):
+            if self.name == f"{people[0].id}_profile.jpg":
+                raise PermissionError("denied")
+            return real_unlink(self, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "unlink", flaky_unlink)
+        with caplog.at_level("WARNING", logger="lucos_photos_common.jobs"):
+            assert delete_emptied_persons() == 3
+
+        assert "could not remove profile picture" in caplog.text
+        assert sum((tmp_path / f"{p.id}_profile.jpg").exists() for p in people) == 1
+
+
 class TestDeleteEmptiedPersons:
     def _person(self, db_session, **kwargs):
         from lucos_photos_common.models import Person

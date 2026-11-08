@@ -723,10 +723,16 @@ class TestPhotosPageHtml:
 
 
 class TestLinkContactsPage:
-    def _add(self, db_session, **kw):
-        from lucos_photos_common.models import Person
+    def _add(self, db_session, faces=1, **kw):
+        from lucos_photos_common.models import Face, MediaItem, Person
         p = Person(**kw)
         db_session.add(p)
+        db_session.flush()
+        for i in range(faces):
+            photo = MediaItem(sha256_hash=f"{len(db_session.query(MediaItem).all()):064d}", file_extension="jpg")
+            db_session.add(photo)
+            db_session.flush()
+            db_session.add(Face(photo_id=photo.id, person_id=p.id, bbox_x=0, bbox_y=0, bbox_width=0.1, bbox_height=0.1))
         db_session.commit()
         return p
 
@@ -749,6 +755,13 @@ class TestLinkContactsPage:
         assert text.index("Alice Alpha") < text.index("zed Zulu")
         assert text.count('class="link-contacts-row"') == 2
         assert "merge-prompt-lightbox" in text
+
+    def test_omits_a_named_person_with_no_faces(self, authenticated_client, db_session):
+        self._add(db_session, display_name="Has Faces")
+        self._add(db_session, faces=0, display_name="Emptied Edna")
+        response = authenticated_client.get("/people/link-contacts", headers={"Accept": "text/html"})
+        assert "Has Faces" in response.text
+        assert "Emptied Edna" not in response.text
 
     def test_empty_state(self, authenticated_client):
         response = authenticated_client.get("/people/link-contacts", headers={"Accept": "text/html"})

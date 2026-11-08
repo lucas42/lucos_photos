@@ -37,10 +37,10 @@ def apply_face_label(db: Session, faces: list[Face], not_a_face: bool) -> tuple[
         if previous[face.id] is not None:
             unpin_if_untagged(db, previous[face.id], face.photo_id)
     for person_id in {p for p in previous.values() if p is not None}:
-        if db.query(Face.id).filter(Face.person_id == person_id).first() is not None:
-            regen.add(person_id)
-            continue
-        db.query(Person).filter(Person.id == person_id, Person.contact_id.is_(None)).update(
-            {Person.emptied_at: now}, synchronize_session=False
-        )
+        # Regenerate for emptied persons too, so the job clears their stale profile picture.
+        regen.add(person_id)
+        if db.query(Face.id).filter(Face.person_id == person_id).first() is None:
+            db.query(Person).filter(Person.id == person_id, Person.contact_id.is_(None)).update(
+                {Person.emptied_at: now}, synchronize_session=False
+            )
     return changed, regen
