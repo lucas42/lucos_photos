@@ -838,6 +838,7 @@
         const n = Number(detachedParam);
         moveConfirmation.textContent = `Merged. ${n} face${n === 1 ? ' was' : 's were'} left unassigned because you'd marked ${n === 1 ? 'it' : 'them'} as not this person.`;
         moveConfirmation.hidden = false;
+        history.replaceState(null, '', window.location.pathname);
     }
 
     function setBulkBusy(busy) {
@@ -875,11 +876,12 @@
         }
     }
 
-    async function applyLabel(kind) {
+    async function applyLabel(kind, pressedBtn) {
         const faceIds = Array.from(selectedFaceIds);
         if (faceIds.length === 0) return;
         clearLabelMessage();
         setBulkBusy(true);
+        let refocus = null;
         try {
             const response = await fetch(kind === 'not-person' ? '/faces/not-person' : '/faces/not-a-face', {
                 method: 'POST',
@@ -888,6 +890,7 @@
             });
             if (response.status === 409) {
                 showLabelMessage('Some of these faces have moved since this page loaded. Reload the page and try again.');
+                refocus = pressedBtn;
                 return;
             }
             if (!response.ok) throw new Error(`API responded with ${response.status}`);
@@ -916,8 +919,10 @@
         } catch (err) {
             console.error('Failed to label faces:', err);
             showLabelMessage("Couldn't save that. Please try again.");
+            refocus = pressedBtn;
         } finally {
             setBulkBusy(false);
+            if (refocus) refocus.focus();
         }
     }
 
@@ -948,6 +953,7 @@
             console.error('Failed to undo:', err);
             labelUndoText.textContent = `Couldn't undo. Reload the page, then move the faces back to ${personDisplayName} if they're missing.`;
             labelUndoBtn.disabled = false;
+            labelUndoBtn.focus();
             return;
         }
         let first = null;
@@ -966,11 +972,11 @@
     function dismissLabel() {
         clearLabelMessage();
         const hasCards = photoGrid.querySelector('.media-card-link');
-        (hasCards ? bulkMoveBtn : document.getElementById('photos-heading')).focus();
+        (hasCards && selectModeBtn ? selectModeBtn : document.getElementById('photos-heading')).focus();
     }
 
-    bulkNotPersonBtn.addEventListener('click', () => applyLabel('not-person'));
-    bulkNotFaceBtn.addEventListener('click', () => applyLabel('not-a-face'));
+    bulkNotPersonBtn.addEventListener('click', () => applyLabel('not-person', bulkNotPersonBtn));
+    bulkNotFaceBtn.addEventListener('click', () => applyLabel('not-a-face', bulkNotFaceBtn));
     labelUndoBtn.addEventListener('click', undoLabel);
     labelDismissBtn.addEventListener('click', dismissLabel);
 
