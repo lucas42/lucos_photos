@@ -48,6 +48,8 @@ SWEEP_CHRONIC_THRESHOLD = int(os.environ.get("SWEEP_CHRONIC_THRESHOLD", 5))
 
 CONTACT_NAME_SYNC_GATE_KEY = "sweep:contact_name_sync_gate"
 CONTACT_NAME_SYNC_INTERVAL_SECONDS = int(os.environ.get("CONTACT_NAME_SYNC_INTERVAL_SECONDS", 3600))
+EMPTIED_PERSON_CLEANUP_GATE_KEY = "sweep:emptied_person_cleanup_gate"
+EMPTIED_PERSON_CLEANUP_INTERVAL_SECONDS = 3600
 WORKER_HEARTBEAT_KEY = "worker:heartbeat"
 # Gauges of currently chronically-stuck items, recomputed from scratch every sweep pass
 # (see sweep_pending_photos) — never a SCAN over sweep:* keys.
@@ -345,23 +347,22 @@ def sweep_pending_photos(redis_conn: Redis) -> None:
 
     # Sync person display_names with lucos_contacts to catch drift (the Loganne webhook is the
     # primary path). Time-gated: the key is only set after a successful run, so failures retry next pass.
-    gate_open = False
     try:
-        gate_open = redis_conn.get(CONTACT_NAME_SYNC_GATE_KEY) is None
-    except Exception:
-        logger.exception("sweep: error reading the hourly gate")
-    if gate_open:
-        try:
-            from lucos_photos_common.jobs import delete_emptied_persons
-            delete_emptied_persons()
-        except Exception:
-            logger.exception("sweep: error during emptied person cleanup")
-        try:
+        if redis_conn.get(CONTACT_NAME_SYNC_GATE_KEY) is None:
             from lucos_photos_common.jobs import sweep_contact_display_names
             if sweep_contact_display_names():
                 redis_conn.set(CONTACT_NAME_SYNC_GATE_KEY, "1", ex=CONTACT_NAME_SYNC_INTERVAL_SECONDS)
-        except Exception:
-            logger.exception("sweep: error during contact display name sync")
+    except Exception:
+        logger.exception("sweep: error during contact display name sync")
+
+    # Persons emptied by a face label are removed after a grace period; hourly, gated on its own key.
+    try:
+        if redis_conn.get(EMPTIED_PERSON_CLEANUP_GATE_KEY) is None:
+            from lucos_photos_common.jobs import delete_emptied_persons
+            delete_emptied_persons()
+            redis_conn.set(EMPTIED_PERSON_CLEANUP_GATE_KEY, "1", ex=EMPTIED_PERSON_CLEANUP_INTERVAL_SECONDS)
+    except Exception:
+        logger.exception("sweep: error during emptied person cleanup")
 
 
 def run_sweep_loop(redis_conn: Redis) -> None:
