@@ -14,7 +14,6 @@ from app.prenaming import prename_tier1, prename_tier2
 from app.routers.people import _enqueue_profile_picture, delete_person_if_emptied, move_faces_to_person, unpin_if_untagged
 from app.serializers import face_to_dict, photo_url
 from app.services import emit_loganne_event
-from lucos_photos_common.jobs import sync_photo_person
 from lucos_photos_common.models import Face, FacePersonRejection, MediaItem, Person, ProcessingState, ProcessingStatus
 
 router = APIRouter()
@@ -147,7 +146,6 @@ async def assign_person(
     face.person_confirmed = True
     _clear_labels(db, [face.id], person_uuid)
     db.flush()
-    sync_photo_person(db, face.photo_id)
     regen_ids = {person_uuid}
     if previous_person_id is not None and previous_person_id != person_uuid:
         unpin_if_untagged(db, previous_person_id, face.photo_id)
@@ -196,7 +194,7 @@ async def bulk_assign_person(
 
     Accepts {"faceIds": [...], "personId": "<uuid>"}. Applies the same transactional
     contract as a manual merge (see move_faces_to_person): moved faces are marked
-    confirmed, photo_person is resynced for every affected photo, an emptied unlinked
+    confirmed, an emptied unlinked
     source person is deleted, and profile-picture regeneration is re-enqueued for every
     person whose faces changed.
     """

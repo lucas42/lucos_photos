@@ -214,8 +214,7 @@ class TestListPhotosFiltering:
         person = make_person(db_session, "Alice")
         p1 = make_photo(db_session, "tagged")
         make_processing_status(db_session, p1, ProcessingState.complete)
-        pp = PhotoPerson(photo_id=p1.id, person_id=person.id)
-        db_session.add(pp)
+        db_session.add(Face(photo_id=p1.id, person_id=person.id, bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2))
 
         p2 = make_photo(db_session, "untagged")
         make_processing_status(db_session, p2, ProcessingState.complete)
@@ -337,14 +336,14 @@ class TestListPhotosFiltering:
         match.taken_at = datetime(2023, 3, 1, tzinfo=timezone.utc)
         match.media_type = "photo"
         make_processing_status(db_session, match, ProcessingState.complete)
-        db_session.add(PhotoPerson(photo_id=match.id, person_id=person.id))
+        make_face(db_session, match, person)
 
         # Photo: right person, wrong date
         wrong_date = make_photo(db_session, "wrongdate")
         wrong_date.taken_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
         wrong_date.media_type = "photo"
         make_processing_status(db_session, wrong_date, ProcessingState.complete)
-        db_session.add(PhotoPerson(photo_id=wrong_date.id, person_id=person.id))
+        make_face(db_session, wrong_date, person)
 
         # Photo: right date, wrong person
         other = make_photo(db_session, "other")
@@ -464,7 +463,6 @@ class TestGetPhoto:
     def test_includes_people_list(self, authenticated_client, db_session):
         photo = make_photo(db_session, "personlist")
         person = make_person(db_session)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.add(Face(photo_id=photo.id, person_id=person.id, bbox_x=0, bbox_y=0, bbox_width=0.1, bbox_height=0.1))
         db_session.commit()
 
@@ -491,7 +489,6 @@ class TestGetPhoto:
         person = Person(display_name="Alice", profile_photo_id=photo.id, profile_auto_generated=True)
         db_session.add(person)
         db_session.flush()
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.add(Face(photo_id=photo.id, person_id=person.id, bbox_x=0, bbox_y=0, bbox_width=0.1, bbox_height=0.1))
         db_session.commit()
 
@@ -506,7 +503,6 @@ class TestGetPhoto:
         person = Person(display_name="Alice", profile_photo_id=photo.id, profile_auto_generated=False)
         db_session.add(person)
         db_session.flush()
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.add(Face(photo_id=photo.id, person_id=person.id, bbox_x=0, bbox_y=0, bbox_width=0.1, bbox_height=0.1))
         db_session.commit()
 
@@ -521,7 +517,6 @@ class TestGetPhoto:
         person = Person(display_name="Alice", profile_photo_id=other_photo.id, profile_auto_generated=True)
         db_session.add(person)
         db_session.flush()
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.add(Face(photo_id=photo.id, person_id=person.id, bbox_x=0, bbox_y=0, bbox_width=0.1, bbox_height=0.1))
         db_session.commit()
 
@@ -642,9 +637,9 @@ class TestDeletePhoto:
         person = Person()
         db_session.add(person)
         db_session.flush()
-        pp = PhotoPerson(photo_id=photo.id, person_id=person.id)
-        db_session.add(pp)
+        db_session.add(Face(photo_id=photo.id, person_id=person.id, bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2))
         db_session.commit()
+        assert db_session.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).count() == 1
 
         authenticated_client.delete(f"/photos/{photo.id}")
 

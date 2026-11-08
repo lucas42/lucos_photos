@@ -180,7 +180,7 @@ def root(request: Request, _: Annotated[None, Depends(verify_session_or_key)], d
     top_people_with_counts = (
         db.query(Person, func.count(PhotoPerson.photo_id).label("photo_count"))
         .filter(base_person_filter)
-        .outerjoin(PhotoPerson)
+        .outerjoin(PhotoPerson, PhotoPerson.person_id == Person.id)
         .group_by(Person.id)
         .order_by(func.count(PhotoPerson.photo_id).desc())
         .limit(10)

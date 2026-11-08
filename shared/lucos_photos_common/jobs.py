@@ -21,7 +21,7 @@ from rq.exceptions import NoSuchJobError
 from rq.job import Job, JobStatus, Retry
 
 from lucos_photos_common.database import SessionLocal
-from lucos_photos_common.models import Face, FaceEmbedding, FacePersonRejection, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus, photo_date_label
+from lucos_photos_common.models import Face, FaceEmbedding, FacePersonRejection, MediaItem, Person, ProcessingState, ProcessingStatus, photo_date_label
 
 PHOTO_PROCESSED_CHANNEL = "photos:processed"
 
@@ -1151,34 +1151,12 @@ def generate_manual_profile_picture(person_id: str, photo_id: str) -> None:
         db.close()
 
 
-def sync_photo_person(db, photo_id) -> None:
-    """Ensure photo_person table reflects all person assignments for a photo.
-
-    Called by both the API (after manual face assignment) and the worker
-    (after face clustering assigns person_ids).
-    """
-    face_person_ids = {
-        f.person_id
-        for f in db.query(Face).filter(Face.photo_id == photo_id, Face.person_id.isnot(None)).all()
-    }
-
-    existing_rows = db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo_id).all()
-    for row in existing_rows:
-        if row.person_id not in face_person_ids:
-            db.delete(row)
-
-    existing_person_ids = {row.person_id for row in existing_rows}
-    for pid in face_person_ids:
-        if pid not in existing_person_ids:
-            db.add(PhotoPerson(photo_id=photo_id, person_id=pid))
-
-
 def cluster_faces() -> None:
     """Cluster all unassigned face embeddings and create Person records.
 
     Uses DBSCAN (cosine metric) to group faces that appear to show the same person.
     For each resulting cluster, creates a Person record and assigns all faces in the
-    cluster to it. Also updates the photo_person join table.
+    cluster to it.
 
     Only processes faces where:
       - person_id IS NULL (not yet assigned to anyone)
@@ -1245,10 +1223,6 @@ def cluster_faces() -> None:
                 face = unassigned[idx]
                 face.person_id = person.id
                 affected_photo_ids.add(face.photo_id)
-
-        # Update photo_person for all affected photos
-        for photo_id in affected_photo_ids:
-            sync_photo_person(db, photo_id)
 
         # Collect affected person IDs before commit so we can enqueue profile picture jobs
         affected_person_ids: set = {
@@ -1432,7 +1406,7 @@ def sweep_contact_display_names() -> bool:
 
 def delete_emptied_persons() -> int:
     """Delete persons emptied by a face label more than EMPTIED_PERSON_GRACE ago. One statement,
-    re-checking for faces and photo_person rows, so a face arriving at the last moment isn't orphaned."""
+    re-checking for faces, so a face arriving at the last moment isn't orphaned."""
     from sqlalchemy import delete, exists
 
     db = SessionLocal()
@@ -1443,7 +1417,6 @@ def delete_emptied_persons() -> int:
                 Person.contact_id.is_(None),
                 Person.emptied_at < cutoff,
                 ~exists().where(Face.person_id == Person.id),
-                ~exists().where(PhotoPerson.person_id == Person.id),
             )
         )
         db.commit()

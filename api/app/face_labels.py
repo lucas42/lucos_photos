@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.routers.people import unpin_if_untagged
-from lucos_photos_common.jobs import sync_photo_person
 from lucos_photos_common.models import Face, FacePersonRejection, Person
 
 
@@ -31,10 +30,6 @@ def apply_face_label(db: Session, faces: list[Face], not_a_face: bool) -> tuple[
             db.add(FacePersonRejection(face_id=face.id, person_id=face.person_id))
         face.person_id = None
         face.person_confirmed = False
-    db.flush()
-
-    for photo_id in {f.photo_id for f in faces}:
-        sync_photo_person(db, photo_id)
     db.flush()
 
     regen = set()

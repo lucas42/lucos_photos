@@ -144,7 +144,7 @@ All tables use UUID primary keys. Models are in `shared/lucos_photos_common/mode
 | `person` | `id`, `contact_id`, `display_name`, `created_at` | `contact_id` links to lucos_contacts; nullable |
 | `face` | `id`, `photo_id`, `person_id`, `person_confirmed`, `bbox_x/y/width/height`, `created_at` | bounding box in normalised coords (0.0–1.0); `person_confirmed` distinguishes ML guess from human-verified |
 | `face_embedding` | `face_id` (PK/FK, cascade), `embedding` | 512-dimension pgvector vector with the HNSW index; one row per face that has one. Separate from `face` so person changes don't rewrite the vector index |
-| `photo_person` | `photo_id`, `person_id` (composite PK) | Join table; extensible to direct links beyond face-derived ones |
+| `photo_person` | `photo_id`, `person_id` | A **view** over `face` (distinct photo/person pairs with a person assigned), so it cannot disagree with face assignments; read-only. Direct non-face links would need their own table UNIONed in |
 
 ## Environment Variables
 
