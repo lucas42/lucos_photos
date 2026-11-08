@@ -56,6 +56,12 @@
     let pendingRow = null;
     let pendingExistingId = null;
 
+    // The widget renders its input inside a shadow root; fall back to the hidden select.
+    function focusSearch(row) {
+        const host = row.querySelector('[is="lucos-search"]');
+        (host.shadowRoot?.querySelector('input') || row.querySelector('.contact-search')).focus();
+    }
+
     function rowName(row) { return row.dataset.personName; }
 
     function markDone(row, html, message) {
@@ -69,7 +75,7 @@
         // The focused select was just hidden: move focus to the next open row, else this row's name.
         let next = row.nextElementSibling;
         while (next && next.classList.contains('link-contacts-row-done')) next = next.nextElementSibling;
-        (next ? next.querySelector('.contact-search') : row.querySelector('.link-contacts-name')).focus();
+        if (next) focusSearch(next); else row.querySelector('.link-contacts-name').focus();
     }
 
     function showError(row, text) {
@@ -85,7 +91,7 @@
         pendingExistingId = null;
         promptConfirm.disabled = false;
         promptError.hidden = true;
-        if (row) row.querySelector('.contact-search').focus();
+        if (row) focusSearch(row);
     }
 
     promptCancel.addEventListener('click', closeMergePrompt);
