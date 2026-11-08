@@ -5,6 +5,9 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+      x-bake:
+        cache-from: ["type=registry,ref=lucas42/lucos_photos_api:buildcache"]
+        cache-to: ["type=registry,ref=lucas42/lucos_photos_api:buildcache,mode=max,image-manifest=true,oci-mediatypes=true"]
     ports:
       - "${PORT}:${PORT}"
     volumes:
@@ -47,6 +50,9 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
+      x-bake:
+        cache-from: ["type=registry,ref=lucas42/lucos_photos_worker:buildcache"]
+        cache-to: ["type=registry,ref=lucas42/lucos_photos_worker:buildcache,mode=max,image-manifest=true,oci-mediatypes=true"]
     volumes:
       - photos:/data/photos
       - uploads:/data/uploads
