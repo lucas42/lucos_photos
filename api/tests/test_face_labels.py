@@ -91,6 +91,19 @@ class TestNotPerson:
         db_session.expire_all()
         assert db_session.get(Person, alice.id).emptied_at is not None
 
+    def test_regeneration_is_enqueued_for_an_emptied_person(self, authenticated_client, db_session):
+        alice = make_person(db_session)
+        linked = make_person(db_session, "Linked", contact_id="42")
+        f1 = make_face(db_session, make_photo(db_session, 1), alice)
+        f2 = make_face(db_session, make_photo(db_session, 2), linked)
+        db_session.commit()
+
+        with patch("app.routers.faces._enqueue_profile_picture") as enqueue:
+            authenticated_client.post("/faces/not-person", json={"faceIds": [str(f1.id)], "personId": str(alice.id)})
+            authenticated_client.post("/faces/not-a-face", json={"faceIds": [str(f2.id)]})
+
+        assert {c.args[0] for c in enqueue.call_args_list} == {str(alice.id), str(linked.id)}
+
     def test_contact_linked_person_is_not_marked_emptied(self, authenticated_client, db_session):
         alice = make_person(db_session, contact_id="42")
         f1 = make_face(db_session, make_photo(db_session, 1), alice)

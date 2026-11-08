@@ -174,7 +174,7 @@ def link_contacts_page(
     _: Annotated[None, Depends(verify_session_or_key)],
     db: Session = Depends(get_db),
 ):
-    """Bulk-link page: every named, non-ignored person with no contact link (lucas42/lucos_photos#649)."""
+    """Bulk-link page: every named, non-ignored person with faces and no contact link (lucas42/lucos_photos#649)."""
     people = (
         db.query(Person)
         .filter(
@@ -182,6 +182,7 @@ def link_contacts_page(
             Person.is_background == False,  # noqa: E712
             Person.display_name.isnot(None),
             func.trim(Person.display_name) != "",
+            exists().where(Face.person_id == Person.id),
         )
         .order_by(func.lower(Person.display_name).asc(), Person.id.asc())
         .all()

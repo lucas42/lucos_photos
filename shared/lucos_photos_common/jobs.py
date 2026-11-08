@@ -1412,17 +1412,19 @@ def delete_emptied_persons() -> int:
     db = SessionLocal()
     try:
         cutoff = datetime.now(timezone.utc) - EMPTIED_PERSON_GRACE
-        result = db.execute(
+        deleted = db.execute(
             delete(Person).where(
                 Person.contact_id.is_(None),
                 Person.emptied_at < cutoff,
                 ~exists().where(Face.person_id == Person.id),
-            )
-        )
+            ).returning(Person.id)
+        ).scalars().all()
         db.commit()
-        if result.rowcount:
-            logger.info("delete_emptied_persons: deleted %d person(s)", result.rowcount)
-        return result.rowcount
+        for person_id in deleted:
+            (DERIVATIVES_DIR / f"{person_id}_profile.jpg").unlink(missing_ok=True)
+        if deleted:
+            logger.info("delete_emptied_persons: deleted %d person(s)", len(deleted))
+        return len(deleted)
     except Exception:
         db.rollback()
         raise
