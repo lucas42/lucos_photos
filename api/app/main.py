@@ -25,7 +25,7 @@ from app.auth import (  # noqa: F401 - safe_path and verify_session_or_key re-ex
     verify_session_or_key,
 )
 from app.database import get_db, SessionLocal  # noqa: F401 - re-exported for tests; SessionLocal used by the db probes
-from app.probes import ProbeStillRunning, run_probe
+from app.probes import run_probe
 from app.redis_client import _broadcast, _redis_subscriber_task, _ws_clients, get_redis  # noqa: F401 - _broadcast and _ws_clients re-exported for tests
 from app.routers import app_release, faces, people, photos, telemetry, webhooks
 from app.serializers import person_to_dict, photo_to_dict
@@ -241,6 +241,11 @@ def _probe_db_metrics():
             log.debug("session.close() skipped in db-metrics probe: state error during cleanup")
 
 
+def _timeout_debug(exc: BaseException) -> str:
+    detail = f" ({exc})" if str(exc) else ""
+    return f"timeout after {CHECK_TIMEOUT}s{detail}"
+
+
 async def check_db() -> dict:
     """Check whether a connection to PostgreSQL can be established."""
     tech_detail = "Checks whether a connection to PostgreSQL can be established"
@@ -249,11 +254,9 @@ async def check_db() -> dict:
     try:
         await run_probe("db-check", _probe_db_check, CHECK_TIMEOUT)
         ok = True
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as exc:
         log.warning("db-reachable check timed out after %ss", CHECK_TIMEOUT)
-        debug_info = f"timeout after {CHECK_TIMEOUT}s"
-    except ProbeStillRunning as exc:
-        debug_info = str(exc)
+        debug_info = _timeout_debug(exc)
     except Exception as exc:
         log.warning("db-reachable check failed: %r", exc)
         debug_info = repr(exc)
@@ -270,11 +273,9 @@ async def check_redis() -> dict:
         redis_conn = get_redis()
         await run_probe("redis-ping", redis_conn.ping, CHECK_TIMEOUT)
         return {"ok": True, "techDetail": tech_detail}
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as exc:
         log.warning("redis-reachable check timed out after %ss", CHECK_TIMEOUT)
-        return {"ok": False, "techDetail": tech_detail, "debug": f"timeout after {CHECK_TIMEOUT}s"}
-    except ProbeStillRunning as exc:
-        return {"ok": False, "techDetail": tech_detail, "debug": str(exc)}
+        return {"ok": False, "techDetail": tech_detail, "debug": _timeout_debug(exc)}
     except Exception as exc:
         log.warning("redis-reachable check failed: %r", exc)
         return {"ok": False, "techDetail": tech_detail, "debug": repr(exc)}

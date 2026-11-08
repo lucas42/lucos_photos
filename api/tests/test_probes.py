@@ -47,7 +47,7 @@ class TestSingleFlightProbes:
                 assert all(r["checks"]["redis-reachable"]["ok"] is True for r in results)
                 if check_name:
                     assert results[0]["checks"][check_name]["ok"] is False
-                    assert "still running" in results[-1]["checks"][check_name]["debug"]
+                    assert "in flight since" in results[-1]["checks"][check_name]["debug"]
                 release.set()
                 _wait_until_idle(json_section)
                 client.get("/_info")
@@ -80,3 +80,50 @@ class TestSingleFlightProbes:
         import inspect
         import app.main
         assert "to_thread" not in inspect.getsource(app.main)
+
+
+class TestJoinInFlight:
+    def test_joiner_times_out_without_submitting_then_succeeds(self):
+        import asyncio
+        release = threading.Event()
+        calls = []
+
+        def blocked():
+            calls.append(1)
+            release.wait(timeout=10)
+            return "done"
+
+        async def scenario():
+            first = asyncio.ensure_future(probes.run_probe("db-check", blocked, 0.05))
+            await asyncio.sleep(0.01)
+            with pytest.raises(asyncio.TimeoutError, match="in flight since"):
+                await probes.run_probe("db-check", blocked, 0.05)
+            assert len(calls) == 1
+            with pytest.raises(asyncio.TimeoutError):
+                await first
+            joiner = asyncio.ensure_future(probes.run_probe("db-check", blocked, 5))
+            await asyncio.sleep(0.01)
+            release.set()
+            assert await joiner == "done"
+            assert len(calls) == 1
+
+        try:
+            asyncio.run(scenario())
+        finally:
+            release.set()
+            _wait_until_idle("db-check")
+
+    def test_overlapping_calls_on_healthy_probe_both_succeed(self):
+        import asyncio
+
+        def slowish():
+            time.sleep(0.05)
+            return "ok"
+
+        async def scenario():
+            return await asyncio.gather(
+                probes.run_probe("db-check", slowish, 1),
+                probes.run_probe("db-check", slowish, 1),
+            )
+
+        assert asyncio.run(scenario()) == ["ok", "ok"]

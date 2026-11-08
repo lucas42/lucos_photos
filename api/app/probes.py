@@ -26,10 +26,6 @@ _executor = ThreadPoolExecutor(max_workers=len(PROBE_KEYS), thread_name_prefix="
 _inflight: dict[str, tuple[Future, float]] = {}
 
 
-class ProbeStillRunning(Exception):
-    """The previous call for this probe key hasn't returned yet."""
-
-
 def _consume_result(fut: "asyncio.Future") -> None:
     if not fut.cancelled():
         fut.exception()  # mark retrieved so a late failure isn't logged as unretrieved
@@ -37,10 +33,15 @@ def _consume_result(fut: "asyncio.Future") -> None:
 
 async def run_probe(key: str, fn: Callable[[], T], timeout: float) -> T:
     """Run `fn` on the probe executor, waiting at most `timeout` seconds. On timeout the
-    call keeps running and holds the key's slot until it returns."""
-    previous = _inflight.get(key)
-    if previous is not None and not previous[0].done():
-        raise ProbeStillRunning(f"previous check still running (started {time.monotonic() - previous[1]:.0f}s ago)")
+    call keeps running and holds the key's slot until it returns; later callers join it."""
+    existing = _inflight.get(key)
+    if existing is not None and not existing[0].done():
+        wrapped = asyncio.wrap_future(existing[0])
+        wrapped.add_done_callback(_consume_result)
+        try:
+            return await asyncio.wait_for(asyncio.shield(wrapped), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(f"probe in flight since {time.monotonic() - existing[1]:.0f}s") from None
     future = _executor.submit(fn)
     _inflight[key] = (future, time.monotonic())
     wrapped = asyncio.wrap_future(future)
