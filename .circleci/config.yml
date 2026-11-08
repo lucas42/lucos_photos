@@ -48,6 +48,9 @@ jobs:
           name: Run startup migrations against real Postgres
           command: cd api && alembic upgrade head
       - run:
+          name: Run Postgres-backed tests
+          command: cd api && pytest -m postgres
+      - run:
           name: Confirm the shared engine connects (worker's DB path)
           command: python -c "from lucos_photos_common.database import get_engine; get_engine().connect(); print('DB connection OK')"
 workflows:
