@@ -23,7 +23,7 @@ from app.database import get_db
 from app.serializers import DERIVATIVES_DIR, person_profile_picture_url, person_to_dict, photo_to_dict
 from app.services import emit_loganne_event, fetch_contact_name
 from lucos_photos_common.jobs import sync_photo_person
-from lucos_photos_common.models import Face, FacePersonRejection, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
+from lucos_photos_common.models import Face, FaceEmbedding, FacePersonRejection, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -280,9 +280,12 @@ def get_likely_mistags(
     if not db.query(Person.id).filter(Person.id == person_uuid).first():
         raise HTTPException(status_code=404, detail="Person not found")
 
-    rows = db.query(Face.id, Face.person_confirmed, Face.embedding).filter(
-        Face.person_id == person_uuid, Face.embedding.isnot(None)
-    ).all()
+    rows = (
+        db.query(Face.id, Face.person_confirmed, FaceEmbedding.embedding)
+        .join(FaceEmbedding, FaceEmbedding.face_id == Face.id)
+        .filter(Face.person_id == person_uuid)
+        .all()
+    )
     result = {"eligible": len(rows) >= LIKELY_MISTAG_MIN_FACES, "threshold": LIKELY_MISTAG_THRESHOLD, "totalAboveThreshold": 0, "faces": []}
     if not result["eligible"]:
         return result

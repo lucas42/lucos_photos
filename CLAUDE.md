@@ -142,7 +142,8 @@ All tables use UUID primary keys. Models are in `shared/lucos_photos_common/mode
 | `photo` | `id`, `file_extension`, `taken_at`, `uploaded_at`, `width`, `height` | `width`/`height` nullable until processed |
 | `processing_status` | `photo_id` (PK/FK), `state`, `updated_at`, `error_message` | States: `pending`, `processing`, `complete`, `failed` |
 | `person` | `id`, `contact_id`, `display_name`, `created_at` | `contact_id` links to lucos_contacts; nullable |
-| `face` | `id`, `photo_id`, `person_id`, `person_confirmed`, `bbox_x/y/width/height`, `embedding`, `created_at` | `embedding` is a 512-dimension vector using pgvector; bounding box in normalised coords (0.0–1.0); `person_confirmed` distinguishes ML guess from human-verified |
+| `face` | `id`, `photo_id`, `person_id`, `person_confirmed`, `bbox_x/y/width/height`, `created_at` | bounding box in normalised coords (0.0–1.0); `person_confirmed` distinguishes ML guess from human-verified |
+| `face_embedding` | `face_id` (PK/FK, cascade), `embedding` | 512-dimension pgvector vector with the HNSW index; one row per face that has one. Separate from `face` so person changes don't rewrite the vector index |
 | `photo_person` | `photo_id`, `person_id` (composite PK) | Join table; extensible to direct links beyond face-derived ones |
 
 ## Environment Variables
