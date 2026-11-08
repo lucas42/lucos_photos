@@ -66,6 +66,10 @@
         row.querySelector('.search-label').hidden = true;
         remainingCount.textContent = Math.max(parseInt(remainingCount.textContent, 10) - 1, 0);
         announce.textContent = message;
+        // The focused select was just hidden: move focus to the next open row, else this row's name.
+        let next = row.nextElementSibling;
+        while (next && next.classList.contains('link-contacts-row-done')) next = next.nextElementSibling;
+        (next ? next.querySelector('.contact-search') : row.querySelector('.link-contacts-name')).focus();
     }
 
     function showError(row, text) {
