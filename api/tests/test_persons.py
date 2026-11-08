@@ -82,9 +82,9 @@ class TestListpeople:
         person2 = make_person(db_session, "Bob")
         photo1 = make_photo(db_session, "1"*64)
         photo2 = make_photo(db_session, "2"*64)
+        add_face(db_session, photo1, person1)
+        add_face(db_session, photo2, person1)
 
-        db_session.add(PhotoPerson(photo_id=photo1.id, person_id=person1.id))
-        db_session.add(PhotoPerson(photo_id=photo2.id, person_id=person1.id))
         db_session.commit()
 
         response = authenticated_client.get("/people?includePhotoCounts=true")
@@ -388,7 +388,6 @@ class TestGetPerson:
     def test_get_person(self, authenticated_client, db_session):
         person = make_person(db_session, "Alice", contact_id="alice-123")
         photo = make_photo(db_session)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
 
         # Add a face for this person
@@ -457,8 +456,8 @@ class TestGetPerson:
     def test_html_shows_person_photos(self, authenticated_client, db_session):
         person = make_person(db_session, "Alice")
         photo = make_photo(db_session, "a" * 63 + "b")
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.add(ProcessingStatus(photo_id=photo.id, state=ProcessingState.complete))
+        add_face(db_session, photo, person)
         db_session.commit()
 
         response = authenticated_client.get(f"/people/{person.id}", headers={"Accept": "text/html"})
@@ -470,10 +469,10 @@ class TestGetPerson:
         person = make_person(db_session, "Alice")
         complete_photo = make_photo(db_session, "c" * 64)
         pending_photo = make_photo(db_session, "d" * 64)
-        db_session.add(PhotoPerson(photo_id=complete_photo.id, person_id=person.id))
-        db_session.add(PhotoPerson(photo_id=pending_photo.id, person_id=person.id))
         db_session.add(ProcessingStatus(photo_id=complete_photo.id, state=ProcessingState.complete))
         db_session.add(ProcessingStatus(photo_id=pending_photo.id, state=ProcessingState.pending))
+        add_face(db_session, complete_photo, person)
+        add_face(db_session, pending_photo, person)
         db_session.commit()
 
         response = authenticated_client.get(f"/people/{person.id}")
@@ -674,9 +673,8 @@ class TestMergePeople:
         reassigned = db_session.query(Face).filter(Face.id == face.id).first()
         assert reassigned.person_confirmed is True
 
-    def test_merge_photo_person_matches_per_photo_sync(self, authenticated_client, db_session):
-        """Set-based photo_person rebuild gives the same winner/loser rows as per-photo sync_photo_person."""
-        from lucos_photos_common.jobs import sync_photo_person
+    def test_merge_photo_person_view_reflects_the_merged_faces(self, authenticated_client, db_session):
+        """After a merge the photo_person view lists the winner on every photo and the loser on none."""
         with patch("app.routers.people._enqueue_profile_picture"), \
              patch("app.routers.people.updateLoganne"):
             winner = make_person(db_session, "Alice")
@@ -689,15 +687,12 @@ class TestMergePeople:
                 # loser only on every photo; winner also on every 3rd; third person on every 5th
                 db_session.add(Face(photo_id=photo.id, person_id=loser.id, person_confirmed=True,
                                     bbox_x=0.1, bbox_y=0.1, bbox_width=0.2, bbox_height=0.2))
-                db_session.add(PhotoPerson(photo_id=photo.id, person_id=loser.id))
                 if i % 3 == 0:
                     db_session.add(Face(photo_id=photo.id, person_id=winner.id, person_confirmed=True,
                                         bbox_x=0.5, bbox_y=0.5, bbox_width=0.2, bbox_height=0.2))
-                    db_session.add(PhotoPerson(photo_id=photo.id, person_id=winner.id))
                 if i % 5 == 0:
                     db_session.add(Face(photo_id=photo.id, person_id=other.id, person_confirmed=True,
                                         bbox_x=0.7, bbox_y=0.7, bbox_width=0.1, bbox_height=0.1))
-                    db_session.add(PhotoPerson(photo_id=photo.id, person_id=other.id))
             db_session.commit()
             winner_id, loser_id = winner.id, loser.id
 
@@ -706,10 +701,7 @@ class TestMergePeople:
         assert response.status_code == 200
         db_session.expire_all()
         actual = {(r.photo_id, r.person_id) for r in db_session.query(PhotoPerson).all()}
-        for photo_id in photo_ids:
-            sync_photo_person(db_session, photo_id)
-        db_session.commit()
-        expected = {(r.photo_id, r.person_id) for r in db_session.query(PhotoPerson).all()}
+        expected = {(f.photo_id, f.person_id) for f in db_session.query(Face).filter(Face.person_id.isnot(None))}
         assert actual == expected
         assert not any(pid == loser_id for _, pid in actual)
         assert {ph for ph, pid in actual if pid == winner_id} == set(photo_ids)

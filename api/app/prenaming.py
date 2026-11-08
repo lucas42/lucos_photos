@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.routers.people import delete_person_if_emptied
-from lucos_photos_common.jobs import FACE_SIMILARITY_THRESHOLD, sync_photo_person
+from lucos_photos_common.jobs import FACE_SIMILARITY_THRESHOLD
 from lucos_photos_common.models import Face, FaceEmbedding, Person
 
 
@@ -34,7 +34,6 @@ def _assign(db: Session, face: Face, person: Person, confirmed: bool) -> None:
     face.person_id = person.id
     face.person_confirmed = confirmed
     db.flush()
-    sync_photo_person(db, face.photo_id)
     if previous_person_id is not None and previous_person_id != person.id:
         delete_person_if_emptied(db, previous_person_id)
 

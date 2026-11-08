@@ -110,7 +110,6 @@ class TestTier1:
         guess = make_person(db_session, None)
         photo = make_photo(db_session)
         face = make_face(db_session, photo, person=guess, confirmed=False)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=guess.id))
         db_session.commit()
 
         prename(authenticated_client, photo, 1, ["Alice"])

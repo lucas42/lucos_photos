@@ -1914,7 +1914,7 @@ class TestDeleteEmptiedPersons:
 
     def test_deletes_only_old_unlinked_faceless_persons(self, db_session):
         from lucos_photos_common.jobs import delete_emptied_persons
-        from lucos_photos_common.models import Person, PhotoPerson
+        from lucos_photos_common.models import Person
         now = datetime.now(timezone.utc)
         old = now - timedelta(days=8)
         photo = Photo(sha256_hash="f" * 64, file_extension="jpg")
@@ -1925,11 +1925,9 @@ class TestDeleteEmptiedPersons:
         linked = self._person(db_session, emptied_at=old, contact_id="1")
         with_face = self._person(db_session, emptied_at=old)
         db_session.add(Face(photo_id=photo.id, person_id=with_face.id, bbox_x=0, bbox_y=0, bbox_width=1, bbox_height=1))
-        with_photo = self._person(db_session, emptied_at=old)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=with_photo.id))
         never = self._person(db_session)
         db_session.commit()
-        keep = {young.id, linked.id, with_face.id, with_photo.id, never.id}
+        keep = {young.id, linked.id, with_face.id, never.id}
 
         assert delete_emptied_persons() == 1
 

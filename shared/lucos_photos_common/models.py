@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import DDL, Boolean, Column, DateTime, Enum, Float, ForeignKey, Integer, JSON, MetaData, String, Table, Text, event, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
@@ -42,7 +42,6 @@ class MediaItem(Base):
 
     faces: Mapped[list["Face"]] = relationship(back_populates="media_item")
     processing_status: Mapped[Optional["ProcessingStatus"]] = relationship(back_populates="media_item", uselist=False)
-    photo_people: Mapped[list["PhotoPerson"]] = relationship(back_populates="media_item")
 
 
 # Keep Photo as an alias so existing imports don't break all at once.
@@ -100,7 +99,6 @@ class Person(Base):
     emptied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     faces: Mapped[list["Face"]] = relationship(back_populates="person")
-    photo_people: Mapped[list["PhotoPerson"]] = relationship(back_populates="person")
     profile_photo: Mapped[Optional["MediaItem"]] = relationship(foreign_keys=[profile_photo_id])
 
 
@@ -160,22 +158,24 @@ class FacePersonRejection(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# photo_person is a view over face, so it can't disagree with the face assignments (lucas42/lucos_photos#620).
+# Its own MetaData keeps create_all from making a table of it; the DDL below creates the view for test databases.
+_photo_person_metadata = MetaData()
+_photo_person_table = Table(
+    "photo_person",
+    _photo_person_metadata,
+    Column("photo_id", UUID(as_uuid=True), primary_key=True),
+    Column("person_id", UUID(as_uuid=True), primary_key=True),
+)
+
+PHOTO_PERSON_VIEW_SQL = "SELECT DISTINCT photo_id, person_id FROM face WHERE person_id IS NOT NULL"
+event.listen(Base.metadata, "after_create", DDL(f"CREATE VIEW photo_person AS {PHOTO_PERSON_VIEW_SQL}"))
+event.listen(Base.metadata, "before_drop", DDL("DROP VIEW IF EXISTS photo_person"))
+
+
 class PhotoPerson(Base):
-    __tablename__ = "photo_person"
-
-    photo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("media_item.id"), primary_key=True)
-    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("person.id"), primary_key=True)
-
-    media_item: Mapped["MediaItem"] = relationship(back_populates="photo_people")
-    person: Mapped["Person"] = relationship(back_populates="photo_people")
-
-    @property
-    def photo(self) -> "MediaItem":
-        return self.media_item
-
-    @photo.setter
-    def photo(self, value: "MediaItem") -> None:
-        self.media_item = value
+    """Read-only: one row per (photo, person) pair that some face asserts."""
+    __table__ = _photo_person_table
 
 
 class TelemetryEvent(Base):

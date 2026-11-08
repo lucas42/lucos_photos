@@ -39,7 +39,6 @@ def make_face(db, photo, person=None, confirmed=False):
     db.add(face)
     db.flush()
     if person:
-        db.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db.flush()
     return face
 
@@ -173,7 +172,6 @@ class TestExplicitAssignmentOverridesLabels:
         q = make_person(db_session, None)
         face = db_session.get(Face, f1.id)
         face.person_id = q.id
-        db_session.add(PhotoPerson(photo_id=face.photo_id, person_id=q.id))
         db_session.commit()
 
         r = authenticated_client.put("/faces/person", json={"faceIds": [str(f1.id)], "personId": str(alice.id)})

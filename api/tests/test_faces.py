@@ -165,7 +165,6 @@ class TestAssignPerson:
         person1 = make_person(db_session, "Alice")
         person2 = make_person(db_session, "Bob")
         face = make_face(db_session, photo, person=person1, confirmed=True)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person1.id))
         db_session.commit()
 
         authenticated_client.put(
@@ -263,7 +262,6 @@ class TestUnassignPerson:
         photo = make_photo(db_session)
         person = make_person(db_session)
         face = make_face(db_session, photo, person=person, confirmed=True)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.commit()
 
         response = authenticated_client.delete(f"/faces/{face.id}/person")
@@ -277,7 +275,6 @@ class TestUnassignPerson:
         photo = make_photo(db_session)
         person = make_person(db_session)
         face = make_face(db_session, photo, person=person, confirmed=True)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.commit()
 
         authenticated_client.delete(f"/faces/{face.id}/person")
@@ -293,7 +290,6 @@ class TestUnassignPerson:
         person = make_person(db_session)
         face1 = make_face(db_session, photo, person=person, confirmed=True)
         make_face(db_session, photo, person=person, confirmed=False)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.commit()
 
         authenticated_client.delete(f"/faces/{face1.id}/person")
@@ -343,7 +339,6 @@ class TestEmptiedSourcePersonCleanup:
         photo = make_photo(db_session)
         source, dest = make_person(db_session, "Source"), make_person(db_session, "Dest")
         face = make_face(db_session, photo, person=source)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=source.id))
         db_session.commit()
         source_id = source.id
 
@@ -357,7 +352,6 @@ class TestEmptiedSourcePersonCleanup:
         photo = make_photo(db_session)
         source, dest = make_person(db_session, "Source"), make_person(db_session, "Dest")
         face = make_face(db_session, photo, person=source)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=source.id))
         db_session.commit()
         source_id = source.id
 
@@ -417,8 +411,6 @@ class TestBulkAssignPerson:
         destination = make_person(db_session, "Destination")
         face1 = make_face(db_session, photo1, person=source)
         face2 = make_face(db_session, photo2, person=source)
-        db_session.add(PhotoPerson(photo_id=photo1.id, person_id=source.id))
-        db_session.add(PhotoPerson(photo_id=photo2.id, person_id=source.id))
         db_session.commit()
 
         with patch("app.routers.faces.emit_loganne_event", new_callable=AsyncMock) as mock_emit, \
@@ -450,7 +442,6 @@ class TestBulkAssignPerson:
         source = make_person(db_session, "Source")
         destination = make_person(db_session, "Destination")
         face = make_face(db_session, photo, person=source)
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=source.id))
         db_session.commit()
 
         with patch("app.routers.faces.emit_loganne_event", new_callable=AsyncMock), \

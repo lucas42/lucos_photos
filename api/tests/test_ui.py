@@ -173,7 +173,6 @@ class TestPhotoDetailHtml:
         person = Person(display_name="Bob")
         db_session.add(person)
         db_session.flush()
-        db_session.add(PhotoPerson(photo_id=photo.id, person_id=person.id))
         db_session.add(Face(photo_id=photo.id, person_id=person.id, bbox_x=0, bbox_y=0, bbox_width=0.1, bbox_height=0.1))
         db_session.commit()
 

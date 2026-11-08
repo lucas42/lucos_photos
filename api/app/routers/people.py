@@ -22,7 +22,6 @@ from app.auth import verify_session_or_key
 from app.database import get_db
 from app.serializers import DERIVATIVES_DIR, person_profile_picture_url, person_to_dict, photo_to_dict
 from app.services import emit_loganne_event, fetch_contact_name
-from lucos_photos_common.jobs import sync_photo_person
 from lucos_photos_common.models import Face, FaceEmbedding, FacePersonRejection, MediaItem, Person, PhotoPerson, ProcessingState, ProcessingStatus
 
 router = APIRouter()
@@ -73,7 +72,7 @@ def list_people(
         query = db.query(
             Person,
             func.count(PhotoPerson.photo_id).label("photo_count")
-        ).filter(base_filter).outerjoin(PhotoPerson).group_by(Person.id).order_by(*PEOPLE_SORT_ORDER)
+        ).filter(base_filter).outerjoin(PhotoPerson, PhotoPerson.person_id == Person.id).group_by(Person.id).order_by(*PEOPLE_SORT_ORDER)
 
         people_with_counts = query.offset(offset).limit(limit).all()
         people_data = [person_to_dict(p, count) for p, count in people_with_counts]
@@ -215,7 +214,7 @@ def get_person(
     # Get photos assigned to this person (via PhotoPerson), only fully processed ones
     photos = (
         db.query(MediaItem)
-        .join(PhotoPerson)
+        .join(PhotoPerson, PhotoPerson.photo_id == MediaItem.id)
         .join(ProcessingStatus, MediaItem.id == ProcessingStatus.photo_id)
         .filter(PhotoPerson.person_id == person_uuid)
         .filter(ProcessingStatus.state == ProcessingState.complete)
@@ -488,11 +487,6 @@ def merge_people(
     losers = [p for p in persons if p.id != winner.id]
 
     loser_ids = {p.id for p in losers}
-    with _timed("affected_photo_ids"):
-        affected_photo_ids = [
-            row[0] for row in db.query(Face.photo_id).filter(Face.person_id.in_(loser_ids)).distinct()
-        ]
-
     # A face that would end up on a person it rejected is detached rather than confirmed.
     merging_ids = loser_ids | {winner.id}
     with _timed("conflict faces"):
@@ -502,7 +496,6 @@ def merge_people(
             .filter(Face.person_id.in_(merging_ids), FacePersonRejection.person_id.in_(merging_ids))
             .distinct()
         ]
-        conflict_photo_ids = [row[0] for row in db.query(Face.photo_id).filter(Face.id.in_(conflict_face_ids)).distinct()] if conflict_face_ids else []
 
     # Moved to the winner before the losers go, as the cascade would otherwise drop them.
     with _timed("rejection move"):
@@ -536,29 +529,6 @@ def merge_people(
                 {Face.person_id: None, Face.person_confirmed: False},
                 synchronize_session=False,
             )
-
-    with _timed("photo_person delete"):
-        db.query(PhotoPerson).filter(PhotoPerson.person_id.in_(loser_ids)).delete(synchronize_session=False)
-
-    # The winner is the only person whose faces changed on these photos, so one set-based insert replaces the per-photo sync.
-    if affected_photo_ids:
-        already_linked = (
-            select(PhotoPerson.photo_id)
-            .where(PhotoPerson.person_id == winner.id, PhotoPerson.photo_id == Face.photo_id)
-            .exists()
-        )
-        with _timed("photo_person insert"):
-            db.execute(
-                insert(PhotoPerson).from_select(
-                    ["photo_id", "person_id"],
-                    select(Face.photo_id, literal(winner.id, PhotoPerson.person_id.type))
-                    .where(Face.person_id == winner.id, Face.photo_id.in_(affected_photo_ids), ~already_linked)
-                    .distinct(),
-                )
-            )
-
-    for photo_id in conflict_photo_ids:
-        sync_photo_person(db, photo_id)
 
     with _timed("person delete and commit"):
         for loser in losers:
@@ -793,7 +763,6 @@ def delete_person_if_emptied(db: Session, person_id) -> bool:
     person = db.query(Person).filter(Person.id == person_id).first()
     if person is None or person.contact_id is not None:
         return False
-    db.query(PhotoPerson).filter(PhotoPerson.person_id == person_id).delete(synchronize_session="fetch")
     db.delete(person)
     return True
 
@@ -818,10 +787,7 @@ def move_faces_to_person(db: Session, faces: list[Face], destination: Person) ->
     1. Mark every moved face as person_confirmed=True — the durable manual-correction
        signal (detect_and_save_faces only snapshots confirmed assignments before
        re-detecting; without this, a reprocess would silently lose the move).
-    2. Resync photo_person for every affected photo — covers both the source and
-       destination side, since sync_photo_person recomputes from whichever person_ids
-       currently appear among the photo's faces.
-    3. Emptied-source policy: a source person left with zero faces is deleted if it
+    2. Emptied-source policy: a source person left with zero faces is deleted if it
        has no contact link (deleting also drops its flagged_at state, which is
        correct — no separate flag-cleanup step needed); kept if contact-linked, since
        deleting would silently destroy the contact link.
@@ -831,16 +797,12 @@ def move_faces_to_person(db: Session, faces: list[Face], destination: Person) ->
     plus any source person that survived).
     """
     source_person_ids = {f.person_id for f in faces if f.person_id is not None and f.person_id != destination.id}
-    affected_photo_ids = {f.photo_id for f in faces}
     moved_from = {f.id: f.person_id for f in faces if f.person_id is not None and f.person_id != destination.id}
 
     for face in faces:
         face.person_id = destination.id
         face.person_confirmed = True
     db.flush()
-
-    for photo_id in affected_photo_ids:
-        sync_photo_person(db, photo_id)
 
     for face in faces:
         if face.id in moved_from:

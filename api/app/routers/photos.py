@@ -684,7 +684,6 @@ async def delete_photo(
         {Person.profile_photo_id: None, Person.profile_auto_generated: None}, synchronize_session=False
     )
     db.query(Face).filter(Face.photo_id == photo.id).delete()
-    db.query(PhotoPerson).filter(PhotoPerson.photo_id == photo.id).delete()
     db.query(ProcessingStatus).filter(ProcessingStatus.photo_id == photo.id).delete()
     db.delete(photo)
     db.flush()
