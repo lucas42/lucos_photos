@@ -1,0 +1,216 @@
+{% extends "_base.html" %}
+
+{% block title %}Link people to contacts — Photos{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="page-title">Link people to contacts <span class="page-count" id="remaining-count">{{ people | length }}</span></h1>
+    <p class="link-contacts-intro">People with a name who aren't linked to a contact yet. <a href="/people">Back to all people</a></p>
+    <p id="link-contacts-announce" class="sr-only" role="status"></p>
+
+    {% if people %}
+    <ul class="link-contacts-list" id="link-contacts-list">
+        {% for person in people %}
+        <li class="link-contacts-row" data-person-id="{{ person.id }}" data-person-name="{{ person.name }}">
+            {% if person.profilePictureUrl %}
+            <img class="person-profile-picture" src="{{ person.profilePictureUrl }}" alt=""
+                 onerror="lucosProfilePicturePlaceholderFallback(this)">
+            {% else %}
+            {% set pfp_extra_class = none %}
+            {% set pfp_aria_label = none %}
+            {% include "_profile_picture_placeholder.html" %}
+            {% endif %}
+            <div class="link-contacts-body">
+                <a class="link-contacts-name" href="/people/{{ person.id }}">{{ person.name }}</a>
+                <p class="contact-status link-contacts-status">Not linked to a contact</p>
+                <label class="search-label">Link {{ person.name }} to contact:
+                    <span is="lucos-search" data-api-key="{{ arachne_key }}" data-types="Person" data-is-contact="true">
+                        <select class="contact-search"></select>
+                    </span>
+                </label>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty-state-text" id="link-contacts-empty">Everyone with a name is linked to a contact.</p>
+    {% endif %}
+</div>
+
+{% include "_merge_prompt.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+    import '/lucos_search_component.js';
+
+    const remainingCount = document.getElementById('remaining-count');
+    const announce = document.getElementById('link-contacts-announce');
+    const list = document.getElementById('link-contacts-list');
+
+    const lightbox = document.getElementById('merge-prompt-lightbox');
+    const promptCancel = document.getElementById('merge-prompt-cancel');
+    const promptConfirm = document.getElementById('merge-prompt-confirm');
+    const promptError = document.getElementById('merge-prompt-error');
+
+    let pendingRow = null;
+    let pendingExistingId = null;
+
+    // The widget renders its input inside a shadow root; fall back to the hidden select.
+    function focusSearch(row) {
+        const host = row.querySelector('[is="lucos-search"]');
+        (host.shadowRoot?.querySelector('input') || row.querySelector('.contact-search')).focus();
+    }
+
+    function rowName(row) { return row.dataset.personName; }
+
+    function markDone(row, html, message) {
+        const status = row.querySelector('.link-contacts-status');
+        status.innerHTML = html;
+        status.className = 'contact-status linked link-contacts-status';
+        row.classList.add('link-contacts-row-done');
+        row.querySelector('.search-label').hidden = true;
+        remainingCount.textContent = Math.max(parseInt(remainingCount.textContent, 10) - 1, 0);
+        announce.textContent = message;
+        // The focused select was just hidden: move focus to the next open row, else this row's name.
+        let next = row.nextElementSibling;
+        while (next && next.classList.contains('link-contacts-row-done')) next = next.nextElementSibling;
+        if (next) focusSearch(next); else row.querySelector('.link-contacts-name').focus();
+    }
+
+    function showError(row, text) {
+        const status = row.querySelector('.link-contacts-status');
+        status.textContent = text;
+        status.className = 'contact-status error-status link-contacts-status';
+    }
+
+    function closeMergePrompt() {
+        const row = pendingRow;
+        lightbox.classList.remove('open');
+        pendingRow = null;
+        pendingExistingId = null;
+        promptConfirm.disabled = false;
+        promptError.hidden = true;
+        if (row) focusSearch(row);
+    }
+
+    promptCancel.addEventListener('click', closeMergePrompt);
+    lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeMergePrompt(); });
+
+    document.addEventListener('keydown', (e) => {
+        if (!lightbox.classList.contains('open')) return;
+        if (e.key === 'Escape') { closeMergePrompt(); return; }
+        if (e.key === 'Tab') {
+            const focusable = lightbox.querySelectorAll('button:not([disabled])');
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+    });
+
+    function renderPersonInPrompt(container, personData) {
+        const name = personData.name || `Person ${personData.id.slice(0, 8)}…`;
+        container.querySelector('.merge-prompt-person-name').textContent = name;
+        const existing = container.querySelector('img, .person-profile-picture-placeholder');
+        if (personData.profilePictureUrl) {
+            const img = document.createElement('img');
+            img.src = personData.profilePictureUrl;
+            img.alt = name;
+            existing.replaceWith(img);
+        } else if (existing.tagName === 'IMG') {
+            const ph = document.createElement('div');
+            ph.className = 'person-profile-picture-placeholder';
+            existing.replaceWith(ph);
+        }
+    }
+
+    async function showMergePrompt(row, existingPersonId) {
+        pendingRow = row;
+        pendingExistingId = existingPersonId;
+        promptConfirm.disabled = false;
+        promptError.hidden = true;
+        const currentContainer = document.getElementById('merge-prompt-current');
+        const existingContainer = document.getElementById('merge-prompt-existing');
+        currentContainer.querySelector('.merge-prompt-person-name').textContent = '…';
+        existingContainer.querySelector('.merge-prompt-person-name').textContent = '…';
+        lightbox.classList.add('open');
+        promptCancel.focus();
+
+        const [currentRes, existingRes] = await Promise.all([
+            fetch(`/people/${row.dataset.personId}`, { headers: { 'Accept': 'application/json' } }),
+            fetch(`/people/${existingPersonId}`, { headers: { 'Accept': 'application/json' } }),
+        ]);
+        if (currentRes.ok) renderPersonInPrompt(currentContainer, await currentRes.json());
+        if (existingRes.ok) renderPersonInPrompt(existingContainer, await existingRes.json());
+    }
+
+    promptConfirm.addEventListener('click', async () => {
+        if (!pendingRow || !pendingExistingId) return;
+        const row = pendingRow;
+        promptConfirm.disabled = true;
+        promptError.hidden = true;
+        try {
+            const response = await fetch('/people/merge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ personIds: [row.dataset.personId, pendingExistingId] }),
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                throw new Error((data.detail && data.detail.message) || data.detail || `API responded with ${response.status}`);
+            }
+            const data = await response.json();
+            const name = rowName(row);
+            lightbox.classList.remove('open');
+            pendingRow = null;
+            pendingExistingId = null;
+            markDone(row, `Merged with <a href="/people/${data.mergedPersonId}">the person already linked to that contact</a>`,
+                `${name} was merged with the person already linked to that contact.`);
+        } catch (err) {
+            console.error('Failed to merge people:', err);
+            promptError.textContent = err.message || 'Failed to merge. Please try again.';
+            promptError.hidden = false;
+            promptConfirm.disabled = false;
+        }
+    });
+
+    async function handleContactChange(select) {
+        const row = select.closest('.link-contacts-row');
+        const personId = row.dataset.personId;
+        if (!select.value) return;
+        const match = select.value.match(/\/people\/(\w+)\/?$/);
+        if (!match) {
+            console.error('Could not extract contact ID from URI:', select.value);
+            return;
+        }
+        const contactId = match[1];
+        try {
+            const response = await fetch(`/people/${personId}/contact`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contactId }),
+            });
+            if (response.status === 409) {
+                const data = await response.json();
+                const existingId = data.detail && data.detail.existingPersonId;
+                if (existingId) await showMergePrompt(row, existingId);
+                else showError(row, 'This contact is already linked to another person.');
+                return;
+            }
+            if (!response.ok) throw new Error(`API responded with ${response.status}`);
+            markDone(row, `Linked to contact: <a href="/people/${personId}">${contactId}</a>`,
+                `${rowName(row)} linked to a contact.`);
+        } catch (err) {
+            console.error('Failed to link contact:', err);
+            showError(row, 'Failed to link contact. Try again.');
+        }
+    }
+
+    if (list) {
+        list.addEventListener('change', (e) => {
+            if (e.target.classList.contains('contact-search')) handleContactChange(e.target);
+        });
+    }
+</script>
+{% endblock %}

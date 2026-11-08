@@ -166,6 +166,31 @@ async def create_person(
     return person_to_dict(person)
 
 
+@router.get("/people/link-contacts")
+def link_contacts_page(
+    request: Request,
+    _: Annotated[None, Depends(verify_session_or_key)],
+    db: Session = Depends(get_db),
+):
+    """Bulk-link page: every named, non-ignored person with no contact link (lucas42/lucos_photos#649)."""
+    people = (
+        db.query(Person)
+        .filter(
+            Person.contact_id.is_(None),
+            Person.is_background == False,  # noqa: E712
+            Person.display_name.isnot(None),
+            func.trim(Person.display_name) != "",
+        )
+        .order_by(func.lower(Person.display_name).asc(), Person.id.asc())
+        .all()
+    )
+    return templates.TemplateResponse(request, "link_contacts.html", {
+        "people": [person_to_dict(p) for p in people],
+        "arachne_key": os.environ.get("KEY_LUCOS_ARACHNE", ""),
+        "current_page": "people",
+    }, headers={"Vary": "Accept"})
+
+
 @router.get("/people/{person_id}")
 def get_person(
     person_id: str,
