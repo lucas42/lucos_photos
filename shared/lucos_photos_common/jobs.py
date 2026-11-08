@@ -342,6 +342,7 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
                 db.add(FacePersonRejection(face_id=face_record.id, person_id=rejected_id))
 
     db.flush()
+    sync_photo_person(db, photo.id)
     logger.info("detect_and_save_faces: saved %d face record(s) for photo %s", len(detected_faces), photo.id)
 
 
