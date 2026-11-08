@@ -1,6 +1,4 @@
 FROM python:3.14-slim
-ARG VERSION
-ENV VERSION=$VERSION
 
 WORKDIR /app
 
@@ -15,10 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-
-# Install shared package first
-COPY shared/ /shared/
-RUN pip install --no-cache-dir /shared/
 
 # Install heavy ML dependencies before application code so this layer is
 # cached across code-only changes. These are pinned to exact versions so
@@ -35,6 +29,14 @@ RUN python -c "from insightface.app import FaceAnalysis; \
     app = FaceAnalysis(name='buffalo_l', root='/opt/insightface', allowed_modules=['detection', 'recognition']); \
     app.prepare(ctx_id=-1, det_size=(640, 640)); \
     print('InsightFace buffalo_l model downloaded and verified successfully')"
+
+# Shared package after the heavy layers, so changes to it don't invalidate them.
+COPY shared/ /shared/
+RUN pip install --no-cache-dir /shared/
+
+# VERSION after the last RUN, so a version bump doesn't invalidate any layer above.
+ARG VERSION
+ENV VERSION=$VERSION
 
 # Copy application code last so code changes don't invalidate the ML layer cache
 COPY worker/app/ ./app/
