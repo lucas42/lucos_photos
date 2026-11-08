@@ -96,6 +96,8 @@ class Person(Base):
     is_background: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # User has flagged this grouping as wrong but not yet corrected it (manually set/cleared, no auto-resolve)
     flagged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when a face label leaves the person with no faces; delete_emptied_persons removes it after a grace period
+    emptied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     faces: Mapped[list["Face"]] = relationship(back_populates="person")
     photo_people: Mapped[list["PhotoPerson"]] = relationship(back_populates="person")
@@ -121,6 +123,8 @@ class Face(Base):
     det_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # 5-point keypoints [[x,y], ...] for eyes, nose, mouth corners — used for frontality estimation
     kps: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    # Set when a human says this detection isn't a face; excluded from matching, never deleted
+    not_a_face_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     media_item: Mapped["MediaItem"] = relationship(back_populates="faces")
@@ -133,6 +137,15 @@ class Face(Base):
     @photo.setter
     def photo(self, value: "MediaItem") -> None:
         self.media_item = value
+
+
+class FacePersonRejection(Base):
+    """A human statement that this face is not this person; matching must not assign it there."""
+    __tablename__ = "face_person_rejection"
+
+    face_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("face.id", ondelete="CASCADE"), primary_key=True)
+    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("person.id", ondelete="CASCADE"), primary_key=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class PhotoPerson(Base):

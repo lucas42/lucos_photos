@@ -3,7 +3,7 @@
 import io
 import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1800,6 +1800,140 @@ class TestClusterFaces:
 
         assert db_session.query(Person).count() == 1
         assert db_session.query(PhotoPerson).count() == 1
+
+
+class TestFaceLabels:
+    """Negative labels (lucas42/lucos_photos#622) must survive re-detection and bypass matching."""
+
+    @pytest.fixture
+    def photo(self, db_session):
+        photo = Photo(sha256_hash="d" * 64, file_extension="jpg", width=1000, height=800)
+        db_session.add(photo)
+        db_session.commit()
+        return photo
+
+    def _redetect(self, db_session, photo, tmp_path, embeddings):
+        img_path = tmp_path / "t.jpg"
+        img_path.write_bytes(b"fake")
+        faces = []
+        for emb in embeddings:
+            f = MagicMock()
+            f.bbox = [0.0, 0.0, 100.0, 100.0]
+            f.embedding = np.array(emb)
+            f.det_score = 0.9
+            f.kps = None
+            faces.append(f)
+        app = MagicMock()
+        app.get.return_value = faces
+        pil = MagicMock()
+        pil.__enter__ = MagicMock(return_value=pil)
+        pil.__exit__ = MagicMock(return_value=False)
+        with patch("lucos_photos_common.jobs._get_face_analysis_app", return_value=app), \
+             patch.dict("sys.modules", {"cv2": MagicMock()}), patch("PIL.Image.open", return_value=pil):
+            detect_and_save_faces(db_session, photo, img_path)
+        return db_session.query(Face).filter(Face.photo_id == photo.id).all()
+
+    def _face(self, db_session, photo, emb, **kwargs):
+        face = Face(photo_id=photo.id, bbox_x=0, bbox_y=0, bbox_width=0.1, bbox_height=0.1, embedding=emb, **kwargs)
+        db_session.add(face)
+        db_session.flush()
+        return face
+
+    def test_not_a_face_survives_redetection_and_skips_assignment(self, db_session, photo, tmp_path):
+        emb = [1.0] + [0.0] * 511
+        self._face(db_session, photo, emb, not_a_face_at=datetime.now(timezone.utc))
+        db_session.commit()
+
+        faces = self._redetect(db_session, photo, tmp_path, [emb])
+
+        assert len(faces) == 1
+        assert faces[0].not_a_face_at is not None
+        assert faces[0].person_id is None
+
+    def test_rejection_survives_redetection(self, db_session, photo, tmp_path):
+        from lucos_photos_common.models import FacePersonRejection, Person
+        alice = Person(display_name="Alice")
+        db_session.add(alice)
+        db_session.flush()
+        emb = [1.0] + [0.0] * 511
+        old = self._face(db_session, photo, emb)
+        db_session.add(FacePersonRejection(face_id=old.id, person_id=alice.id))
+        db_session.commit()
+
+        faces = self._redetect(db_session, photo, tmp_path, [emb])
+
+        rejected = {r.person_id for r in db_session.query(FacePersonRejection).filter_by(face_id=faces[0].id)}
+        assert rejected == {alice.id}
+
+    def test_rejected_person_is_excluded_from_confirmed_reapply_and_candidates(self, db_session, photo, tmp_path):
+        from lucos_photos_common.models import FacePersonRejection, Person
+        alice = Person(display_name="Alice")
+        db_session.add(alice)
+        db_session.flush()
+        emb = [1.0] + [0.0] * 511
+        other_photo = Photo(sha256_hash="e" * 64, file_extension="jpg", width=10, height=10)
+        db_session.add(other_photo)
+        db_session.flush()
+        # A near-identical face already sits on Alice, so unfiltered matching would pick her.
+        self._face(db_session, other_photo, emb, person_id=alice.id)
+        old = self._face(db_session, photo, emb)
+        db_session.add(FacePersonRejection(face_id=old.id, person_id=alice.id))
+        db_session.commit()
+
+        faces = self._redetect(db_session, photo, tmp_path, [emb])
+
+        assert faces[0].person_id is None
+
+    def test_unmatched_label_logs_a_warning(self, db_session, photo, tmp_path, caplog):
+        self._face(db_session, photo, [1.0] + [0.0] * 511, not_a_face_at=datetime.now(timezone.utc))
+        db_session.commit()
+
+        with caplog.at_level("WARNING", logger="lucos_photos_common.jobs"):
+            faces = self._redetect(db_session, photo, tmp_path, [[0.0, 1.0] + [0.0] * 510])
+
+        assert faces[0].not_a_face_at is None
+        assert "could not re-match a negative face label" in caplog.text
+
+    def test_not_a_face_is_excluded_from_clustering(self, db_session, photo):
+        self._face(db_session, photo, [1.0] + [0.0] * 511, not_a_face_at=datetime.now(timezone.utc))
+        db_session.commit()
+
+        cluster_faces()
+
+        assert db_session.query(Face).one().person_id is None
+
+
+class TestDeleteEmptiedPersons:
+    def _person(self, db_session, **kwargs):
+        from lucos_photos_common.models import Person
+        person = Person(**kwargs)
+        db_session.add(person)
+        db_session.flush()
+        return person
+
+    def test_deletes_only_old_unlinked_faceless_persons(self, db_session):
+        from lucos_photos_common.jobs import delete_emptied_persons
+        from lucos_photos_common.models import Person, PhotoPerson
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=8)
+        photo = Photo(sha256_hash="f" * 64, file_extension="jpg")
+        db_session.add(photo)
+        db_session.flush()
+        gone = self._person(db_session, emptied_at=old)
+        young = self._person(db_session, emptied_at=now - timedelta(days=6))
+        linked = self._person(db_session, emptied_at=old, contact_id="1")
+        with_face = self._person(db_session, emptied_at=old)
+        db_session.add(Face(photo_id=photo.id, person_id=with_face.id, bbox_x=0, bbox_y=0, bbox_width=1, bbox_height=1))
+        with_photo = self._person(db_session, emptied_at=old)
+        db_session.add(PhotoPerson(photo_id=photo.id, person_id=with_photo.id))
+        never = self._person(db_session)
+        db_session.commit()
+        keep = {young.id, linked.id, with_face.id, with_photo.id, never.id}
+
+        assert delete_emptied_persons() == 1
+
+        db_session.expire_all()
+        assert {p.id for p in db_session.query(Person)} == keep
 
 
 class TestFrontalityScore:

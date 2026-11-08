@@ -1303,6 +1303,67 @@ a:hover {
 	opacity: 0.85;
 }
 
+#bulk-not-face-btn {
+	margin-left: 0.75rem;
+}
+
+@media (max-width: 600px) {
+	.bulk-action-bar {
+		flex-wrap: wrap;
+		max-width: calc(100% - 2rem);
+		border-radius: 1.25rem;
+	}
+
+	#bulk-action-count {
+		flex-basis: 100%;
+		text-align: center;
+	}
+}
+
+@media (pointer: coarse) {
+	.bulk-action-bar button,
+	.label-undo button {
+		min-height: 44px;
+	}
+}
+
+.bulk-label-btn {
+	background: transparent;
+	color: inherit;
+	border: 1px solid currentColor;
+	border-radius: 6px;
+	padding: 0.4rem 1rem;
+	font-size: 0.9rem;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.bulk-label-btn:hover:not(:disabled) {
+	opacity: 0.8;
+}
+
+.bulk-action-bar button:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.label-undo {
+	margin: 1rem 0;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.75rem;
+	font-size: 0.9rem;
+}
+
+.label-undo p {
+	margin: 0;
+}
+
+.label-undo [hidden] {
+	display: none;
+}
+
 .move-confirmation {
 	margin-top: 1.5rem;
 	font-size: 0.9rem;

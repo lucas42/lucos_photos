@@ -679,6 +679,33 @@ class TestSweepPerItemBackoffIntegration:
 
         mock_sync_names.assert_called_once()
 
+    def test_emptied_person_cleanup_is_hourly_and_independent_of_contact_sync(self, db_session):
+        fake_redis = _make_fake_redis()
+        mock_queue = _make_mock_queue()
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs.cluster_faces"), \
+             patch("lucos_photos_common.jobs.sweep_contact_display_names", return_value=False), \
+             patch("lucos_photos_common.jobs.delete_emptied_persons") as mock_cleanup:
+            sweep_pending_photos(fake_redis)
+            sweep_pending_photos(fake_redis)
+
+        mock_cleanup.assert_called_once()
+
+    def test_emptied_person_cleanup_failure_does_not_stop_sweep_and_retries(self, db_session):
+        fake_redis = _make_fake_redis()
+        mock_queue = _make_mock_queue()
+
+        with patch("app.main.Queue", return_value=mock_queue), \
+             patch("lucos_photos_common.jobs.cluster_faces"), \
+             patch("lucos_photos_common.jobs.sweep_contact_display_names", return_value=True), \
+             patch("lucos_photos_common.jobs.delete_emptied_persons", side_effect=[RuntimeError("boom"), 0]) as mock_cleanup:
+            sweep_pending_photos(fake_redis)
+            sweep_pending_photos(fake_redis)
+            sweep_pending_photos(fake_redis)
+
+        assert mock_cleanup.call_count == 2
+
     def test_contact_name_sync_retries_next_pass_after_failure(self, db_session):
         fake_redis = _make_fake_redis()
         mock_queue = _make_mock_queue()

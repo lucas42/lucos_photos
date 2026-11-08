@@ -49,7 +49,7 @@
 
     <section class="person-photos">
         <div class="person-photos-header">
-            <h2 id="photos-heading">Photos ({{ person.photos | length }})</h2>
+            <h2 id="photos-heading" tabindex="-1">Photos ({{ person.photos | length }})</h2>
             {% if person.photos %}
             <button class="select-mode-btn" id="select-mode-btn">Select photos to move</button>
             {% endif %}
@@ -77,7 +77,16 @@
 
     <div class="bulk-action-bar" id="bulk-action-bar" hidden aria-live="polite">
         <span id="bulk-action-count"></span>
-        <button class="bulk-move-btn" id="bulk-move-btn">Move to another person</button>
+        <button class="bulk-move-btn" id="bulk-move-btn" aria-describedby="bulk-action-count">Move to another person</button>
+        <button class="bulk-label-btn" id="bulk-not-person-btn" aria-describedby="bulk-action-count">Not this person</button>
+        <button class="bulk-label-btn" id="bulk-not-face-btn" aria-describedby="bulk-action-count">Not a face</button>
+    </div>
+    <div class="label-undo" id="label-undo">
+        <p id="label-undo-text" role="status"></p>
+        <span id="label-undo-actions" hidden>
+            <button type="button" class="select-mode-btn" id="label-undo-btn" aria-describedby="label-undo-text">Undo</button>
+            <button type="button" class="select-mode-btn" id="label-dismiss-btn">Dismiss</button>
+        </span>
     </div>
 
     <div class="person-contact" id="person-contact">
@@ -283,7 +292,8 @@
             }
 
             const data = await response.json();
-            window.location.href = `/people/${data.mergedPersonId}`;
+            const detached = data.detachedCount ? `?detached=${data.detachedCount}` : '';
+            window.location.href = `/people/${data.mergedPersonId}${detached}`;
         } catch (err) {
             console.error('Failed to merge people:', err);
             promptError.textContent = err.message || 'Failed to merge. Please try again.';
@@ -788,6 +798,166 @@
         updateBulkActionBar();
         updateMistagStatus();
     }
+
+
+    // --- "Not this person" / "Not a face" (lucas42/lucos_photos#622) ---
+    const bulkNotPersonBtn = document.getElementById('bulk-not-person-btn');
+    const bulkNotFaceBtn = document.getElementById('bulk-not-face-btn');
+    const labelUndoText = document.getElementById('label-undo-text');
+    const labelUndoActions = document.getElementById('label-undo-actions');
+    const labelUndoBtn = document.getElementById('label-undo-btn');
+    const labelDismissBtn = document.getElementById('label-dismiss-btn');
+    const bulkButtons = [bulkMoveBtn, bulkNotPersonBtn, bulkNotFaceBtn];
+    const personName = document.querySelector('.page-title').textContent.trim();
+    const personDisplayName = /^Person [0-9a-f]{8}…$/.test(personName) ? 'this person' : personName;
+    let lastLabel = null; // { changed, removed: [{ node, next }] }
+
+    const detachedParam = new URLSearchParams(window.location.search).get('detached');
+    if (detachedParam && Number(detachedParam) > 0) {
+        const n = Number(detachedParam);
+        moveConfirmation.textContent = `Merged. ${n} face${n === 1 ? ' was' : 's were'} left unassigned because you'd marked ${n === 1 ? 'it' : 'them'} as not this person.`;
+        moveConfirmation.hidden = false;
+        history.replaceState(null, '', window.location.pathname);
+    }
+
+    function setBulkBusy(busy) {
+        bulkButtons.forEach((btn) => { btn.disabled = busy; });
+        if (busy) bulkActionCount.textContent = 'Working…';
+        else updateBulkActionBar();
+    }
+
+    function showLabelMessage(text, { undo = false, dismiss = true } = {}) {
+        labelUndoText.textContent = text;
+        labelUndoActions.hidden = !(undo || dismiss);
+        labelUndoBtn.hidden = !undo;
+        labelDismissBtn.hidden = !dismiss;
+        labelUndoBtn.disabled = false;
+    }
+
+    function clearLabelMessage() {
+        lastLabel = null;
+        labelUndoText.textContent = '';
+        labelUndoActions.hidden = true;
+    }
+
+    function updateGridCount() {
+        const count = photoGrid.querySelectorAll('.media-card-link').length;
+        document.getElementById('photos-heading').textContent = `Photos (${count})`;
+        let empty = document.getElementById('grid-empty-text');
+        if (count === 0 && !empty) {
+            empty = document.createElement('p');
+            empty.id = 'grid-empty-text';
+            empty.className = 'empty-state-text';
+            empty.textContent = 'No faces left on this person.';
+            photoGrid.after(empty);
+        } else if (count > 0 && empty) {
+            empty.remove();
+        }
+    }
+
+    async function applyLabel(kind, pressedBtn) {
+        const faceIds = Array.from(selectedFaceIds);
+        if (faceIds.length === 0) return;
+        clearLabelMessage();
+        setBulkBusy(true);
+        let refocus = null;
+        try {
+            const response = await fetch(kind === 'not-person' ? '/faces/not-person' : '/faces/not-a-face', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(kind === 'not-person' ? { faceIds, personId } : { faceIds }),
+            });
+            if (response.status === 409) {
+                showLabelMessage('Some of these faces have moved since this page loaded. Reload the page and try again.');
+                refocus = pressedBtn;
+                return;
+            }
+            if (!response.ok) throw new Error(`API responded with ${response.status}`);
+            const data = await response.json();
+
+            const removed = [];
+            for (const faceId of faceIds) {
+                const checkbox = photoGrid.querySelector(`.photo-select-checkbox[data-face-id="${faceId}"]`);
+                const link = checkbox && checkbox.closest('.media-card-link');
+                if (link) {
+                    checkbox.checked = false;
+                    removed.push({ node: link, next: link.nextElementSibling });
+                    link.remove();
+                }
+            }
+            const hadMistags = mistagList && faceIds.some((id) => mistagList.querySelector(`.likely-mistag[data-face-id="${id}"]`));
+            removeMistagFaces(faceIds);
+            updateGridCount();
+            exitSelectMode();
+
+            const n = faceIds.length;
+            const what = kind === 'not-person' ? `not ${personDisplayName}` : 'not a face';
+            lastLabel = { changed: data.changed, removed, hadMistags };
+            showLabelMessage(`Marked ${n} face${n === 1 ? '' : 's'} as ${what}.`, { undo: true });
+            labelUndoBtn.focus();
+        } catch (err) {
+            console.error('Failed to label faces:', err);
+            showLabelMessage("Couldn't save that. Please try again.");
+            refocus = pressedBtn;
+        } finally {
+            setBulkBusy(false);
+            if (refocus) refocus.focus();
+        }
+    }
+
+    async function undoLabel() {
+        if (!lastLabel) return;
+        labelUndoBtn.disabled = true;
+        const byPerson = new Map();
+        for (const { faceId, previousPersonId } of lastLabel.changed) {
+            if (!previousPersonId) continue;
+            if (!byPerson.has(previousPersonId)) byPerson.set(previousPersonId, []);
+            byPerson.get(previousPersonId).push(faceId);
+        }
+        try {
+            for (const [previousPersonId, faceIds] of byPerson) {
+                const response = await fetch('/faces/person', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ faceIds, personId: previousPersonId }),
+                });
+                if (response.status === 404) {
+                    showLabelMessage("This person no longer exists, so these faces can't be moved back to them.");
+                    labelDismissBtn.focus();
+                    return;
+                }
+                if (!response.ok) throw new Error(`API responded with ${response.status}`);
+            }
+        } catch (err) {
+            console.error('Failed to undo:', err);
+            labelUndoText.textContent = `Couldn't undo. Reload the page, then move the faces back to ${personDisplayName} if they're missing.`;
+            labelUndoBtn.disabled = false;
+            labelUndoBtn.focus();
+            return;
+        }
+        let first = null;
+        for (const { node, next } of lastLabel.removed) {
+            if (next && next.parentNode === photoGrid) photoGrid.insertBefore(node, next);
+            else photoGrid.appendChild(node);
+            first = first || node;
+        }
+        updateGridCount();
+        const hadMistags = lastLabel.hadMistags;
+        clearLabelMessage();
+        if (hadMistags && mistagSection && !mistagSection.hidden) loadMistags();
+        (first || document.getElementById('photos-heading')).focus();
+    }
+
+    function dismissLabel() {
+        clearLabelMessage();
+        const hasCards = photoGrid.querySelector('.media-card-link');
+        (hasCards && selectModeBtn ? selectModeBtn : document.getElementById('photos-heading')).focus();
+    }
+
+    bulkNotPersonBtn.addEventListener('click', () => applyLabel('not-person', bulkNotPersonBtn));
+    bulkNotFaceBtn.addEventListener('click', () => applyLabel('not-a-face', bulkNotFaceBtn));
+    labelUndoBtn.addEventListener('click', undoLabel);
+    labelDismissBtn.addEventListener('click', dismissLabel);
 
     if (mistagSection) {
         mistagRefresh.addEventListener('click', loadMistags);
