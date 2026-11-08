@@ -109,6 +109,47 @@ def _get_face_analysis_app():
     return _face_analysis_app
 
 
+def nearest_person_statement(embedding, photo_id, rejected_person_ids=()):
+    """SQL + params for the closest assigned face on another photo. ORDER BY the bare distance
+    expression so the HNSW index on face_embedding can be used."""
+    from sqlalchemy import bindparam, text
+
+    sql = (
+        "SELECT face.person_id, fe.embedding <=> CAST(:q AS vector) AS d "
+        "FROM face_embedding fe JOIN face ON face.id = fe.face_id "
+        "WHERE face.person_id IS NOT NULL AND face.not_a_face_at IS NULL "
+        "AND face.photo_id <> CAST(:photo AS uuid) "
+        + ("AND face.person_id NOT IN :rejected " if rejected_person_ids else "")
+        + "ORDER BY fe.embedding <=> CAST(:q AS vector) LIMIT 1"
+    )
+    params = {"q": str(list(embedding)), "photo": str(photo_id)}
+    stmt = text(sql)
+    if rejected_person_ids:
+        params["rejected"] = [str(pid) for pid in rejected_person_ids]
+        stmt = stmt.bindparams(bindparam("rejected", expanding=True))
+    return stmt, params
+
+
+def find_nearest_person(db, embedding, photo_id, rejected_person_ids=()):
+    """(person_id, cosine distance) of the nearest face on another photo that has a person
+    and isn't marked not-a-face, skipping rejected persons; None if there is no candidate."""
+    candidate_filter = [
+        *matchable_face_filter(),
+        Face.person_id.isnot(None),
+        Face.photo_id != photo_id,
+    ]
+    if rejected_person_ids:
+        candidate_filter.append(Face.person_id.notin_(rejected_person_ids))
+    # Skips the pgvector operator when there are no candidates, so SQLite unit tests never reach it.
+    if db.query(Face.id).join(FaceEmbedding, FaceEmbedding.face_id == Face.id).filter(*candidate_filter).limit(1).first() is None:
+        return None
+    stmt, params = nearest_person_statement(embedding, photo_id, rejected_person_ids)
+    row = db.execute(stmt, params).fetchone()
+    if row is None or row.d is None:
+        return None
+    return row.person_id, float(row.d)
+
+
 def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
     """Run InsightFace face detection on an image and persist results to the database.
 
@@ -261,38 +302,11 @@ def detect_and_save_faces(db, photo: "MediaItem", image_path: Path) -> None:
                 # Only look at faces with an embedding and a confirmed or ML-assigned person.
                 # Short-circuit: skip the pgvector ORDER BY entirely if there are no candidates.
                 # This avoids the pgvector operator on SQLite (used in tests) when the table is empty.
-                from sqlalchemy import bindparam, text
-                candidate_filter = [
-                    *matchable_face_filter(),
-                    Face.person_id.isnot(None),
-                    Face.photo_id != photo.id,
-                ]
-                if rejected_person_ids:
-                    candidate_filter.append(Face.person_id.notin_(rejected_person_ids))
-                has_candidates = (
-                    db.query(Face.id).join(FaceEmbedding, FaceEmbedding.face_id == Face.id).filter(*candidate_filter).limit(1).first()
-                ) is not None
-                nearest = None
-                if has_candidates:
-                    # ORDER BY the bare distance expression so the HNSW index on face_embedding is used.
-                    sql = (
-                        "SELECT face.person_id, fe.embedding <=> CAST(:q AS vector) AS d "
-                        "FROM face_embedding fe JOIN face ON face.id = fe.face_id "
-                        "WHERE face.person_id IS NOT NULL AND face.not_a_face_at IS NULL "
-                        "AND face.photo_id <> CAST(:photo AS uuid) "
-                        + ("AND face.person_id NOT IN :rejected " if rejected_person_ids else "")
-                        + "ORDER BY fe.embedding <=> CAST(:q AS vector) LIMIT 1"
-                    )
-                    params = {"q": str(embedding_list), "photo": str(photo.id)}
-                    stmt = text(sql)
-                    if rejected_person_ids:
-                        params["rejected"] = [str(pid) for pid in rejected_person_ids]
-                        stmt = stmt.bindparams(bindparam("rejected", expanding=True))
-                    nearest = db.execute(stmt, params).fetchone()
-                if nearest is not None and nearest.d is not None:
-                    distance = float(nearest.d)
+                nearest = find_nearest_person(db, embedding_list, photo.id, rejected_person_ids)
+                if nearest is not None:
+                    person_candidate, distance = nearest
                     if distance < FACE_SIMILARITY_THRESHOLD:
-                        person_id = nearest.person_id
+                        person_id = person_candidate
                         logger.info(
                             "detect_and_save_faces: auto-assigned person %s to face (distance=%.3f)",
                             person_id, distance,
