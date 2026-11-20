@@ -701,8 +701,35 @@
         mistagMore.hidden = mistagShown >= mistagFaces.length;
     }
 
+    // Size of the square crop, as a multiple of the face's longer side, and its minimum as a fraction of the photo's shorter side.
+    const MISTAG_CROP_FACE_MULTIPLE = 2.2;
+    const MISTAG_CROP_MIN_FRACTION = 0.3;
+
+    // Geometry for a square crop centred on the face. W and H are the thumbnail's size in pixels.
+    // At the photo's edges the square slides rather than shrinks.
+    function boxFor(boundingBox, W, H) {
+        const { x, y, width, height } = boundingBox;
+        const short = Math.min(W, H);
+        const bw = width * W;
+        const bh = height * H;
+        const s = Math.min(Math.max(MISTAG_CROP_FACE_MULTIPLE * Math.max(bw, bh), MISTAG_CROP_MIN_FRACTION * short), short);
+        const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+        const left = clamp((x + width / 2) * W - s / 2, 0, W - s);
+        const top = clamp((y + height / 2) * H - s / 2, 0, H - s);
+        const pct = (v) => `${v * 100}%`;
+        return {
+            backgroundSize: `${(W / s) * 100}% auto`,
+            backgroundPosition: `${W === s ? 0 : (left / (W - s)) * 100}% ${H === s ? 0 : (top / (H - s)) * 100}%`,
+            outline: {
+                left: pct((x * W - left) / s),
+                top: pct((y * H - top) / s),
+                width: pct(bw / s),
+                height: pct(bh / s),
+            },
+        };
+    }
+
     function renderMistagCrop(face) {
-        const { x, y, width, height } = face.boundingBox;
         const label = face.takenAtDisplay ? `Select face from photo taken ${face.takenAtDisplay}` : 'Select face from this photo';
         const li = document.createElement('li');
         li.className = 'likely-mistag';
@@ -722,9 +749,21 @@
         crop.className = 'likely-mistag-crop';
         crop.setAttribute('role', 'img');
         crop.setAttribute('aria-label', face.takenAtDisplay ? `Face from photo taken ${face.takenAtDisplay}` : 'Face from this photo');
-        crop.style.backgroundImage = `url("${face.thumbnailUrl}")`;
-        crop.style.backgroundSize = `${100 / width}% auto`;
-        crop.style.backgroundPosition = `${width >= 1 ? 0 : (x / (1 - width)) * 100}% ${height >= 1 ? 0 : (y / (1 - height)) * 100}%`;
+        // The thumbnail is cached by the browser, so this is the same download the background uses.
+        const img = new Image();
+        img.onload = () => {
+            if (!img.naturalWidth || !img.naturalHeight) return;
+            const box = boxFor(face.boundingBox, img.naturalWidth, img.naturalHeight);
+            crop.style.backgroundImage = `url("${face.thumbnailUrl}")`;
+            crop.style.backgroundSize = box.backgroundSize;
+            crop.style.backgroundPosition = box.backgroundPosition;
+            const outline = document.createElement('div');
+            outline.className = 'likely-mistag-face-outline';
+            outline.setAttribute('aria-hidden', 'true');
+            Object.assign(outline.style, box.outline);
+            crop.appendChild(outline);
+        };
+        img.src = face.thumbnailUrl;
         cropLabel.append(checkbox, sr, crop);
 
         const score = document.createElement('span');
