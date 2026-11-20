@@ -1005,13 +1005,21 @@ PROFILE_BLUR_WEIGHT = 1.0
 PROFILE_TYPICALITY_WEIGHT = 1.0
 
 
+def _laplacian_variance(gray) -> float:
+    """Variance of the 3x3 Laplacian of a 2-D array; equals cv2.Laplacian(gray, CV_64F).var() without needing cv2."""
+    import numpy as np
+
+    padded = np.pad(gray.astype(np.float64), 1, mode="reflect")
+    laplacian = padded[:-2, 1:-1] + padded[2:, 1:-1] + padded[1:-1, :-2] + padded[1:-1, 2:] - 4 * padded[1:-1, 1:-1]
+    return float(laplacian.var())
+
+
 def _face_blur(face: "Face", photo: "MediaItem") -> float | None:
     """Variance of the Laplacian of the face crop at 112x112 (higher = sharper), or None if unreadable.
 
     Raw values span single digits to over 1,000, so callers must compare them
     relatively, never against fixed cut-offs.
     """
-    import cv2
     import numpy as np
     from PIL import Image as PILImage, ImageOps
 
@@ -1026,7 +1034,7 @@ def _face_blur(face: "Face", photo: "MediaItem") -> float | None:
             if right <= left or bottom <= top:
                 return None
             crop = img.crop((left, top, right, bottom)).convert("L").resize((112, 112))
-        return float(cv2.Laplacian(np.asarray(crop), cv2.CV_64F).var())
+        return _laplacian_variance(np.asarray(crop))
     except Exception:
         logger.warning("_face_blur: could not measure face %s in %s", face.id, original_path)
         return None

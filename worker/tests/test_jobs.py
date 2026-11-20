@@ -14,6 +14,7 @@ from PIL import Image
 from lucos_photos_common.jobs import (
     _extract_video_metadata,
     _frontality_score,
+    _laplacian_variance,
     _rank_fractions,
     _rank_profile_faces,
     _score_face,
@@ -2049,6 +2050,21 @@ class TestScoreFace:
         face = self._make_face(det_score=None, kps=None, bbox_width=0.1, bbox_height=0.1)
         photo = self._make_photo()
         assert _score_face(face, photo) == 0
+
+
+class TestLaplacianVariance:
+    def test_flat_image_has_zero_variance(self):
+        assert _laplacian_variance(np.full((20, 20), 128, dtype=np.uint8)) == 0.0
+
+    def test_matches_opencv_reference_values(self):
+        # Reference values computed with cv2.Laplacian(img, cv2.CV_64F).var() on this seeded image.
+        img = np.random.default_rng(0).integers(0, 255, (112, 112), dtype=np.uint8)
+        assert _laplacian_variance(img) == pytest.approx(111839.670859995)
+
+    def test_blurred_image_scores_lower_than_sharp(self):
+        sharp = np.random.default_rng(1).integers(0, 255, (112, 112), dtype=np.uint8)
+        blurred = np.asarray(Image.fromarray(sharp).resize((14, 14)).resize((112, 112)))
+        assert _laplacian_variance(blurred) < _laplacian_variance(sharp)
 
 
 class TestRankFractions:
