@@ -14,6 +14,8 @@ from PIL import Image
 from lucos_photos_common.jobs import (
     _extract_video_metadata,
     _frontality_score,
+    _rank_fractions,
+    _rank_profile_faces,
     _score_face,
     cluster_faces,
     detect_and_save_faces,
@@ -2047,6 +2049,98 @@ class TestScoreFace:
         face = self._make_face(det_score=None, kps=None, bbox_width=0.1, bbox_height=0.1)
         photo = self._make_photo()
         assert _score_face(face, photo) == 0
+
+
+class TestRankFractions:
+    def test_orders_best_to_one_and_worst_to_zero(self):
+        assert _rank_fractions([5, 1, 9]) == [0.5, 0.0, 1.0]
+
+    def test_lower_is_better(self):
+        assert _rank_fractions([5, 1, 9], higher_is_better=False) == [0.5, 1.0, 0.0]
+
+    def test_ties_share_a_rank(self):
+        assert _rank_fractions([3, 3, 3]) == [0.5, 0.5, 0.5]
+
+    def test_none_ranks_last(self):
+        assert _rank_fractions([None, 2, 4]) == [0.0, 0.5, 1.0]
+
+    def test_single_value_has_no_ranking(self):
+        assert _rank_fractions([7]) == [0.0]
+
+
+class TestRankProfileFaces:
+    """Blur rank and embedding typicality only reorder faces that tie on the existing 0-4 score."""
+
+    def _setup(self, db_session, tmp_path, monkeypatch, n_faces, sharp_flags, embeddings=None):
+        """n_faces equal-scoring faces for one person; face i is in a photo `n_faces - i` days old (face 0 oldest)."""
+        monkeypatch.setattr("lucos_photos_common.jobs.ORIGINALS_DIR", tmp_path)
+        person = Person()
+        db_session.add(person)
+        db_session.flush()
+        rng = np.random.default_rng(0)
+        sharp_pixels = rng.integers(0, 255, (200, 200), dtype=np.uint8)
+        faces = []
+        for i in range(n_faces):
+            sha = f"{i:064x}"
+            photo = MediaItem(sha256_hash=sha, file_extension="png", width=200, height=200,
+                              taken_at=datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(days=i))
+            db_session.add(photo)
+            db_session.flush()
+            pixels = sharp_pixels if sharp_flags[i] else np.full((200, 200), 128, dtype=np.uint8)
+            Image.fromarray(pixels).save(tmp_path / f"{sha}.png")
+            face = Face(photo_id=photo.id, person_id=person.id, person_confirmed=False,
+                        bbox_x=0.1, bbox_y=0.1, bbox_width=0.8, bbox_height=0.8, det_score=0.9,
+                        kps=[[100, 100], [140, 100], [120, 120], [105, 140], [135, 140]])
+            if embeddings is not None:
+                face.embedding_row = FaceEmbedding(embedding=embeddings[i])
+            db_session.add(face)
+            faces.append(face)
+        db_session.commit()
+        return faces
+
+    def test_sharp_face_beats_a_more_recent_blurry_one(self, db_session, tmp_path, monkeypatch):
+        faces = self._setup(db_session, tmp_path, monkeypatch, 2, sharp_flags=[True, False])
+        ranked = _rank_profile_faces(db_session, faces)
+        assert ranked[0]["face"].id == faces[0].id
+
+    def test_recency_still_breaks_ties(self, db_session, tmp_path, monkeypatch):
+        faces = self._setup(db_session, tmp_path, monkeypatch, 3, sharp_flags=[True, True, True])
+        ranked = _rank_profile_faces(db_session, faces)
+        assert ranked[0]["face"].id == faces[2].id
+
+    def test_base_score_still_dominates(self, db_session, tmp_path, monkeypatch):
+        faces = self._setup(db_session, tmp_path, monkeypatch, 2, sharp_flags=[False, True])
+        faces[1].det_score = 0.1
+        db_session.commit()
+        ranked = _rank_profile_faces(db_session, faces)
+        assert ranked[0]["face"].id == faces[0].id
+
+    def test_atypical_embedding_loses_to_a_typical_one(self, db_session, tmp_path, monkeypatch):
+        typical = [1.0] + [0.0] * 511
+        outlier = [0.0, 1.0] + [0.0] * 510
+        embeddings = [typical, typical, typical, typical, outlier]
+        faces = self._setup(db_session, tmp_path, monkeypatch, 5, sharp_flags=[True] * 5, embeddings=embeddings)
+        ranked = _rank_profile_faces(db_session, faces)
+        assert ranked[0]["face"].id == faces[3].id  # newest of the typical faces, not the newer outlier
+
+    def test_typicality_skipped_below_minimum_face_count(self, db_session, tmp_path, monkeypatch):
+        typical = [1.0] + [0.0] * 511
+        outlier = [0.0, 1.0] + [0.0] * 510
+        faces = self._setup(db_session, tmp_path, monkeypatch, 3, sharp_flags=[True] * 3,
+                            embeddings=[typical, typical, outlier])
+        ranked = _rank_profile_faces(db_session, faces)
+        assert ranked[0]["face"].id == faces[2].id  # recency decides; the outlier isn't penalised
+
+    def test_missing_original_does_not_exclude_the_face(self, db_session, tmp_path, monkeypatch):
+        faces = self._setup(db_session, tmp_path, monkeypatch, 2, sharp_flags=[True, True])
+        (tmp_path / f"{1:064x}.png").unlink()
+        ranked = _rank_profile_faces(db_session, faces)
+        assert len(ranked) == 2
+        assert ranked[0]["face"].id == faces[0].id  # the readable, measurable face outranks the unreadable one
+
+    def test_every_face_is_returned(self, db_session, tmp_path, monkeypatch):
+        faces = self._setup(db_session, tmp_path, monkeypatch, 12, sharp_flags=[True] * 12)
+        assert len(_rank_profile_faces(db_session, faces)) == 12
 
 
 class TestGenerateProfilePicture:
