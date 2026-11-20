@@ -999,6 +999,122 @@ def _crop_and_save_profile_picture(person_id: str, face: "Face", photo: "MediaIt
     return True
 
 
+PROFILE_CANDIDATE_COUNT = 10
+PROFILE_TYPICALITY_MIN_FACES = 5
+PROFILE_BLUR_WEIGHT = 1.0
+PROFILE_TYPICALITY_WEIGHT = 1.0
+
+
+def _laplacian_variance(gray) -> float:
+    """Variance of the 3x3 Laplacian of a 2-D array; equals cv2.Laplacian(gray, CV_64F).var() without needing cv2."""
+    import numpy as np
+
+    padded = np.pad(gray.astype(np.float64), 1, mode="reflect")
+    laplacian = padded[:-2, 1:-1] + padded[2:, 1:-1] + padded[1:-1, :-2] + padded[1:-1, 2:] - 4 * padded[1:-1, 1:-1]
+    return float(laplacian.var())
+
+
+def _face_blur(face: "Face", photo: "MediaItem") -> float | None:
+    """Variance of the Laplacian of the face crop at 112x112 (higher = sharper), or None if unreadable.
+
+    Raw values span single digits to over 1,000, so callers must compare them
+    relatively, never against fixed cut-offs.
+    """
+    import numpy as np
+    from PIL import Image as PILImage, ImageOps
+
+    original_path = ORIGINALS_DIR / f"{photo.sha256_hash}.{photo.file_extension}"
+    try:
+        with PILImage.open(original_path) as raw_img:
+            img = ImageOps.exif_transpose(raw_img)
+            left = max(0, int(face.bbox_x * photo.width))
+            top = max(0, int(face.bbox_y * photo.height))
+            right = min(img.width, int((face.bbox_x + face.bbox_width) * photo.width))
+            bottom = min(img.height, int((face.bbox_y + face.bbox_height) * photo.height))
+            if right <= left or bottom <= top:
+                return None
+            crop = img.crop((left, top, right, bottom)).convert("L").resize((112, 112))
+        return _laplacian_variance(np.asarray(crop))
+    except Exception:
+        logger.warning("_face_blur: could not measure face %s in %s", face.id, original_path)
+        return None
+
+
+def _rank_fractions(values: list, higher_is_better: bool = True) -> list[float]:
+    """Each value's rank within `values` as a fraction in [0, 1], best = 1. Ties share a rank; None ranks last."""
+    n = len(values)
+    if n < 2:
+        return [0.0] * n
+    real = [v for v in values if v is not None]
+    missing = n - len(real)
+    fractions = []
+    for v in values:
+        if v is None:
+            fractions.append(0.0)
+            continue
+        worse = sum(1 for o in real if (o < v if higher_is_better else o > v))
+        equal = sum(1 for o in real if o == v) - 1
+        fractions.append((missing + worse + equal / 2.0) / (n - 1))
+    return fractions
+
+
+def _rank_profile_faces(db, faces: list["Face"]) -> list[dict]:
+    """Rank a person's faces for profile-picture use, best first.
+
+    Order is the existing 0-4 `_score_face`, then (among the top candidates sharing the
+    best score) a rank-only bonus from sharpness and embedding typicality, then recency.
+    Never filters: every face stays in the list.
+    """
+    entries = []
+    for face in faces:
+        entries.append({"face": face, "photo": face.media_item, "base": _score_face(face, face.media_item),
+                        "blur": None, "distance": None, "bonus": 0.0})
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+
+    def recency(entry):
+        taken_at = entry["photo"].taken_at
+        if taken_at is None:
+            return epoch
+        return taken_at if taken_at.tzinfo else taken_at.replace(tzinfo=timezone.utc)
+
+    entries.sort(key=lambda e: (-e["base"], -recency(e).timestamp()))
+    top_base = entries[0]["base"]
+    candidates = [e for e in entries if e["base"] == top_base][:PROFILE_CANDIDATE_COUNT]
+    if len(candidates) < 2:
+        return entries
+
+    for entry, blur in zip(candidates, [_face_blur(e["face"], e["photo"]) for e in candidates]):
+        entry["blur"] = blur
+    blur_ranks = _rank_fractions([e["blur"] for e in candidates])
+
+    typicality_ranks = [0.0] * len(candidates)
+    if len(faces) >= PROFILE_TYPICALITY_MIN_FACES:
+        import numpy as np
+
+        rows = db.query(FaceEmbedding.face_id, FaceEmbedding.embedding).filter(
+            FaceEmbedding.face_id.in_([f.id for f in faces])
+        ).all()
+        if len(rows) >= PROFILE_TYPICALITY_MIN_FACES:
+            vectors = np.array([r[1] for r in rows], dtype=np.float32)
+            norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+            unit = vectors / np.where(norms == 0, 1.0, norms)
+            centroid = unit.mean(axis=0)
+            centroid_norm = np.linalg.norm(centroid)
+            if centroid_norm > 0:
+                centroid = centroid / centroid_norm
+                distance_by_face = {r[0]: float(1.0 - unit[i] @ centroid) for i, r in enumerate(rows)}
+                for entry in candidates:
+                    entry["distance"] = distance_by_face.get(entry["face"].id)
+                typicality_ranks = _rank_fractions([e["distance"] for e in candidates], higher_is_better=False)
+
+    for entry, blur_rank, typicality_rank in zip(candidates, blur_ranks, typicality_ranks):
+        entry["bonus"] = PROFILE_BLUR_WEIGHT * blur_rank + PROFILE_TYPICALITY_WEIGHT * typicality_rank
+
+    reranked = sorted(candidates, key=lambda e: -e["bonus"])
+    candidate_ids = {id(e) for e in candidates}
+    return reranked + [e for e in entries if id(e) not in candidate_ids]
+
+
 def generate_profile_picture(person_id: str, force: bool = False, emit_event: bool = True) -> None:
     """Choose the best profile picture for a person and crop it to a square derivative.
 
@@ -1042,24 +1158,10 @@ def generate_profile_picture(person_id: str, force: bool = False, emit_event: bo
             (DERIVATIVES_DIR / f"{person_id}_profile.jpg").unlink(missing_ok=True)
             return
 
-        # Score each face and pick the best
-        best_face = None
-        best_score = -1
-        best_photo = None
-        best_taken_at = None
-
-        for face in faces:
-            photo = face.media_item
-            score = _score_face(face, photo)
-            taken_at = photo.taken_at
-
-            if (score > best_score or
-                    (score == best_score and taken_at is not None and
-                     (best_taken_at is None or taken_at > best_taken_at))):
-                best_face = face
-                best_score = score
-                best_photo = photo
-                best_taken_at = taken_at
+        ranked = _rank_profile_faces(db, faces)
+        best_face = ranked[0]["face"]
+        best_photo = ranked[0]["photo"]
+        best_score = ranked[0]["base"]
 
         if best_face is None or best_photo is None:
             logger.info("generate_profile_picture: no face selected for person %s", person_id)
