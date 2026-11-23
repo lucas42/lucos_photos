@@ -6,5 +6,5 @@ pgvector
 pillow
 insightface==2.1
 onnxruntime==1.32.0
-opencv-python-headless==5.0.0.93
+opencv-python-headless==5.1.0.95
 scikit-learn==1.9.1
